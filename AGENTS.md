@@ -59,30 +59,23 @@ pinned to an exact version.
 
 ## Milestone workflow
 
-Work proceeds milestone by milestone (roadmap in `.ai/PLAN.md`). For each one:
+Work proceeds milestone by milestone. For each one:
 
-1. Read `.ai/HANDOFF.md` and `.ai/PLAN.md` before anything else.
-2. Write a full implementation plan in `docs/superpowers/plans/` BEFORE any
+1. Write a full implementation plan in `docs/superpowers/plans/` BEFORE any
    code: exact file paths, complete code in every step, verified against real
    API knowledge (check npm versions and SDK signatures, do not guess).
-3. Execute task by task with TDD (failing test, minimal code, green, commit).
-4. A milestone counts as done only after a live smoke check against the
-   sandbox account (macOS Keychain, service `livespace-api`) - never against
-   a production CRM.
-5. Record deviations discovered during execution in the plan doc ("Execution
-   notes") and update the `.ai/` files before stopping.
+2. Execute task by task with TDD (failing test, minimal code, green, commit).
+3. A milestone counts as done only after a live smoke check against a sandbox
+   Livespace account, never against a production CRM.
+4. Record deviations discovered during execution in the plan doc, under
+   "Execution notes", so the next person does not rediscover them.
 
-## Agent Session Files
+## Maintainer working state
 
-Use `.ai/PLAN.md`, `.ai/TODO.md`, `.ai/HANDOFF.md`, and `.ai/NOTIFY.md` as the
-shared working state for AI agents. These files are **untracked** (see
-`.gitignore`) - they stay local and may reference private context.
-
-- `.ai/PLAN.md` - current plan for substantial multi-step work.
-- `.ai/TODO.md` - current checklist, decisions, and open points.
-- `.ai/HANDOFF.md` - status for the next agent or post-compaction continuation.
-- `.ai/NOTIFY.md` - only items that require Kuba's attention or manual action.
-
-Update these files during larger changes, before stopping work, before handing
-work to another agent, and when a blocker appears. Do not store secrets, API
-keys, or full environment variable values in them.
+The roadmap, handoffs, and open decisions live **outside this repository**, in
+the maintainer's working folder one level up (`../.ai/`: `PLAN.md`, `TODO.md`,
+`HANDOFF.md`, `NOTIFY.md`). If that folder is present, read `HANDOFF.md` and
+`PLAN.md` before starting, and update them before you stop. If it is not (a
+plain clone), everything you need to work on the code is in this repo:
+`README.md`, `docs/security.md`, and the plan docs under
+`docs/superpowers/plans/`.
