@@ -34,7 +34,8 @@ Report vulnerabilities per [SECURITY.md](SECURITY.md).
 - Livespace account on a plan with API access (Automation or higher)
 - API key + secret for your Livespace user
   (Account settings → API → Users) - all calls run with that user's permissions
-- [Bun](https://bun.sh) or Node.js 20+ (Cloudflare Workers deploy planned)
+- [Bun](https://bun.sh) 1.2+ (the current entrypoint uses `Bun.serve`;
+  Node.js and Cloudflare Workers adapters are planned)
 
 ## Configuration
 
@@ -48,6 +49,8 @@ Copy `.env.example` to `.env` and fill in your values. Never commit `.env`.
 | `MCP_BIND_HOST` | Default `127.0.0.1`; non-loopback requires `MCP_AUTH_TOKEN` |
 | `MCP_AUTH_TOKEN` | Bearer token for `/mcp`; mandatory on public binds |
 | `LIVESPACE_MCP_READ_ONLY` | `true` disables all write tools |
+| `MCP_RATE_LIMIT_PER_MINUTE` / `MCP_RATE_LIMIT_BURST` | Per-principal request budget (default 120/min, burst 30) |
+| `MCP_MAX_CONCURRENT_REQUESTS` / `MCP_MAX_QUEUED_REQUESTS` | Overload protection (default 8 in flight, 16 queued; excess gets 429 + `Retry-After`) |
 
 ## Development
 
@@ -60,7 +63,18 @@ bun run dev         # start the MCP server on http://127.0.0.1:3020/mcp
 ```
 
 Quick manual check once `bun run dev` is running (set `MCP_PORT` if 3020 is
-taken on your machine):
+taken on your machine). Modern client (MCP 2026-07-28):
+
+```bash
+curl -s -X POST http://127.0.0.1:3020/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H 'MCP-Protocol-Version: 2026-07-28' \
+  -H 'Mcp-Method: tools/list' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"curl-smoke","version":"0.0.0"},"io.modelcontextprotocol/clientCapabilities":{}}}}'
+```
+
+Legacy-era client (2025-03-26 fallback, no MCP headers):
 
 ```bash
 curl -s -X POST http://127.0.0.1:3020/mcp \
