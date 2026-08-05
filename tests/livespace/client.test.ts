@@ -159,6 +159,43 @@ describe("LivespaceClient.call", () => {
     expect(array).toEqual([{ id: "1" }, { id: "2" }]);
   });
 
+  test("pre-aborted signal cancels before any network call", async () => {
+    const calls: Call[] = [];
+    const client = makeClient([tokenEnvelope(), envelope({})], calls);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      client.call("Default", "ping", {}, { signal: controller.signal }),
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(calls.length).toBe(0);
+  });
+
+  test("abort during the request maps to CANCELLED and is not retried", async () => {
+    const calls: Call[] = [];
+    const controller = new AbortController();
+    const abortingFetch: typeof fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      calls.push({
+        url: String(input),
+        body: new URLSearchParams(String(init?.body ?? "")),
+      });
+      controller.abort();
+      throw new DOMException("The operation was aborted.", "AbortError");
+    }) as typeof fetch;
+    const client = new LivespaceClient(CONFIG, {
+      fetchImpl: abortingFetch,
+      sleep: async () => {},
+    });
+
+    await expect(
+      client.call("Default", "ping", {}, { signal: controller.signal }),
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(calls.length).toBe(1);
+  });
+
   test("gives up after maxAttempts with a mapped error", async () => {
     const calls: Call[] = [];
     const client = new LivespaceClient(CONFIG, {

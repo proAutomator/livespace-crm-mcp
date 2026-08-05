@@ -6,7 +6,22 @@ import { healthToolConfig, runHealthCheck } from "./tools/health.js";
 export interface AppDeps {
   config: ServerConfig;
   version: string;
-  livespacePing?: (() => Promise<{ name?: string; login?: string }>) | undefined;
+  livespacePing?:
+    | ((opts?: {
+        signal?: AbortSignal;
+      }) => Promise<{ name?: string; login?: string }>)
+    | undefined;
+}
+
+// The SDK surfaces the per-request context as the second callback argument;
+// its exact shape is SDK-internal, so probe defensively for an AbortSignal.
+function requestSignal(ctx: unknown): AbortSignal | undefined {
+  if (ctx === null || typeof ctx !== "object") return undefined;
+  const direct = (ctx as { signal?: unknown }).signal;
+  if (direct instanceof AbortSignal) return direct;
+  const mcpReq = (ctx as { mcpReq?: { signal?: unknown } }).mcpReq;
+  if (mcpReq && mcpReq.signal instanceof AbortSignal) return mcpReq.signal;
+  return undefined;
 }
 
 // Fresh server per request (SDK requirement for stateless HTTP). Tool
@@ -31,7 +46,7 @@ export function createServerFactory(deps: AppDeps): () => McpServer {
       },
     );
 
-    server.registerTool("health", healthToolConfig, async (args) => {
+    server.registerTool("health", healthToolConfig, async (args, ctx) => {
       const result = await runHealthCheck(
         {
           version: deps.version,
@@ -39,6 +54,7 @@ export function createServerFactory(deps: AppDeps): () => McpServer {
           ...(deps.livespacePing ? { livespacePing: deps.livespacePing } : {}),
         },
         args,
+        { signal: requestSignal(ctx) },
       );
       return {
         content: [{ type: "text" as const, text: result.text }],

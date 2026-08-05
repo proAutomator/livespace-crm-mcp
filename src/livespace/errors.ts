@@ -8,7 +8,8 @@ export type LivespaceErrorCode =
   | "UNKNOWN_METHOD"
   | "UPSTREAM_ERROR"
   | "NETWORK_ERROR"
-  | "TIMEOUT";
+  | "TIMEOUT"
+  | "CANCELLED";
 
 export class LivespaceError extends Error {
   constructor(

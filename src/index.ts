@@ -11,8 +11,13 @@ const client = new LivespaceClient(livespaceConfig);
 const app = buildApp({
   config: serverConfig,
   version: packageJson.version,
-  livespacePing: () =>
-    client.call<{ name?: string; login?: string }>("Default", "User_getInfo"),
+  livespacePing: (opts) =>
+    client.call<{ name?: string; login?: string }>(
+      "Default",
+      "User_getInfo",
+      {},
+      opts ?? {},
+    ),
 });
 
 const server = Bun.serve({

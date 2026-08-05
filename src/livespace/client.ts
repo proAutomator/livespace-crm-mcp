@@ -34,12 +34,54 @@ export interface LivespaceClientOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
+export interface LivespaceCallOptions {
+  signal?: AbortSignal;
+  /** Write calls are never auto-retried after being sent. */
+  write?: boolean;
+}
+
+interface CombinedSignal {
+  signal: AbortSignal;
+  dispose: () => void;
+}
+
+// AbortSignal.any is not available on every supported runtime; combine
+// manually and always clean up listeners.
+function combineSignals(primary: AbortSignal, extra?: AbortSignal): CombinedSignal {
+  if (!extra) return { signal: primary, dispose: () => {} };
+  const controller = new AbortController();
+  const onPrimary = () => controller.abort(primary.reason);
+  const onExtra = () => controller.abort(extra.reason);
+  if (primary.aborted) controller.abort(primary.reason);
+  else if (extra.aborted) controller.abort(extra.reason);
+  primary.addEventListener("abort", onPrimary, { once: true });
+  extra.addEventListener("abort", onExtra, { once: true });
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      primary.removeEventListener("abort", onPrimary);
+      extra.removeEventListener("abort", onExtra);
+    },
+  };
+}
+
+function cancelledError(): LivespaceError {
+  return new LivespaceError(
+    "CANCELLED",
+    "The request was cancelled by the caller.",
+    "Retry the call if the result is still needed.",
+  );
+}
+
 export class LivespaceClient {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
   private readonly maxAttempts: number;
   private readonly sleep: (ms: number) => Promise<void>;
-  private readonly withSlot: <T>(fn: () => Promise<T>) => Promise<T>;
+  private readonly withSlot: <T>(
+    fn: () => Promise<T>,
+    signal?: AbortSignal,
+  ) => Promise<T>;
 
   constructor(
     private readonly config: LivespaceConfig,
@@ -61,9 +103,28 @@ export class LivespaceClient {
     module: string,
     method: string,
     params: Record<string, unknown> = {},
+    opts: LivespaceCallOptions = {},
+  ): Promise<T> {
+    try {
+      return await this.callThrottled<T>(module, method, params, opts);
+    } catch (error) {
+      // Aborts surface from the throttle queue as raw AbortErrors; the client
+      // contract is {code, message, hint} everywhere.
+      if (opts.signal?.aborted && !(error instanceof LivespaceError)) {
+        throw cancelledError();
+      }
+      throw error;
+    }
+  }
+
+  private async callThrottled<T>(
+    module: string,
+    method: string,
+    params: Record<string, unknown>,
+    opts: LivespaceCallOptions,
   ): Promise<T> {
     return this.withSlot(async () => {
-      const { token, sessionId } = await this.getToken();
+      const { token, sessionId } = await this.getToken(opts.signal);
       const sha = await buildSignature(this.config.apiKey, token, this.config.apiSecret);
       // Livespace expects the auth fields inside the `data` JSON for signed
       // calls (separate form fields return 561). Auth fields are spread last
@@ -80,19 +141,22 @@ export class LivespaceClient {
       const envelope = await this.post(
         `${this.baseUrl()}/${encodeURIComponent(module)}/${encodeURIComponent(method)}`,
         body,
+        opts.signal,
       );
       if (envelope.status !== true || envelope.result !== 200) {
         throw errorFromEnvelope(envelope.result);
       }
       return stripAuthEcho(envelope.data) as T;
-    });
+    }, opts.signal);
   }
 
   private baseUrl(): string {
     return `https://${this.config.subdomain}.livespace.io/api/public/json`;
   }
 
-  private async getToken(): Promise<{ token: string; sessionId: string }> {
+  private async getToken(
+    signal?: AbortSignal,
+  ): Promise<{ token: string; sessionId: string }> {
     const body = new URLSearchParams({
       _api_auth: "key",
       _api_key: this.config.apiKey,
@@ -100,6 +164,7 @@ export class LivespaceClient {
     const envelope = await this.post(
       `${this.baseUrl()}/_Api/auth_call/_api_method/getToken`,
       body,
+      signal,
     );
     if (envelope.status !== true || envelope.result !== 200) {
       throw errorFromEnvelope(envelope.result);
@@ -115,15 +180,24 @@ export class LivespaceClient {
     return { token: data.token, sessionId: data.session_id };
   }
 
-  private async post(url: string, body: URLSearchParams): Promise<Envelope> {
+  private async post(
+    url: string,
+    body: URLSearchParams,
+    callerSignal?: AbortSignal,
+  ): Promise<Envelope> {
+    if (callerSignal?.aborted) throw cancelledError();
     let lastError: LivespaceError | undefined;
     for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+      const combined = combineSignals(
+        AbortSignal.timeout(this.timeoutMs),
+        callerSignal,
+      );
       try {
         const response = await this.fetchImpl(url, {
           method: "POST",
           headers: { "content-type": "application/x-www-form-urlencoded" },
           body: body.toString(),
-          signal: AbortSignal.timeout(this.timeoutMs),
+          signal: combined.signal,
         });
         if (response.status >= 500) {
           lastError = new LivespaceError(
@@ -135,6 +209,7 @@ export class LivespaceClient {
           return (await response.json()) as Envelope;
         }
       } catch (cause) {
+        if (callerSignal?.aborted) throw cancelledError();
         // The caught error is deliberately reduced to a category: upstream
         // error text must never enter LivespaceError (docs/security.md par. 6).
         lastError =
@@ -149,6 +224,8 @@ export class LivespaceClient {
                 "Network error while calling Livespace.",
                 "Check connectivity and LIVESPACE_SUBDOMAIN, then retry.",
               );
+      } finally {
+        combined.dispose();
       }
       if (attempt < this.maxAttempts) {
         await this.sleep(200 * 2 ** (attempt - 1));

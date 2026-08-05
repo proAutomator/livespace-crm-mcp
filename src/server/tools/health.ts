@@ -5,7 +5,9 @@ export const PROTOCOL_VERSION = "2026-07-28";
 export interface HealthDeps {
   version: string;
   readOnly: boolean;
-  livespacePing?: () => Promise<{ name?: string; login?: string }>;
+  livespacePing?: (opts?: {
+    signal?: AbortSignal;
+  }) => Promise<{ name?: string; login?: string }>;
 }
 
 export interface HealthArgs {
@@ -56,6 +58,7 @@ export const healthToolConfig = {
 export async function runHealthCheck(
   deps: HealthDeps,
   args: HealthArgs,
+  opts: { signal?: AbortSignal } = {},
 ): Promise<HealthResult> {
   const lines: string[] = [];
   let ok = true;
@@ -63,7 +66,9 @@ export async function runHealthCheck(
 
   if (args.checkLivespace === true && deps.livespacePing) {
     try {
-      const me = await deps.livespacePing();
+      const me = await deps.livespacePing(
+        opts.signal === undefined ? {} : { signal: opts.signal },
+      );
       livespace =
         me.name === undefined
           ? { reachable: true }

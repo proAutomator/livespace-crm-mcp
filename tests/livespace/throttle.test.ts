@@ -59,4 +59,29 @@ describe("createThrottle", () => {
     ).rejects.toThrow("boom");
     await expect(withSlot(async () => "still works")).resolves.toBe("still works");
   });
+
+  test("abort while queued rejects and releases no slot", async () => {
+    const withSlot = createThrottle({ maxConcurrent: 1, minIntervalMs: 0 });
+    let releaseFirst!: () => void;
+    const first = withSlot(
+      () => new Promise<void>((resolve) => (releaseFirst = resolve)),
+    );
+    const controller = new AbortController();
+    const queued = withSlot(async () => "ran", controller.signal);
+    controller.abort();
+    await expect(queued).rejects.toMatchObject({ name: "AbortError" });
+    releaseFirst();
+    await first;
+    // The slot freed by `first` must still admit new work.
+    await expect(withSlot(async () => "next")).resolves.toBe("next");
+  });
+
+  test("pre-aborted signal rejects before taking a slot", async () => {
+    const withSlot = createThrottle({ maxConcurrent: 1, minIntervalMs: 0 });
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      withSlot(async () => "never", controller.signal),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
 });
