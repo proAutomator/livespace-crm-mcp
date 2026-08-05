@@ -69,6 +69,15 @@ to describe compatibility. Operations performed through the Livespace API are
 executed under your API key and, per Livespace's terms of service, at your own
 responsibility.
 
+## Attribution
+
+This server follows the design patterns of Adam Gospodarczyk's (overment)
+MCP servers, in particular
+[iceener/streamable-mcp-server-template](https://github.com/iceener/streamable-mcp-server-template)
+(MIT): a few intent-shaped tools instead of endpoint mirrors, operating-manual
+`instructions`, batch-first writes with per-item results, and errors that
+carry recovery hints. Thanks, Adam.
+
 ## License
 
 [MIT](LICENSE)
