@@ -9,7 +9,9 @@ export type LivespaceErrorCode =
   | "UPSTREAM_ERROR"
   | "NETWORK_ERROR"
   | "TIMEOUT"
-  | "CANCELLED";
+  | "CANCELLED"
+  | "RATE_LIMITED"
+  | "WRITE_OUTCOME_UNKNOWN";
 
 export class LivespaceError extends Error {
   constructor(

@@ -34,10 +34,18 @@ function makeFetch(responses: Response[], calls: Call[]): typeof fetch {
   }) as typeof fetch;
 }
 
-function makeClient(responses: Response[], calls: Call[]) {
+function makeClient(
+  responses: Response[],
+  calls: Call[],
+  extra: Partial<
+    import("../../src/livespace/client.js").LivespaceClientOptions
+  > = {},
+) {
   return new LivespaceClient(CONFIG, {
     fetchImpl: makeFetch(responses, calls),
     sleep: async () => {},
+    random: () => 1,
+    ...extra,
   });
 }
 
@@ -129,6 +137,7 @@ describe("LivespaceClient.call", () => {
       sleep: async (ms) => {
         sleeps.push(ms);
       },
+      random: () => 1,
     });
 
     const data = await client.call<{ ok: boolean }>("Default", "ping");
@@ -136,6 +145,121 @@ describe("LivespaceClient.call", () => {
     expect(data).toEqual({ ok: true });
     expect(sleeps).toEqual([200]);
     expect(calls.length).toBe(3);
+  });
+
+  test("read retry delay uses full jitter: random() scales the capped backoff", async () => {
+    const calls: Call[] = [];
+    const sleeps: number[] = [];
+    const client = new LivespaceClient(CONFIG, {
+      fetchImpl: makeFetch(
+        [
+          new Response("x", { status: 500 }),
+          new Response("x", { status: 500 }),
+          tokenEnvelope(),
+          envelope({ ok: true }),
+        ],
+        calls,
+      ),
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      random: () => 0.5,
+    });
+
+    await client.call("Default", "ping");
+    expect(sleeps).toEqual([100, 200]); // floor(0.5 * 200), floor(0.5 * 400)
+  });
+
+  test("Retry-After on 5xx overrides the jittered delay (capped)", async () => {
+    const calls: Call[] = [];
+    const sleeps: number[] = [];
+    const client = new LivespaceClient(CONFIG, {
+      fetchImpl: makeFetch(
+        [
+          new Response("slow down", {
+            status: 503,
+            headers: { "retry-after": "1" },
+          }),
+          tokenEnvelope(),
+          envelope({ ok: true }),
+        ],
+        calls,
+      ),
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      random: () => 1,
+    });
+
+    await client.call("Default", "ping");
+    expect(sleeps).toEqual([1000]);
+  });
+
+  test("HTTP 429 maps to RATE_LIMITED and is retried for reads", async () => {
+    const calls: Call[] = [];
+    const client = makeClient(
+      [
+        new Response("limited", { status: 429 }),
+        tokenEnvelope(),
+        envelope({ ok: true }),
+      ],
+      calls,
+    );
+
+    await expect(client.call("Default", "ping")).resolves.toEqual({ ok: true });
+    expect(calls.length).toBe(3);
+  });
+
+  test("write calls are not retried: HTTP 500 after send maps to WRITE_OUTCOME_UNKNOWN", async () => {
+    const calls: Call[] = [];
+    const client = makeClient(
+      [tokenEnvelope(), new Response("x", { status: 500 })],
+      calls,
+    );
+
+    await expect(
+      client.call("Contact", "addContact", { firstname: "Syn" }, { write: true }),
+    ).rejects.toMatchObject({ code: "WRITE_OUTCOME_UNKNOWN" });
+    expect(calls.length).toBe(2); // one token fetch + exactly one write attempt
+  });
+
+  test("write network failure maps to WRITE_OUTCOME_UNKNOWN without retry", async () => {
+    const calls: Call[] = [];
+    let writeAttempts = 0;
+    const flakyFetch: typeof fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      calls.push({
+        url: String(input),
+        body: new URLSearchParams(String(init?.body ?? "")),
+      });
+      if (String(input).endsWith("getToken")) return tokenEnvelope();
+      writeAttempts += 1;
+      throw new TypeError("socket hang up (synthetic)");
+    }) as typeof fetch;
+    const client = new LivespaceClient(CONFIG, {
+      fetchImpl: flakyFetch,
+      sleep: async () => {},
+      random: () => 1,
+    });
+
+    await expect(
+      client.call("Contact", "addContact", {}, { write: true }),
+    ).rejects.toMatchObject({ code: "WRITE_OUTCOME_UNKNOWN" });
+    expect(writeAttempts).toBe(1);
+  });
+
+  test("write rejected by 429 maps to RATE_LIMITED (safe to retry explicitly)", async () => {
+    const calls: Call[] = [];
+    const client = makeClient(
+      [tokenEnvelope(), new Response("limited", { status: 429 })],
+      calls,
+    );
+
+    await expect(
+      client.call("Contact", "addContact", {}, { write: true }),
+    ).rejects.toMatchObject({ code: "RATE_LIMITED" });
   });
 
   test("redacts echoed _api_* auth fields from response data", async () => {

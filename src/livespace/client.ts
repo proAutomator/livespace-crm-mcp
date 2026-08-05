@@ -27,11 +27,16 @@ function stripAuthEcho(data: unknown): unknown {
   return data;
 }
 
+const BASE_RETRY_DELAY_MS = 200;
+const MAX_RETRY_DELAY_MS = 2_000;
+const MAX_RETRY_AFTER_MS = 10_000;
+
 export interface LivespaceClientOptions {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   maxAttempts?: number;
   sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
 }
 
 export interface LivespaceCallOptions {
@@ -73,11 +78,20 @@ function cancelledError(): LivespaceError {
   );
 }
 
+// Only the delta-seconds form is honored; HTTP-date values are ignored.
+function parseRetryAfterMs(value: string | null): number | undefined {
+  if (value === null) return undefined;
+  const seconds = Number(value.trim());
+  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
+  return Math.round(seconds * 1000);
+}
+
 export class LivespaceClient {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
   private readonly maxAttempts: number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly random: () => number;
   private readonly withSlot: <T>(
     fn: () => Promise<T>,
     signal?: AbortSignal,
@@ -92,6 +106,7 @@ export class LivespaceClient {
     this.maxAttempts = options.maxAttempts ?? 3;
     this.sleep =
       options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    this.random = options.random ?? Math.random;
     this.withSlot = createThrottle({
       maxConcurrent: 2,
       minIntervalMs: 150,
@@ -141,7 +156,7 @@ export class LivespaceClient {
       const envelope = await this.post(
         `${this.baseUrl()}/${encodeURIComponent(module)}/${encodeURIComponent(method)}`,
         body,
-        opts.signal,
+        { write: opts.write === true, signal: opts.signal },
       );
       if (envelope.status !== true || envelope.result !== 200) {
         throw errorFromEnvelope(envelope.result);
@@ -161,10 +176,12 @@ export class LivespaceClient {
       _api_auth: "key",
       _api_key: this.config.apiKey,
     });
+    // The token fetch is always a safe read, even when the logical call is a
+    // write - only the signed call itself gets write semantics.
     const envelope = await this.post(
       `${this.baseUrl()}/_Api/auth_call/_api_method/getToken`,
       body,
-      signal,
+      { write: false, signal },
     );
     if (envelope.status !== true || envelope.result !== 200) {
       throw errorFromEnvelope(envelope.result);
@@ -180,17 +197,34 @@ export class LivespaceClient {
     return { token: data.token, sessionId: data.session_id };
   }
 
+  // Full jitter (AWS style): a random fraction of the capped exponential
+  // backoff, or the upstream Retry-After when one was provided
+  // (docs/security.md par. 3 requires jitter, no hot retry loops).
+  private retryDelayMs(attempt: number, retryAfterMs: number | undefined): number {
+    if (retryAfterMs !== undefined) {
+      return Math.min(retryAfterMs, MAX_RETRY_AFTER_MS);
+    }
+    const cap = Math.min(BASE_RETRY_DELAY_MS * 2 ** (attempt - 1), MAX_RETRY_DELAY_MS);
+    return Math.floor(this.random() * cap);
+  }
+
   private async post(
     url: string,
     body: URLSearchParams,
-    callerSignal?: AbortSignal,
+    opts: { write: boolean; signal?: AbortSignal },
   ): Promise<Envelope> {
-    if (callerSignal?.aborted) throw cancelledError();
+    if (opts.signal?.aborted) throw cancelledError();
+    // Reads retry; writes get exactly one attempt because a timeout or 5xx
+    // after the request was sent leaves the outcome unknown - blind retries
+    // could duplicate CRM records (docs/security.md par. 5).
+    const attempts = opts.write ? 1 : this.maxAttempts;
     let lastError: LivespaceError | undefined;
-    for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+    let outcomeUnknown = false;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      let retryAfterMs: number | undefined;
       const combined = combineSignals(
         AbortSignal.timeout(this.timeoutMs),
-        callerSignal,
+        opts.signal,
       );
       try {
         const response = await this.fetchImpl(url, {
@@ -199,7 +233,18 @@ export class LivespaceClient {
           body: body.toString(),
           signal: combined.signal,
         });
-        if (response.status >= 500) {
+        if (response.status === 429) {
+          // Rejected before processing, so even a write is safe to retry
+          // explicitly; outcomeUnknown stays false.
+          retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
+          lastError = new LivespaceError(
+            "RATE_LIMITED",
+            "Livespace rate-limited the request (HTTP 429).",
+            "Wait before retrying; reduce request frequency if it persists.",
+          );
+        } else if (response.status >= 500) {
+          retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
+          outcomeUnknown = true;
           lastError = new LivespaceError(
             "UPSTREAM_ERROR",
             `Livespace responded with HTTP ${response.status}.`,
@@ -209,7 +254,8 @@ export class LivespaceClient {
           return (await response.json()) as Envelope;
         }
       } catch (cause) {
-        if (callerSignal?.aborted) throw cancelledError();
+        if (opts.signal?.aborted) throw cancelledError();
+        outcomeUnknown = true;
         // The caught error is deliberately reduced to a category: upstream
         // error text must never enter LivespaceError (docs/security.md par. 6).
         lastError =
@@ -227,9 +273,19 @@ export class LivespaceClient {
       } finally {
         combined.dispose();
       }
-      if (attempt < this.maxAttempts) {
-        await this.sleep(200 * 2 ** (attempt - 1));
+      if (attempt < attempts) {
+        await this.sleep(this.retryDelayMs(attempt, retryAfterMs));
       }
+    }
+    if (opts.write && outcomeUnknown) {
+      // The request may have reached Livespace before failing; the caller
+      // must verify by re-reading instead of blindly retrying (M6 contract).
+      throw new LivespaceError(
+        "WRITE_OUTCOME_UNKNOWN",
+        "The write request failed mid-flight; Livespace may or may not have applied it.",
+        "Re-read the affected records to verify the outcome before retrying.",
+        lastError?.resultCode,
+      );
     }
     throw (
       lastError ??
