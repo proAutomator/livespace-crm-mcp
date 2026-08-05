@@ -1,0 +1,11 @@
+title = "livespace-streamable-mcp-server gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = """Synthetic test fixtures only. Convention (AGENTS.md): every fake
+credential in tests, fixtures, and docs MUST contain the word "synthetic" so the
+scanner can tell it apart from a real leak. Never allowlist paths and never add
+real-looking values here."""
+stopwords = ["synthetic"]

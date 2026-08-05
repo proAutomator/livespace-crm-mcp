@@ -12,8 +12,11 @@ pinned to an exact version.
    transport, or error handling.** Its MUSTs are binding; code violating them
    does not ship.
 2. **No secrets, no real CRM data - anywhere.** Not in code, tests, fixtures,
-   docs, commit messages, or `.ai/` files. Fixtures are synthetic. This repo's
-   full history is expected to become public.
+   docs, commit messages, or `.ai/` files. Fixtures are synthetic and every
+   fake credential value MUST contain the word "synthetic" (e.g.
+   `synthetic-key-123`) - `.gitleaks.toml` allowlists that marker and nothing
+   else, so CI stays green without weakening the scanner. This repo's full
+   history is expected to become public.
 3. **Never log tokens or full CRM payloads.** Errors surfaced to the model
    must never contain upstream response bodies or stack traces.
 4. **TDD.** Write the failing test first. Every tool ships with contract tests;
