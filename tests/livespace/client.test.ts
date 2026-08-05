@@ -62,14 +62,19 @@ describe("LivespaceClient.call", () => {
     expect(calls[1]?.url).toBe(
       "https://acme-test.livespace.io/api/public/json/Contact/getAll",
     );
-    expect(calls[1]?.body.get("_api_auth")).toBe("key");
-    expect(calls[1]?.body.get("_api_key")).toBe("synthetic-key");
-    expect(calls[1]?.body.get("_api_session")).toBe("sess-1");
-    expect(calls[1]?.body.get("_api_sha")).toMatch(/^[0-9a-f]{40}$/);
-    expect(JSON.parse(calls[1]?.body.get("data") ?? "{}")).toEqual({
-      type: "company",
-      limit: 5,
-    });
+    // Livespace expects auth fields INSIDE the `data` JSON for signed calls
+    // (verified against the live API; separate form fields return 561).
+    expect([...(calls[1]?.body.keys() ?? [])]).toEqual(["data"]);
+    const dataPayload = JSON.parse(calls[1]?.body.get("data") ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    expect(dataPayload["_api_auth"]).toBe("key");
+    expect(dataPayload["_api_key"]).toBe("synthetic-key");
+    expect(dataPayload["_api_session"]).toBe("sess-1");
+    expect(dataPayload["_api_sha"]).toMatch(/^[0-9a-f]{40}$/);
+    expect(dataPayload["type"]).toBe("company");
+    expect(dataPayload["limit"]).toBe(5);
   });
 
   test("fetches a fresh token for every logical call", async () => {
@@ -131,6 +136,27 @@ describe("LivespaceClient.call", () => {
     expect(data).toEqual({ ok: true });
     expect(sleeps).toEqual([200]);
     expect(calls.length).toBe(3);
+  });
+
+  test("redacts echoed _api_* auth fields from response data", async () => {
+    // Default/ping echoes its request payload back, which now includes the
+    // auth fields; they must never reach callers (docs/security.md par. 6).
+    const calls: Call[] = [];
+    const client = makeClient(
+      [
+        tokenEnvelope(),
+        envelope({ check: "smoke", _api_key: "leaked", _api_sha: "leaked" }),
+        tokenEnvelope(),
+        envelope([{ id: "1", _api_session: "leaked" }, { id: "2" }]),
+      ],
+      calls,
+    );
+
+    const object = await client.call<Record<string, unknown>>("Default", "ping");
+    expect(object).toEqual({ check: "smoke" });
+
+    const array = await client.call<Array<Record<string, unknown>>>("Contact", "getAll");
+    expect(array).toEqual([{ id: "1" }, { id: "2" }]);
   });
 
   test("gives up after maxAttempts with a mapped error", async () => {

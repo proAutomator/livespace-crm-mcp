@@ -10,6 +10,23 @@ interface Envelope {
   status: boolean;
 }
 
+// Echo-style methods (Default/ping) reflect the request payload, which since
+// the payload-format fix includes the auth fields. Strip them so credentials
+// can never reach callers, logs, or the model (docs/security.md par. 6).
+function stripAuthEcho(data: unknown): unknown {
+  if (Array.isArray(data)) {
+    return data.map((item) => stripAuthEcho(item));
+  }
+  if (data !== null && typeof data === "object") {
+    return Object.fromEntries(
+      Object.entries(data as Record<string, unknown>).filter(
+        ([key]) => !key.startsWith("_api"),
+      ),
+    );
+  }
+  return data;
+}
+
 export interface LivespaceClientOptions {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
@@ -48,12 +65,17 @@ export class LivespaceClient {
     return this.withSlot(async () => {
       const { token, sessionId } = await this.getToken();
       const sha = await buildSignature(this.config.apiKey, token, this.config.apiSecret);
+      // Livespace expects the auth fields inside the `data` JSON for signed
+      // calls (separate form fields return 561). Auth fields are spread last
+      // so caller params can never override them.
       const body = new URLSearchParams({
-        _api_auth: "key",
-        _api_key: this.config.apiKey,
-        _api_sha: sha,
-        _api_session: sessionId,
-        data: JSON.stringify(params),
+        data: JSON.stringify({
+          ...params,
+          _api_auth: "key",
+          _api_key: this.config.apiKey,
+          _api_sha: sha,
+          _api_session: sessionId,
+        }),
       });
       const envelope = await this.post(
         `${this.baseUrl()}/${encodeURIComponent(module)}/${encodeURIComponent(method)}`,
@@ -62,7 +84,7 @@ export class LivespaceClient {
       if (envelope.status !== true || envelope.result !== 200) {
         throw errorFromEnvelope(envelope.result);
       }
-      return envelope.data as T;
+      return stripAuthEcho(envelope.data) as T;
     });
   }
 
