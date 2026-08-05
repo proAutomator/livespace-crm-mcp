@@ -113,6 +113,29 @@ describe("MCP HTTP surface", () => {
     expect(response.status).toBe(413);
   });
 
+  test("chunked body over the cap gets 413 even without Content-Length", async () => {
+    const app = buildApp({ config: BASE_CONFIG, version: "0.0.0-test" });
+    const big = new Uint8Array(2 * 1024 * 1024).fill(120);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(big);
+        controller.close();
+      },
+    });
+    const response = await app.request(
+      new Request("http://127.0.0.1:3020/mcp", {
+        method: "POST",
+        headers: {
+          host: "127.0.0.1:3020",
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+        },
+        body,
+      }),
+    );
+    expect(response.status).toBe(413);
+  });
+
   test("GET /health reports status without secrets", async () => {
     const config = { ...BASE_CONFIG, authToken: "synthetic-bearer-token" };
     const app = buildApp({ config, version: "0.0.0-test" });

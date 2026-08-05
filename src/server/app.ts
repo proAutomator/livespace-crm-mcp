@@ -4,6 +4,7 @@ import {
   originValidationResponse,
 } from "@modelcontextprotocol/server";
 import { Hono } from "hono";
+import { readBodyWithCap } from "./body-limit.js";
 import { createServerFactory, type AppDeps } from "./mcp.js";
 import { PROTOCOL_VERSION } from "./tools/health.js";
 
@@ -64,14 +65,6 @@ export function buildApp(deps: AppDeps) {
   app.all("/mcp", async (c) => {
     const request = c.req.raw;
 
-    const contentLength = Number(request.headers.get("content-length") ?? "0");
-    if (contentLength > MAX_BODY_BYTES) {
-      return new Response(JSON.stringify({ error: "payload too large" }), {
-        status: 413,
-        headers: { "content-type": "application/json" },
-      });
-    }
-
     if (deps.config.authToken !== undefined) {
       const header = c.req.header("authorization") ?? "";
       const token = header.startsWith("Bearer ") ? header.slice(7) : "";
@@ -80,7 +73,25 @@ export function buildApp(deps: AppDeps) {
       }
     }
 
-    return handler.fetch(request);
+    // Auth runs first so unauthenticated callers cannot make the server
+    // buffer request bodies.
+    const read = await readBodyWithCap(request, MAX_BODY_BYTES);
+    if (read.kind === "too_large") {
+      return new Response(JSON.stringify({ error: "payload too large" }), {
+        status: 413,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    const forwarded =
+      read.body === null
+        ? request
+        : new Request(request.url, {
+            method: request.method,
+            headers: request.headers,
+            body: read.body,
+          });
+
+    return handler.fetch(forwarded);
   });
 
   return app;
