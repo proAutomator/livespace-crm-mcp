@@ -1,4 +1,4 @@
-# livespace-streamable-mcp-server - Agent Instructions
+# livespace-mcp - Agent Instructions
 
 Unofficial MCP server for Livespace CRM. ~10 intent-shaped tools instead of a
 1:1 mirror of the ~80-method RPC API. Target protocol: MCP 2026-07-28

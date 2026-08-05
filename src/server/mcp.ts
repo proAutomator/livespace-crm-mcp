@@ -15,7 +15,7 @@ export function createServerFactory(deps: AppDeps): () => McpServer {
   return () => {
     const server = new McpServer(
       {
-        name: "livespace-streamable-mcp-server",
+        name: "livespace-mcp",
         title: "Livespace CRM (unofficial)",
         version: deps.version,
         description:

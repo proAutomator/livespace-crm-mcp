@@ -22,7 +22,7 @@ const server = Bun.serve({
 });
 
 console.error(
-  `livespace-streamable-mcp-server v${packageJson.version} listening on ` +
+  `livespace-mcp v${packageJson.version} listening on ` +
     `${serverConfig.bindHost}:${serverConfig.port} ` +
     `(auth: ${serverConfig.authToken !== undefined ? "on" : "off"}, ` +
     `read-only: ${serverConfig.readOnly})`,

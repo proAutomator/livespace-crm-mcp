@@ -40,7 +40,7 @@
 
 ```json
 {
-  "name": "livespace-streamable-mcp-server",
+  "name": "livespace-mcp",
   "version": "0.0.0",
   "private": true,
   "type": "module",
