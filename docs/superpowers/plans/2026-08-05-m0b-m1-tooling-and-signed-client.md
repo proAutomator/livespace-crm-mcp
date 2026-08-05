@@ -1139,6 +1139,21 @@ git commit -m "feat: live smoke script with keychain fallback"
 
 ---
 
+## Execution notes (2026-08-05, all tasks done)
+
+Two deviations from the plan as written, both found during execution:
+
+1. **Lockfile:** Bun 1.1.34 has no text lockfile support, so the committed
+   file is `bun.lockb` (binary), not `bun.lock`. CI's `--frozen-lockfile`
+   works the same.
+2. **Signed-call payload format:** the live smoke test returned 561. The API
+   expects the `_api_*` auth fields INSIDE the `data` JSON together with the
+   params, not as separate form fields (the plan's original shape). Fixed in
+   Task 6 code and tests. Follow-up: `Default/ping` echoes the payload back,
+   which would have exposed the auth fields to callers - the client now strips
+   `_api_*` keys from response data, and the smoke script prints no raw
+   responses.
+
 ## Self-Review
 
 1. **Spec coverage:** M0b tooling (Task 1: package.json, tsconfig strict + `noUncheckedIndexedAccess`, CI with typecheck/test/gitleaks) ✔; M1 signed client (Tasks 2-6: getToken + SHA1 flow via WebCrypto, envelope `status && result` handling, `{code, message, hint}` mapping, throttle/concurrency/backoff) ✔; live smoke vs sandbox (Task 7) ✔. Explicit-`limit` enforcement is a tool-layer rule - lands with M4 tools, noted in `.ai/PLAN.md`.
