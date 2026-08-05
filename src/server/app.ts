@@ -2,28 +2,15 @@ import {
   createMcpHandler,
   hostHeaderValidationResponse,
   originValidationResponse,
+  type AuthInfo,
 } from "@modelcontextprotocol/server";
 import { Hono } from "hono";
+import { principalFromToken, tokensEqual } from "./auth.js";
 import { readBodyWithCap } from "./body-limit.js";
 import { createServerFactory, type AppDeps } from "./mcp.js";
 import { PROTOCOL_VERSION } from "./tools/health.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
-
-async function sha256(value: string): Promise<Uint8Array> {
-  return new Uint8Array(
-    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
-  );
-}
-
-// Constant-time, portable bearer comparison: compare fixed-length digests so
-// neither string length nor prefix leaks through timing.
-async function tokensEqual(a: string, b: string): Promise<boolean> {
-  const [da, db] = await Promise.all([sha256(a), sha256(b)]);
-  let diff = 0;
-  for (let i = 0; i < da.length; i += 1) diff |= (da[i] ?? 0) ^ (db[i] ?? 0);
-  return diff === 0;
-}
 
 function unauthorized(): Response {
   return new Response(JSON.stringify({ error: "unauthorized" }), {
@@ -65,12 +52,15 @@ export function buildApp(deps: AppDeps) {
   app.all("/mcp", async (c) => {
     const request = c.req.raw;
 
+    let authInfo: AuthInfo | undefined;
     if (deps.config.authToken !== undefined) {
       const header = c.req.header("authorization") ?? "";
       const token = header.startsWith("Bearer ") ? header.slice(7) : "";
       if (token === "" || !(await tokensEqual(token, deps.config.authToken))) {
         return unauthorized();
       }
+      const principal = await principalFromToken(deps.config.authToken);
+      authInfo = { token: principal, clientId: principal, scopes: [] };
     }
 
     // Auth runs first so unauthenticated callers cannot make the server
@@ -91,7 +81,7 @@ export function buildApp(deps: AppDeps) {
             body: read.body,
           });
 
-    return handler.fetch(forwarded);
+    return handler.fetch(forwarded, authInfo === undefined ? undefined : { authInfo });
   });
 
   return app;
