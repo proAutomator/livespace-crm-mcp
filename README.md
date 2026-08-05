@@ -55,11 +55,22 @@ Copy `.env.example` to `.env` and fill in your values. Never commit `.env`.
 bun install
 bun test            # offline unit tests
 bun run typecheck
-bun run smoke       # LIVE call against your Livespace account (uses .env or macOS Keychain)
+bun run smoke       # LIVE Livespace API check (uses .env or macOS Keychain)
+bun run dev         # start the MCP server on http://127.0.0.1:3020/mcp
 ```
 
-`bun run smoke` performs real API calls (ping + current user) with your
-credentials. Point it at a test instance, never at a production CRM.
+Quick manual check once `bun run dev` is running (set `MCP_PORT` if 3020 is
+taken on your machine):
+
+```bash
+curl -s -X POST http://127.0.0.1:3020/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+`bun run smoke` and the health tool's `checkLivespace` perform real API calls
+with your credentials. Point them at a test instance, never at a production CRM.
 
 ## Disclaimer
 
