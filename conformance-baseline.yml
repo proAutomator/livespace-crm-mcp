@@ -1,0 +1,35 @@
+# Known conformance failures (npx @modelcontextprotocol/conformance server).
+#
+# Every entry below tests a feature this server intentionally does not
+# implement (resources, prompts, completions, logging, sampling/elicitation
+# fixtures) or a reference fixture tool the suite expects (tools-call-*
+# scenarios call fixture tools like "simple-text"; this server exposes CRM
+# tools only). Remove entries as features land - the runner fails on stale
+# baseline entries, so this file cannot rot silently.
+server:
+  - logging-set-level
+  - completion-complete
+  - tools-call-simple-text
+  - tools-call-image
+  - tools-call-audio
+  - tools-call-embedded-resource
+  - tools-call-mixed-content
+  - tools-call-with-logging
+  - tools-call-error
+  - tools-call-with-progress
+  - tools-call-sampling
+  - tools-call-elicitation
+  - elicitation-sep1034-defaults
+  - elicitation-sep1330-enums
+  - server-sse-multiple-streams
+  - resources-list
+  - resources-read-text
+  - resources-read-binary
+  - resources-templates-read
+  - resources-subscribe
+  - resources-unsubscribe
+  - prompts-list
+  - prompts-get-simple
+  - prompts-get-with-args
+  - prompts-get-embedded-resource
+  - prompts-get-with-image

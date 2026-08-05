@@ -95,8 +95,9 @@ names). That content is **untrusted data**:
 
 - Runtime dependencies are minimal (MCP SDK, Hono, Zod) and pinned to exact
   versions; the lockfile is committed.
-- No dependencies with install scripts; CI runs dependency audit and a secret
-  scanner (gitleaks) on every push.
+- No dependencies with install scripts; CI runs a dependency audit
+  (`bun audit`) and a checksum-pinned secret scanner (gitleaks) on every
+  push; GitHub Actions are pinned to commit SHAs.
 
 ## 8. Data handling
 
