@@ -57,6 +57,21 @@ pinned to an exact version.
 - Writes: batch arrays with per-item results, `dryRun` previews, post-write
   verification ("before → after"), honest tool annotations.
 
+## Milestone workflow
+
+Work proceeds milestone by milestone (roadmap in `.ai/PLAN.md`). For each one:
+
+1. Read `.ai/HANDOFF.md` and `.ai/PLAN.md` before anything else.
+2. Write a full implementation plan in `docs/superpowers/plans/` BEFORE any
+   code: exact file paths, complete code in every step, verified against real
+   API knowledge (check npm versions and SDK signatures, do not guess).
+3. Execute task by task with TDD (failing test, minimal code, green, commit).
+4. A milestone counts as done only after a live smoke check against the
+   sandbox account (macOS Keychain, service `livespace-api`) - never against
+   a production CRM.
+5. Record deviations discovered during execution in the plan doc ("Execution
+   notes") and update the `.ai/` files before stopping.
+
 ## Agent Session Files
 
 Use `.ai/PLAN.md`, `.ai/TODO.md`, `.ai/HANDOFF.md`, and `.ai/NOTIFY.md` as the
