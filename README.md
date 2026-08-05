@@ -49,6 +49,18 @@ Copy `.env.example` to `.env` and fill in your values. Never commit `.env`.
 | `MCP_AUTH_TOKEN` | Bearer token for `/mcp`; mandatory on public binds |
 | `LIVESPACE_MCP_READ_ONLY` | `true` disables all write tools |
 
+## Development
+
+```bash
+bun install
+bun test            # offline unit tests
+bun run typecheck
+bun run smoke       # LIVE call against your Livespace account (uses .env or macOS Keychain)
+```
+
+`bun run smoke` performs real API calls (ping + current user) with your
+credentials. Point it at a test instance, never at a production CRM.
+
 ## Disclaimer
 
 Community project. Not affiliated with, endorsed by, or supported by
