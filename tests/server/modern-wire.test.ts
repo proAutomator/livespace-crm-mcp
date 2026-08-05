@@ -8,6 +8,11 @@ const BASE_CONFIG: ServerConfig = {
   readOnly: false,
   allowedHostnames: ["localhost", "127.0.0.1", "[::1]"],
   allowedOriginHostnames: ["localhost", "127.0.0.1", "[::1]"],
+  // Generous limits so ordinary tests never trip the limiter.
+  rateLimitPerMinute: 6000,
+  rateLimitBurst: 1000,
+  maxConcurrentRequests: 16,
+  maxQueuedRequests: 32,
 };
 
 const PROTOCOL = "2026-07-28";

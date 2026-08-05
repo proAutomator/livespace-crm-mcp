@@ -7,6 +7,7 @@ import {
 import { Hono } from "hono";
 import { principalFromToken, tokensEqual } from "./auth.js";
 import { readBodyWithCap } from "./body-limit.js";
+import { createRequestLimiter } from "./limits.js";
 import { createServerFactory, type AppDeps } from "./mcp.js";
 import { PROTOCOL_VERSION } from "./tools/health.js";
 
@@ -26,6 +27,13 @@ export function buildApp(deps: AppDeps) {
   const handler = createMcpHandler(createServerFactory(deps), {
     legacy: "stateless",
     responseMode: "auto",
+  });
+
+  const limiter = createRequestLimiter({
+    ratePerMinute: deps.config.rateLimitPerMinute,
+    burst: deps.config.rateLimitBurst,
+    maxConcurrent: deps.config.maxConcurrentRequests,
+    maxQueue: deps.config.maxQueuedRequests,
   });
 
   const app = new Hono();
@@ -63,25 +71,47 @@ export function buildApp(deps: AppDeps) {
       authInfo = { token: principal, clientId: principal, scopes: [] };
     }
 
-    // Auth runs first so unauthenticated callers cannot make the server
-    // buffer request bodies.
-    const read = await readBodyWithCap(request, MAX_BODY_BYTES);
-    if (read.kind === "too_large") {
-      return new Response(JSON.stringify({ error: "payload too large" }), {
-        status: 413,
-        headers: { "content-type": "application/json" },
+    const principal = authInfo?.clientId ?? "anonymous";
+    const admission = await limiter.admit(principal);
+    if (!admission.admitted) {
+      return new Response(JSON.stringify({ error: "rate_limited" }), {
+        status: 429,
+        headers: {
+          "content-type": "application/json",
+          "retry-after": String(admission.retryAfterSeconds),
+        },
       });
     }
-    const forwarded =
-      read.body === null
-        ? request
-        : new Request(request.url, {
-            method: request.method,
-            headers: request.headers,
-            body: read.body,
-          });
 
-    return handler.fetch(forwarded, authInfo === undefined ? undefined : { authInfo });
+    try {
+      // Auth and admission run first so unauthenticated or over-limit callers
+      // cannot make the server buffer request bodies.
+      const read = await readBodyWithCap(request, MAX_BODY_BYTES);
+      if (read.kind === "too_large") {
+        return new Response(JSON.stringify({ error: "payload too large" }), {
+          status: 413,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      const forwarded =
+        read.body === null
+          ? request
+          : new Request(request.url, {
+              method: request.method,
+              headers: request.headers,
+              body: read.body,
+            });
+
+      // The slot is held until the response is prepared; for SSE responses the
+      // stream may outlive it, which is an accepted simplification - response
+      // preparation is the expensive part here.
+      return await handler.fetch(
+        forwarded,
+        authInfo === undefined ? undefined : { authInfo },
+      );
+    } finally {
+      admission.release();
+    }
   });
 
   return app;

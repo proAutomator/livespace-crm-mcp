@@ -10,8 +10,31 @@ describe("loadServerConfig", () => {
       readOnly: false,
       allowedHostnames: ["localhost", "127.0.0.1", "[::1]"],
       allowedOriginHostnames: ["localhost", "127.0.0.1", "[::1]"],
+      rateLimitPerMinute: 120,
+      rateLimitBurst: 30,
+      maxConcurrentRequests: 8,
+      maxQueuedRequests: 16,
     });
     expect(config.authToken).toBeUndefined();
+  });
+
+  test("rate limit knobs parse and validate", () => {
+    const config = loadServerConfig({
+      MCP_RATE_LIMIT_PER_MINUTE: "300",
+      MCP_RATE_LIMIT_BURST: "50",
+      MCP_MAX_CONCURRENT_REQUESTS: "4",
+      MCP_MAX_QUEUED_REQUESTS: "8",
+    });
+    expect(config.rateLimitPerMinute).toBe(300);
+    expect(config.rateLimitBurst).toBe(50);
+    expect(config.maxConcurrentRequests).toBe(4);
+    expect(config.maxQueuedRequests).toBe(8);
+    expect(() => loadServerConfig({ MCP_RATE_LIMIT_BURST: "0" })).toThrow(
+      /MCP_RATE_LIMIT_BURST/,
+    );
+    expect(() => loadServerConfig({ MCP_MAX_CONCURRENT_REQUESTS: "-1" })).toThrow(
+      /MCP_MAX_CONCURRENT_REQUESTS/,
+    );
   });
 
   test("parses port, read-only flag, and auth token", () => {

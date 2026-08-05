@@ -8,6 +8,11 @@ const BASE_CONFIG: ServerConfig = {
   readOnly: false,
   allowedHostnames: ["localhost", "127.0.0.1", "[::1]"],
   allowedOriginHostnames: ["localhost", "127.0.0.1", "[::1]"],
+  // Generous limits so ordinary tests never trip the limiter.
+  rateLimitPerMinute: 6000,
+  rateLimitBurst: 1000,
+  maxConcurrentRequests: 16,
+  maxQueuedRequests: 32,
 };
 
 function mcpRequest(
@@ -111,6 +116,16 @@ describe("MCP HTTP surface", () => {
       mcpRequest(TOOLS_LIST, { "content-length": String(2 * 1024 * 1024) }),
     );
     expect(response.status).toBe(413);
+  });
+
+  test("requests beyond the rate limit get 429 with Retry-After", async () => {
+    const config = { ...BASE_CONFIG, rateLimitPerMinute: 60, rateLimitBurst: 2 };
+    const app = buildApp({ config, version: "0.0.0-test" });
+    expect((await app.request(mcpRequest(TOOLS_LIST))).status).toBe(200);
+    expect((await app.request(mcpRequest(TOOLS_LIST))).status).toBe(200);
+    const limited = await app.request(mcpRequest(TOOLS_LIST));
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toMatch(/^\d+$/);
   });
 
   test("chunked body over the cap gets 413 even without Content-Length", async () => {

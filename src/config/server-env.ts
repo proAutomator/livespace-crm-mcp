@@ -5,10 +5,28 @@ export interface ServerConfig {
   readOnly: boolean;
   allowedHostnames: string[];
   allowedOriginHostnames: string[];
+  rateLimitPerMinute: number;
+  rateLimitBurst: number;
+  maxConcurrentRequests: number;
+  maxQueuedRequests: number;
 }
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 const LOCAL_HOSTNAMES = ["localhost", "127.0.0.1", "[::1]"];
+
+function positiveInt(
+  env: Record<string, string | undefined>,
+  name: string,
+  fallback: number,
+): number {
+  const raw = env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+  return value;
+}
 
 function splitHostList(value: string | undefined): string[] {
   return (value ?? "")
@@ -64,5 +82,9 @@ export function loadServerConfig(
     readOnly,
     allowedHostnames,
     allowedOriginHostnames,
+    rateLimitPerMinute: positiveInt(env, "MCP_RATE_LIMIT_PER_MINUTE", 120),
+    rateLimitBurst: positiveInt(env, "MCP_RATE_LIMIT_BURST", 30),
+    maxConcurrentRequests: positiveInt(env, "MCP_MAX_CONCURRENT_REQUESTS", 8),
+    maxQueuedRequests: positiveInt(env, "MCP_MAX_QUEUED_REQUESTS", 16),
   };
 }
