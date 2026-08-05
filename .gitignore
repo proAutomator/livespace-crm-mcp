@@ -1,0 +1,27 @@
+# --- Secrets & local config - MUST never be committed ---
+# The repo may start private and later flip to public: the ENTIRE git
+# history becomes public then, so this list is load-bearing from commit #1.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.dev.vars
+
+# Agent working state (local only, may reference private context)
+.ai/
+
+# Dependencies & build output
+node_modules/
+dist/
+coverage/
+
+# Tooling & runtime
+.wrangler/
+*.log
+*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
