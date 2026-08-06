@@ -40,6 +40,7 @@ export function person(overrides: Partial<PersonRecord> = {}): PersonRecord {
     www: "https://alpha.synthetic.example",
     address: "Synthetic Street 1, Synthetic City",
     groups: ["Group One"],
+    url: "https://synthetic.livespace.io/Contact/contact/details/api_id/person-synthetic-001",
     ...overrides,
   };
 }
@@ -62,6 +63,7 @@ export function company(overrides: Partial<CompanyRecord> = {}): CompanyRecord {
     www: "https://alpha.synthetic.example",
     address: "Synthetic Avenue 9, Synthetic City",
     groups: ["Group Three"],
+    url: "https://synthetic.livespace.io/Contact/company/details/api_id/company-synthetic-101",
     ...overrides,
   };
 }
@@ -96,6 +98,7 @@ export function deal(overrides: Partial<DealRecord> = {}): DealRecord {
     groups: ["Group Four"],
     creatorName: "Synthetic Creator",
     statusChangeDate: "2025-11-05 16:45:00+02",
+    url: "https://synthetic.livespace.io/Deal/deal/details/api_id/deal-synthetic-401",
     ...overrides,
   };
 }

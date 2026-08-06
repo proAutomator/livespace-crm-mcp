@@ -88,6 +88,8 @@ export interface PersonRecord {
   www: string;
   address: string;
   groups: string[];
+  /** The record's own UI deep link, as upstream sends it. */
+  url: string;
 }
 
 export interface CompanyRecord {
@@ -107,6 +109,7 @@ export interface CompanyRecord {
   www: string;
   address: string;
   groups: string[];
+  url: string;
 }
 
 export interface DealRecord {
@@ -138,6 +141,7 @@ export interface DealRecord {
   groups: string[];
   creatorName: string;
   statusChangeDate: string;
+  url: string;
 }
 
 export interface LinkedRecord {
@@ -327,6 +331,7 @@ export function mapPerson(raw: unknown): PersonRecord {
     www: asName(data["www"]),
     address: mapAddress(data),
     groups: mapNames(data["groups"]),
+    url: asName(data["url"]),
   };
 }
 
@@ -349,6 +354,7 @@ export function mapCompany(raw: unknown): CompanyRecord {
     www: asName(data["www"]),
     address: mapAddress(data),
     groups: mapNames(data["groups"]),
+    url: asName(data["url"]),
   };
 }
 
@@ -385,6 +391,7 @@ export function mapDeal(raw: unknown): DealRecord {
     groups: mapNames(data["groups"]),
     creatorName: asName(data["creator_name"]),
     statusChangeDate: asName(data["status_change_date"]),
+    url: asName(data["url"]),
   };
 }
 

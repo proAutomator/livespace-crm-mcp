@@ -47,6 +47,7 @@ export const personSchema = z.strictObject({
   www: z.string().optional(),
   address: z.string().optional(),
   groups: z.array(z.string()).optional(),
+  url: z.string().optional(),
 });
 
 export const companySchema = z.strictObject({
@@ -66,6 +67,7 @@ export const companySchema = z.strictObject({
   www: z.string().optional(),
   address: z.string().optional(),
   groups: z.array(z.string()).optional(),
+  url: z.string().optional(),
 });
 
 export const dealSchema = z.strictObject({
@@ -97,6 +99,7 @@ export const dealSchema = z.strictObject({
   groups: z.array(z.string()).optional(),
   creatorName: z.string().optional(),
   statusChangeDate: z.string().optional(),
+  url: z.string().optional(),
 });
 
 export const taskSchema = z.strictObject({

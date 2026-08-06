@@ -121,6 +121,20 @@ export interface CallWrite {
   date?: string;
 }
 
+/**
+ * One `Deal/editDeal` step map: `1` checks a process step, `0` unchecks it.
+ * Step edits MERGE upstream, so only the flips belong in it - a full map would
+ * re-send checked steps and silently un-check whatever it left out.
+ */
+export type StepFlips = Record<string, 0 | 1>;
+
+export interface NotificationWrite {
+  userId: string;
+  text: string;
+  /** Where the bell entry points. Never empty: the CRM root is the fallback. */
+  url: string;
+}
+
 export interface CreatedRecord {
   id: string;
 }
@@ -146,6 +160,16 @@ export interface WriteFetchers {
     opts?: WriteCallOptions,
   ): Promise<{ wallItemId: string | null }>;
   addCall(personId: string, input: CallWrite, opts?: WriteCallOptions): Promise<void>;
+  /**
+   * The only way to move a deal along its pipeline: there is no "set stage"
+   * call, the stage IS the furthest checked step (probe evidence 1).
+   */
+  moveDealSteps(dealId: string, flips: StepFlips, opts?: WriteCallOptions): Promise<void>;
+  /**
+   * One in-app notification. Upstream answers 200 with an empty body and
+   * exposes NO read-back, so this resolves with nothing to verify.
+   */
+  sendNotification(input: NotificationWrite, opts?: WriteCallOptions): Promise<void>;
   findPersonByEmail(
     email: string,
     opts?: WriteCallOptions,
@@ -357,6 +381,24 @@ export function createWriteFetchers(
       await write("Contact", "addContactCall", { contact }, opts);
     },
 
+    moveDealSteps: async (dealId, flips, opts) => {
+      // Only the flips: `stages` MERGES, and the deal's own step state is what
+      // the diff was computed from.
+      await write("Deal", "editDeal", { deal: { id: dealId, stages: flips } }, opts);
+    },
+
+    sendNotification: async (input, opts) => {
+      // All four params are required - each missing one answers 550 - and
+      // `type` is pinned to 1: upstream accepts several values and renders
+      // them indistinguishably, so there is nothing to choose between.
+      await write(
+        "Crm",
+        "notification_send",
+        { user_id: input.userId, text: input.text, type: 1, url: input.url },
+        opts,
+      );
+    },
+
     findPersonByEmail: async (email, opts) => {
       const normalized = email.trim().toLowerCase();
       const payload = await read(
@@ -397,6 +439,29 @@ export function createWriteFetchers(
       return null;
     },
   };
+}
+
+/** The three kinds Livespace exposes a UI deep link for; tasks have none. */
+export type LinkableKind = "person" | "company" | "deal";
+
+const RECORD_URL_PATHS: Record<LinkableKind, string> = {
+  person: "Contact/contact/details/api_id",
+  company: "Contact/company/details/api_id",
+  deal: "Deal/deal/details/api_id",
+};
+
+/**
+ * The UI deep link for a record, built from the account subdomain. All three
+ * patterns are read off live records' own `url` fields, so this is a FALLBACK:
+ * a record that carries its own link is linked to by that, never by this.
+ *
+ * The id is percent-encoded. Ids are opaque upstream strings and the link
+ * travels into a notification body, so none of one may add a path segment or a
+ * query of its own (docs/security.md par. 1).
+ */
+export function recordUrl(subdomain: string, kind: LinkableKind, id: string): string {
+  const path = RECORD_URL_PATHS[kind];
+  return `https://${subdomain}.livespace.io/${path}/${encodeURIComponent(id)}`;
 }
 
 /**
@@ -538,6 +603,10 @@ const APPLIED_CHECKS: { [K in RecordKind]: Record<string, FieldCheck> } = {
     name: (value, stored) => matchesScalar(value, stored["name"]),
     status: (value, stored) => matchesScalar(value, stored["status"]),
     budget: (value, stored) => matchesBudget(value, stored["value"]),
+    // A stage move sends step flips, but what it claims is a POSITION: the
+    // deal reached the target stage, or it did not. The steps themselves are
+    // not re-read - the stage upstream derived from them is.
+    stageId: (value, stored) => matchesScalar(value, stored["stageId"]),
   },
   task: {
     title: (value, stored) => matchesScalar(value, stored["title"]),

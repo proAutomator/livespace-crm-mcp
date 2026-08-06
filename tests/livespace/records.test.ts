@@ -60,6 +60,8 @@ const PERSON_RAW = {
   address_city: "Synthetic City",
   address_postcode: "00-001",
   groups: [{ id: "group-synthetic-301", name: "Group One" }, { name: "Group Two" }],
+  // The record's own UI deep link, as upstream sends it (probe evidence 7).
+  url: "https://synthetic.livespace.io/Contact/contact/details/api_id/person-synthetic-001",
 };
 
 const PERSON: PersonRecord = {
@@ -84,6 +86,7 @@ const PERSON: PersonRecord = {
   www: "https://alpha.synthetic.example",
   address: "Synthetic Street 1, Flat 2, Synthetic City, 00-001",
   groups: ["Group One", "Group Two"],
+  url: "https://synthetic.livespace.io/Contact/contact/details/api_id/person-synthetic-001",
 };
 
 const PERSON_EMPTY: PersonRecord = {
@@ -108,6 +111,7 @@ const PERSON_EMPTY: PersonRecord = {
   www: "",
   address: "",
   groups: [],
+  url: "",
 };
 
 const COMPANY_RAW = {
@@ -131,6 +135,7 @@ const COMPANY_RAW = {
   address_city: "Synthetic City",
   address_postcode: "00-002",
   groups: ["Group Three"],
+  url: "https://synthetic.livespace.io/Contact/company/details/api_id/company-synthetic-101",
 };
 
 const COMPANY: CompanyRecord = {
@@ -150,6 +155,7 @@ const COMPANY: CompanyRecord = {
   www: "https://alpha.synthetic.example",
   address: "Synthetic Avenue 9, Synthetic City, 00-002",
   groups: ["Group Three"],
+  url: "https://synthetic.livespace.io/Contact/company/details/api_id/company-synthetic-101",
 };
 
 const COMPANY_EMPTY: CompanyRecord = {
@@ -169,6 +175,7 @@ const COMPANY_EMPTY: CompanyRecord = {
   www: "",
   address: "",
   groups: [],
+  url: "",
 };
 
 const DEAL_RAW = {
@@ -202,6 +209,7 @@ const DEAL_RAW = {
   groups: [{ name: "Group Four" }],
   creator_name: "Synthetic Creator",
   status_change_date: "2025-11-05 16:45:00+02",
+  url: "https://synthetic.livespace.io/Deal/deal/details/api_id/deal-synthetic-401",
 };
 
 const DEAL: DealRecord = {
@@ -233,6 +241,7 @@ const DEAL: DealRecord = {
   groups: ["Group Four"],
   creatorName: "Synthetic Creator",
   statusChangeDate: "2025-11-05 16:45:00+02",
+  url: "https://synthetic.livespace.io/Deal/deal/details/api_id/deal-synthetic-401",
 };
 
 const DEAL_EMPTY: DealRecord = {
@@ -264,6 +273,7 @@ const DEAL_EMPTY: DealRecord = {
   groups: [],
   creatorName: "",
   statusChangeDate: "",
+  url: "",
 };
 
 const TASK_RAW = {
@@ -404,6 +414,34 @@ describe("full-record mappers", () => {
 
   test("mapTask on a fully populated raw record", () => {
     expect(mapTask(TASK_RAW)).toEqual(TASK);
+  });
+
+  test("the record's own deep link is mapped verbatim on the three linkable kinds", () => {
+    // Upstream sends the UI link on the record itself (probe evidence 7). It is
+    // taken as it comes: a link built from a subdomain is the FALLBACK, never a
+    // correction of what the CRM said.
+    const link = "https://synthetic.livespace.io/Deal/deal/details/api_id/deal-synthetic-403";
+    expect(mapDeal({ id: "deal-synthetic-403", url: link }).url).toBe(link);
+    expect(
+      mapPerson({ id: "person-synthetic-010", url: "https://synthetic.example/x" }).url,
+    ).toBe("https://synthetic.example/x");
+    expect(
+      mapCompany({ id: "company-synthetic-110", url: "https://synthetic.example/y" }).url,
+    ).toBe("https://synthetic.example/y");
+    // Absent or non-string follows the empty convention: not filled in.
+    expect(mapDeal({ id: "deal-synthetic-404" }).url).toBe("");
+    expect(mapPerson({ id: "person-synthetic-011", url: 7 }).url).toBe("");
+    expect(mapCompany({ id: "company-synthetic-111", url: null }).url).toBe("");
+  });
+
+  test("the schemas accept a record carrying its deep link", () => {
+    expect(personSchema.safeParse(PERSON).success).toBe(true);
+    expect(companySchema.safeParse(COMPANY).success).toBe(true);
+    expect(dealSchema.safeParse(DEAL).success).toBe(true);
+    // Tasks carry no link upstream, so the key is not part of their shape.
+    expect(taskSchema.safeParse({ ...TASK, url: "https://synthetic.example" }).success).toBe(
+      false,
+    );
   });
 
   test("absent structures fall back to the empty conventions", () => {

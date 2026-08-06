@@ -6,6 +6,7 @@ import type { RecordPointer } from "../../src/livespace/writes.js";
 import {
   ACTIVITY_BATCH_CAP,
   CONFIRMATION_TTL_SECONDS,
+  NOTIFICATION_UNVERIFIABLE,
   VERIFICATION_UNAVAILABLE,
   VERIFICATION_UNCHECKED,
   WRITE_BATCH_CAP,
@@ -20,12 +21,15 @@ import {
   isBatchError,
   newJti,
   readElicitedConfirm,
+  type ActionWriteItem,
   type ConfirmDecision,
   type CreateResolution,
   type ExecutableItem,
   type ExecuteDeps,
   type ItemResult,
+  type NoWriteItem,
   type RecordWriteItem,
+  type WriteItemPlan,
   type WriteState,
 } from "../../src/server/tools/write-support.js";
 import { person, task } from "../support/records.js";
@@ -445,6 +449,36 @@ function noteItem(index: number, writes: string[], wallItemId: string | null): E
   };
 }
 
+/** A deal the move tool found already standing where it was asked to stand. */
+function unchangedDeal(index: number, view?: Record<string, unknown>): NoWriteItem {
+  return {
+    index,
+    action: "move_deal",
+    kind: "deal",
+    status: "unchanged",
+    ...(view === undefined ? {} : { view }),
+  };
+}
+
+/** A dispatch-only item: one notification, nothing upstream to read it back. */
+function notifyItem(
+  index: number,
+  writes: string[],
+  opts: { fail?: unknown } = {},
+): ActionWriteItem {
+  return {
+    index,
+    action: "notify_user",
+    kind: "notification",
+    status: "action",
+    advisory: NOTIFICATION_UNVERIFIABLE,
+    perform: async () => {
+      writes.push(`notify#${index}`);
+      if (opts.fail !== undefined) throw opts.fail;
+    },
+  };
+}
+
 function run(
   deps: ExecuteDeps,
   items: readonly ExecutableItem[],
@@ -806,6 +840,142 @@ describe("executePlan", () => {
     expect(writes).toEqual([]);
     expect((error as LivespaceError).code).toBe("CANCELLED");
     expect(lines).toEqual(["write batch cancelled after 0 applied item(s): ids=[]"]);
+  });
+});
+
+describe("items that write nothing and items that only dispatch", () => {
+  test("an unchanged item is ok without a dispatch, a re-read or an advisory", async () => {
+    const { deps, calls } = fakeRecords({ "person:person-synthetic-001": person() });
+
+    const results = await run(deps, [
+      unchangedDeal(0, { stageId: "stage-synthetic-2", stageName: "Synthetic Stage 2" }),
+    ]);
+
+    // Nothing was written and nothing was read: there is no outcome to verify,
+    // so the item claims none.
+    expect(calls).toEqual([]);
+    expect(results).toEqual([
+      {
+        index: 0,
+        action: "move_deal",
+        kind: "deal",
+        status: "ok",
+        after: { stageId: "stage-synthetic-2", stageName: "Synthetic Stage 2" },
+      },
+    ]);
+  });
+
+  test("an unchanged item without a view carries no display bag", async () => {
+    const { deps } = fakeRecords();
+
+    const results = await run(deps, [unchangedDeal(0)]);
+
+    expect(results).toEqual([
+      { index: 0, action: "move_deal", kind: "deal", status: "ok" },
+    ]);
+  });
+
+  test("an unchanged item counts as an applied item and never fails the batch", async () => {
+    const { deps } = fakeRecords();
+
+    const results = await run(deps, [unchangedDeal(0)]);
+
+    expect(countResults(results).ok).toBe(1);
+    expect(isBatchError(results)).toBe(false);
+  });
+
+  test("an action item dispatches once and reports the advisory it was given", async () => {
+    const writes: string[] = [];
+    const { deps, calls } = fakeRecords();
+
+    const results = await run(deps, [notifyItem(0, writes)]);
+
+    expect(writes).toEqual(["notify#0"]);
+    // Dispatch only: an action has no record to re-read.
+    expect(calls).toEqual([]);
+    expect(results).toEqual([
+      {
+        index: 0,
+        action: "notify_user",
+        kind: "notification",
+        status: "ok",
+        verification: "unavailable",
+        error: NOTIFICATION_UNVERIFIABLE,
+      },
+    ]);
+  });
+
+  test("the advisory an action reports is the caller's, not a shared default", async () => {
+    const writes: string[] = [];
+    const { deps } = fakeRecords();
+    const advisory = {
+      code: "SYNTHETIC_ADVISORY",
+      message: "Synthetic advisory message.",
+      hint: "Synthetic advisory hint.",
+    };
+
+    const results = await run(deps, [{ ...notifyItem(0, writes), advisory }]);
+
+    expect(results[0]?.error).toEqual(advisory);
+    expect(results[0]?.error).not.toEqual(NOTIFICATION_UNVERIFIABLE);
+  });
+
+  test("a failing action is an error, and it never becomes an id-less ok", async () => {
+    const writes: string[] = [];
+    const { deps } = fakeRecords();
+    const rejected = new LivespaceError(
+      "VALIDATION_ERROR",
+      "Livespace rejected the request as invalid (420).",
+      "One or more field values are invalid for this method. Fix them and retry.",
+    );
+
+    const results = await run(deps, [notifyItem(0, writes, { fail: rejected })]);
+
+    expect(results[0]?.status).toBe("error");
+    expect(results[0]?.error?.code).toBe("VALIDATION_ERROR");
+  });
+
+  test("an action whose outcome is unknown is never resolved into a success", async () => {
+    // There is nothing to read back, so a mid-flight failure stays unknown -
+    // the caller is told to confirm another way, never to dispatch again.
+    const writes: string[] = [];
+    const { deps, calls } = fakeRecords();
+
+    const results = await run(deps, [notifyItem(0, writes, { fail: UNKNOWN_OUTCOME })]);
+
+    expect(calls).toEqual([]);
+    expect(results[0]).toEqual({
+      index: 0,
+      action: "notify_user",
+      kind: "notification",
+      status: "unknown_outcome",
+      error: UNKNOWN_ENTRY,
+    });
+  });
+
+  test("the notification advisory says delivery cannot be confirmed", () => {
+    expect(NOTIFICATION_UNVERIFIABLE).toEqual({
+      code: "NOTIFICATION_UNVERIFIABLE",
+      message:
+        "Livespace exposes no read-back for notifications; delivery cannot be confirmed.",
+      hint: "Do not resend; confirm with the recipient another way.",
+    });
+  });
+
+  test("a planned item may be a move, an unchanged deal or an action", () => {
+    const items: WriteItemPlan[] = [
+      { index: 0, action: "move_deal", kind: "deal", status: "move", summary: {} },
+      { index: 1, action: "move_deal", kind: "deal", status: "unchanged", summary: {} },
+      {
+        index: 2,
+        action: "notify_user",
+        kind: "notification",
+        status: "action",
+        summary: {},
+      },
+    ];
+
+    expect(items.map((item) => item.status)).toEqual(["move", "unchanged", "action"]);
   });
 });
 

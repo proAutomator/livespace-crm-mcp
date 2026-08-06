@@ -21,9 +21,9 @@ import {
 import { toToolError, type ToolError } from "./tool-error.js";
 
 /**
- * The machinery the three write tools share: batch caps, the confirmation
- * state machine, the signed single-use `requestState`, and the executor that
- * writes items one at a time and verifies each one.
+ * The machinery the write tools share: batch caps, the confirmation state
+ * machine, the signed single-use `requestState`, and the executor that writes
+ * items one at a time and verifies each one.
  *
  * Five rules shape it, all of them from docs/security.md par. 5 and the M6
  * critique panel:
@@ -282,7 +282,16 @@ export interface WriteItemPlan {
   index: number;
   action: string;
   kind: string;
-  status: "create" | "update" | "note" | "call" | "skipped_duplicate" | "blocked";
+  status:
+    | "create"
+    | "update"
+    | "move"
+    | "unchanged"
+    | "action"
+    | "note"
+    | "call"
+    | "skipped_duplicate"
+    | "blocked";
   summary: Record<string, unknown>;
   dedupe?: { existingId: string };
   before?: Record<string, unknown>;
@@ -351,6 +360,37 @@ export interface ActivityWriteItem {
   perform(opts: WriteCallOptions): Promise<string | null>;
 }
 
+/**
+ * An item the plan resolved to nothing to do - a deal already standing where it
+ * was asked to stand. It is `ok` because the CRM already holds what the caller
+ * asked for, and it dispatches nothing, reads nothing back and claims no
+ * verification: there is no outcome to verify.
+ */
+export interface NoWriteItem {
+  index: number;
+  action: string;
+  kind: string;
+  status: "unchanged";
+  /** The display bag, reported as `after`: what a re-read would have shown. */
+  view?: Record<string, unknown>;
+}
+
+/**
+ * A write with no record behind it - a notification. It dispatches once and
+ * stops there: the endpoint exposes no read-back at all, so the item reports
+ * `verification: "unavailable"` with the advisory its caller supplies, and a
+ * mid-flight failure stays `unknown_outcome` rather than being resolved.
+ */
+export interface ActionWriteItem {
+  index: number;
+  action: string;
+  kind: string;
+  status: "action";
+  /** Why the outcome cannot be checked; shown with the applied item. */
+  advisory: ToolError;
+  perform(opts: WriteCallOptions): Promise<void>;
+}
+
 export interface SkippedItem {
   index: number;
   action: string;
@@ -370,6 +410,8 @@ export interface BlockedItem {
 export type ExecutableItem =
   | RecordWriteItem
   | ActivityWriteItem
+  | ActionWriteItem
+  | NoWriteItem
   | SkippedItem
   | BlockedItem;
 
@@ -398,6 +440,18 @@ export const VERIFICATION_UNCHECKED: ToolError = {
   code: "VERIFICATION_UNCHECKED",
   message: "The write was applied; the sent fields have no independent re-read check.",
   hint: "Re-read the record if you need proof; do not retry the write.",
+};
+
+/**
+ * The advisory a notification carries. Livespace has no read-back for one -
+ * three candidate endpoints all answered 540 - so "dispatched" is the strongest
+ * thing anyone can say, and a resend would be a second bell entry, not a fix.
+ */
+export const NOTIFICATION_UNVERIFIABLE: ToolError = {
+  code: "NOTIFICATION_UNVERIFIABLE",
+  message:
+    "Livespace exposes no read-back for notifications; delivery cannot be confirmed.",
+  hint: "Do not resend; confirm with the recipient another way.",
 };
 
 /**
@@ -495,10 +549,20 @@ async function verifiedResult(
  */
 async function appliedResult(
   deps: ExecuteDeps,
-  item: RecordWriteItem | ActivityWriteItem,
+  item: RecordWriteItem | ActivityWriteItem | ActionWriteItem,
   id: string | null,
   opts: WriteCallOptions,
 ): Promise<ItemResult> {
+  // An action has nothing to read back, and says so with the caller's own
+  // wording rather than pretending a check was attempted.
+  if (item.status === "action") {
+    return {
+      ...base(item),
+      status: "ok",
+      verification: "unavailable",
+      error: item.advisory,
+    };
+  }
   if (!isRecordItem(item)) {
     return { ...base(item), status: "ok", ...(id === null ? {} : { id }) };
   }
@@ -673,11 +737,25 @@ export async function executePlan(
       });
       continue;
     }
+    // Nothing to do, so nothing is dispatched and nothing is read back: the
+    // CRM already holds what the caller asked for. It is not counted as an
+    // applied item either - the audit line speaks about writes.
+    if (item.status === "unchanged") {
+      results.push({
+        ...base(item),
+        status: "ok",
+        ...(item.view === undefined ? {} : { after: item.view }),
+      });
+      continue;
+    }
 
     let id: string | null = null;
     let failure: ToolError | undefined;
     try {
-      id = await item.perform(callOpts);
+      // A record write answers with an id, an activity with a wall item id or
+      // nothing, an action with nothing at all.
+      const dispatched: unknown = await item.perform(callOpts);
+      id = typeof dispatched === "string" ? dispatched : null;
     } catch (error) {
       const classified = classify(error, opts.signal);
       if (classified === "cancelled") cancel();

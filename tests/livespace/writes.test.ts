@@ -3,6 +3,7 @@ import { LivespaceError } from "../../src/livespace/errors.js";
 import { mapTask } from "../../src/livespace/records.js";
 import {
   createWriteFetchers,
+  recordUrl,
   verifyApplied,
   type WriteFetchers,
 } from "../../src/livespace/writes.js";
@@ -474,6 +475,89 @@ describe("notes and calls", () => {
   });
 });
 
+describe("stage moves and notifications", () => {
+  test("moveDealSteps sends the flips and nothing else", async () => {
+    const { writes, calls } = writeFetchersFor({ "Deal/editDeal": {} });
+
+    await writes.moveDealSteps("deal-synthetic-401", {
+      "step-synthetic-0a": 1,
+      "step-synthetic-0b": 1,
+      "step-synthetic-3a": 0,
+    });
+
+    const call = onlyCall(calls);
+    expect([call.module, call.method]).toEqual(["Deal", "editDeal"]);
+    // Step edits MERGE upstream (probe evidence 2), so only the flips travel -
+    // a full step map would re-send checked steps and un-check absent ones.
+    expect(call.params).toStrictEqual({
+      deal: {
+        id: "deal-synthetic-401",
+        stages: {
+          "step-synthetic-0a": 1,
+          "step-synthetic-0b": 1,
+          "step-synthetic-3a": 0,
+        },
+      },
+    });
+    expect(call.opts.write).toBe(true);
+    expect(keyNames(call.params)).not.toContain("_wall");
+    // The stage is the furthest checked step, never a field of its own.
+    expect(keyNames(call.params)).not.toContain("stage_id");
+  });
+
+  test("moveDealSteps sends an empty flip set as an empty map", async () => {
+    const { writes, calls } = writeFetchersFor({ "Deal/editDeal": {} });
+
+    await writes.moveDealSteps("deal-synthetic-401", {});
+
+    expect(onlyCall(calls).params).toStrictEqual({
+      deal: { id: "deal-synthetic-401", stages: {} },
+    });
+  });
+
+  test("sendNotification sends all four required params, always type 1", async () => {
+    const { writes, calls } = writeFetchersFor({ "Crm/notification_send": [] });
+
+    await writes.sendNotification({
+      userId: "user-synthetic-201",
+      text: "Synthetic notification text",
+      url: "https://synthetic.livespace.io/Deal/deal/details/api_id/deal-synthetic-401",
+    });
+
+    const call = onlyCall(calls);
+    expect([call.module, call.method]).toEqual(["Crm", "notification_send"]);
+    // All four are required - upstream answers 550 for each missing one
+    // (probe evidence 5) - and `type` is pinned to 1: the other accepted
+    // values are indistinguishable in the UI.
+    expect(call.params).toStrictEqual({
+      user_id: "user-synthetic-201",
+      text: "Synthetic notification text",
+      type: 1,
+      url: "https://synthetic.livespace.io/Deal/deal/details/api_id/deal-synthetic-401",
+    });
+    expect(call.opts.write).toBe(true);
+  });
+
+  test("recordUrl builds the deep link for each linkable kind", () => {
+    expect(recordUrl("synthetic", "deal", "deal-synthetic-401")).toBe(
+      "https://synthetic.livespace.io/Deal/deal/details/api_id/deal-synthetic-401",
+    );
+    expect(recordUrl("synthetic", "person", "person-synthetic-001")).toBe(
+      "https://synthetic.livespace.io/Contact/contact/details/api_id/person-synthetic-001",
+    );
+    expect(recordUrl("synthetic", "company", "company-synthetic-101")).toBe(
+      "https://synthetic.livespace.io/Contact/company/details/api_id/company-synthetic-101",
+    );
+  });
+
+  test("recordUrl percent-encodes the id it is given", () => {
+    // Ids are opaque upstream strings; none of one may escape the path.
+    expect(recordUrl("synthetic", "deal", "deal/synthetic?x=1")).toBe(
+      "https://synthetic.livespace.io/Deal/deal/details/api_id/deal%2Fsynthetic%3Fx%3D1",
+    );
+  });
+});
+
 describe("write flag, signal and endpoint table", () => {
   interface MethodCase {
     method: keyof WriteFetchers;
@@ -584,6 +668,35 @@ describe("write flag, signal and endpoint table", () => {
         ),
       module: "Contact",
       upstream: "addContactCall",
+      write: true,
+    },
+    {
+      method: "moveDealSteps",
+      responses: { "Deal/editDeal": {} },
+      run: (writes, signal) =>
+        writes.moveDealSteps(
+          "deal-synthetic-401",
+          { "step-synthetic-0a": 1 },
+          { signal },
+        ),
+      module: "Deal",
+      upstream: "editDeal",
+      write: true,
+    },
+    {
+      method: "sendNotification",
+      responses: { "Crm/notification_send": [] },
+      run: (writes, signal) =>
+        writes.sendNotification(
+          {
+            userId: "user-synthetic-201",
+            text: "Synthetic notification text",
+            url: "https://synthetic.livespace.io/",
+          },
+          { signal },
+        ),
+      module: "Crm",
+      upstream: "notification_send",
       write: true,
     },
     {
@@ -845,6 +958,37 @@ describe("verifyApplied", () => {
     expect(
       verifyApplied("deal", { status: "won" }, deal({ status: "open" })).unappliedFields,
     ).toEqual(["status"]);
+  });
+
+  test("a stage move is verified against the stage the deal ended up in", () => {
+    // The move sends step flips, but what it CLAIMS is a position: the deal
+    // reached the target stage, or it did not.
+    expect(
+      verifyApplied(
+        "deal",
+        { stageId: "stage-synthetic-2" },
+        deal({ stageId: "stage-synthetic-2" }),
+      ),
+    ).toEqual({ unappliedFields: [], comparedFields: ["stageId"], verified: true });
+    expect(
+      verifyApplied(
+        "deal",
+        { stageId: "stage-synthetic-2" },
+        deal({ stageId: "stage-synthetic-1" }),
+      ),
+    ).toEqual({
+      unappliedFields: ["stageId"],
+      comparedFields: ["stageId"],
+      verified: true,
+    });
+  });
+
+  test("a stage move whose re-read never answered claims nothing", () => {
+    expect(verifyApplied("deal", { stageId: "stage-synthetic-2" }, null)).toEqual({
+      unappliedFields: [],
+      comparedFields: [],
+      verified: false,
+    });
   });
 
   test("booleans compare normalized, whichever spelling upstream used", () => {
