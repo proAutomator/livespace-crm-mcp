@@ -7,7 +7,8 @@ Unofficial [MCP](https://modelcontextprotocol.io) server for
 > **Status:** the protocol and security core is complete and hardened
 > (stateless MCP 2026-07-28, official conformance suite and dependency audit
 > in CI, rate limiting, cancellation, operation-aware retries). CRM tools
-> land milestone by milestone - `health` is live, read tools are next. Until
+> land milestone by milestone - `health` and `crm_metadata` (CRM dictionaries)
+> are live; search and read tools are next. Until
 > the write tools ship with their safety rails, point it at a test Livespace
 > account rather than a production CRM.
 
