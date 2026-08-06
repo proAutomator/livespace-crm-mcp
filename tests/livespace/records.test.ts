@@ -34,6 +34,14 @@ const PERSON_RAW = {
   name: "Synthetic Person One",
   email: "person.one@synthetic.example",
   phone: "+00 000 000 001",
+  // Stored contact channels are objects, not strings: emails carry `value`,
+  // phones `number` (probe evidence 3). The scalar `email`/`phone` above are
+  // the upstream summary of the first entry.
+  emails: [
+    { id: "email-synthetic-001", value: "Person.One@Synthetic.example", type: "work" },
+    { id: "email-synthetic-002", value: "second@synthetic.example", type: "home" },
+  ],
+  phones: [{ id: "phone-synthetic-001", number: "+00 000 000 001", type: "work" }],
   cell: "+00 000 000 002",
   company: "Synthetic Company Alpha",
   company_id: "company-synthetic-101",
@@ -59,6 +67,8 @@ const PERSON: PersonRecord = {
   name: "Synthetic Person One",
   email: "person.one@synthetic.example",
   phone: "+00 000 000 001",
+  emails: ["Person.One@Synthetic.example", "second@synthetic.example"],
+  phones: ["+00 000 000 001"],
   companyName: "Synthetic Company Alpha",
   companyId: "company-synthetic-101",
   ownerName: "Synthetic Owner",
@@ -81,6 +91,8 @@ const PERSON_EMPTY: PersonRecord = {
   name: "",
   email: "",
   phone: "",
+  emails: [],
+  phones: [],
   companyName: "",
   companyId: null,
   ownerName: "",
@@ -346,6 +358,40 @@ describe("kind vocabularies", () => {
 describe("full-record mappers", () => {
   test("mapPerson on a fully populated raw record", () => {
     expect(mapPerson(PERSON_RAW)).toEqual(PERSON);
+  });
+
+  test("person contact channels flatten to string arrays", () => {
+    // The write side sends `emails`/`phones` as string arrays and the stored
+    // form is objects (probe evidence 3), so the mapper unwraps `value` and
+    // `number` back to strings the verifier can compare against.
+    const mapped = mapPerson({
+      id: "person-synthetic-007",
+      emails: [{ value: "A@b.c" }],
+      phones: [{ number: "+48 1" }],
+    });
+    expect(mapped.emails).toEqual(["A@b.c"]);
+    expect(mapped.phones).toEqual(["+48 1"]);
+  });
+
+  test("absent, malformed or non-array contact channels map to empty arrays", () => {
+    const absent = mapPerson({ id: "person-synthetic-008" });
+    expect([absent.emails, absent.phones]).toEqual([[], []]);
+    const junk = mapPerson({
+      id: "person-synthetic-009",
+      // PHP serializes an empty map as `[]`; junk rows are skipped, bare
+      // strings are taken as-is.
+      emails: [{ value: "" }, null, "bare@synthetic.example", 7],
+      phones: {},
+    });
+    expect(junk.emails).toEqual(["bare@synthetic.example"]);
+    expect(junk.phones).toEqual([]);
+  });
+
+  test("the person schema parses a full record carrying both arrays", () => {
+    expect(personSchema.safeParse(PERSON).success).toBe(true);
+    expect(personSchema.safeParse({ ...PERSON, emails: [], phones: [] }).success).toBe(
+      true,
+    );
   });
 
   test("mapCompany on a fully populated raw record", () => {

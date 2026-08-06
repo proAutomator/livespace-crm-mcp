@@ -30,6 +30,8 @@ export const personSchema = z.strictObject({
   name: z.string(),
   email: z.string().optional(),
   phone: z.string().optional(),
+  emails: z.array(z.string()).optional(),
+  phones: z.array(z.string()).optional(),
   companyName: z.string().optional(),
   companyId: z.string().nullable().optional(),
   ownerName: z.string().optional(),

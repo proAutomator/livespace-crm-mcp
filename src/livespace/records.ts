@@ -64,6 +64,15 @@ export interface PersonRecord {
   name: string;
   email: string;
   phone: string;
+  /**
+   * Every stored address and number, flattened to strings. The scalar
+   * `email`/`phone` above are the upstream summary of the first entry; these
+   * two are what a write actually sets and what the post-write verifier
+   * compares against (`emails`/`phones` are string arrays on write and
+   * `{value|number, type, id}` objects at rest).
+   */
+  emails: string[];
+  phones: string[];
   companyName: string;
   companyId: string | null;
   ownerName: string;
@@ -219,6 +228,27 @@ function mapNames(value: unknown): string[] {
   return names;
 }
 
+/**
+ * Contact channels: `emails` rows carry `value`, `phones` rows carry `number`.
+ * Bare strings are taken as they are, so a shape change upstream degrades to a
+ * flatter list instead of an empty one.
+ */
+function mapChannels(value: unknown, key: string): string[] {
+  if (!Array.isArray(value)) return [];
+  const values: string[] = [];
+  for (const entry of value) {
+    if (typeof entry === "string") {
+      if (entry) values.push(entry);
+      continue;
+    }
+    const record = asRecord(entry);
+    if (record === null) continue;
+    const text = asName(record[key]);
+    if (text) values.push(text);
+  }
+  return values;
+}
+
 function mapDealCount(value: unknown): DealCount | null {
   const counts = asRecord(value);
   if (counts === null) return null;
@@ -279,6 +309,8 @@ export function mapPerson(raw: unknown): PersonRecord {
     name: asName(data["name"]),
     email: asName(data["email"]),
     phone: asName(data["phone"]),
+    emails: mapChannels(data["emails"], "value"),
+    phones: mapChannels(data["phones"], "number"),
     // `company_name` on the simple shape, `company` on the full one.
     companyName: asName(data["company_name"]) || asName(data["company"]),
     companyId: optionalId(data["company_id"]),

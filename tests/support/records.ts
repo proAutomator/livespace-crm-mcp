@@ -23,6 +23,8 @@ export function person(overrides: Partial<PersonRecord> = {}): PersonRecord {
     name: "Synthetic Person One",
     email: "person.one@synthetic.example",
     phone: "+00 000 000 001",
+    emails: ["person.one@synthetic.example"],
+    phones: ["+00 000 000 001"],
     companyName: "Synthetic Company Alpha",
     companyId: "company-synthetic-101",
     ownerName: "Synthetic Owner",
