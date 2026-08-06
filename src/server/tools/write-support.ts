@@ -55,7 +55,9 @@ import { toToolError, type ToolError } from "./tool-error.js";
  * two HTTP round-trips (token + signed dispatch) at 0.5-2 s through the
  * throttle, and a create/update item costs up to three of them (plan lookup,
  * write, re-read): 1.5-6 s. Ten of those fit a 60 s client timeout with room
- * to spare; an activity item costs one write, so fifteen fit.
+ * to spare; an activity item costs one write plus, when its target is a
+ * distinct record, one wall read - up to two - so fifteen fit. The budget
+ * below spans BOTH phases, which is what keeps that arithmetic honest.
  */
 export const WRITE_BATCH_CAP = 10;
 export const ACTIVITY_BATCH_CAP = 15;
@@ -578,6 +580,35 @@ function auditCancelled(applied: number, ids: readonly string[]): void {
   console.error(
     `write batch cancelled after ${applied} applied item(s): ids=[${ids.join(", ")}]`,
   );
+}
+
+/**
+ * The same accounting for a phase that runs AFTER `executePlan` - a post-write
+ * verification pass, say, whose writes have already landed and cannot be taken
+ * back. The counts are derived exactly as `executePlan` derives them: applied
+ * items are the ones the write made `ok`, and the ids are the ones they
+ * reported. A logged call reports none, so an ids list shorter than the count
+ * is correct, not a bug.
+ *
+ * Exactly one line is ever emitted per call: `executePlan`'s own cancel ends
+ * the call before any later phase can start.
+ */
+export async function withCancelAudit<T>(
+  written: readonly ItemResult[],
+  phase: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await phase();
+  } catch (error) {
+    if (toToolError(error).code === "CANCELLED") {
+      const applied = written.filter((result) => result.status === "ok");
+      auditCancelled(
+        applied.length,
+        applied.flatMap((result) => (result.id === undefined ? [] : [result.id])),
+      );
+    }
+    throw error;
+  }
 }
 
 /**

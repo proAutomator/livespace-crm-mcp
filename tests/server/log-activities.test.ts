@@ -22,7 +22,11 @@ import {
   type LogActivitiesResult,
 } from "../../src/server/tools/log-activities.js";
 import type { ToolError, ToolRunResult } from "../../src/server/tools/tool-error.js";
-import { hashArgs, type WriteState } from "../../src/server/tools/write-support.js";
+import {
+  hashArgs,
+  WRITE_BUDGET_MS,
+  type WriteState,
+} from "../../src/server/tools/write-support.js";
 import { wallEntry } from "../support/records.js";
 
 /**
@@ -82,6 +86,8 @@ interface Canning {
   addCall?: (call: number, input: CallInput) => Answer<null>;
   /** Wall answers keyed `kind:id`. An Error value is thrown by the read. */
   walls?: Record<string, unknown>;
+  /** Runs before every wall answer; throwing here is a read that failed. */
+  onWall?: (call: number, key: string) => void;
 }
 
 interface Recorded {
@@ -151,7 +157,8 @@ function fakeWorld(canned: Canning = {}) {
 
   const activity = {
     recordWall: async (opts: { kind: string; id: string; signal?: AbortSignal }) => {
-      push("recordWall", `${opts.kind}:${opts.id}`, opts);
+      const call = push("recordWall", `${opts.kind}:${opts.id}`, opts);
+      canned.onWall?.(call, `${opts.kind}:${opts.id}`);
       const answer = canned.walls?.[`${opts.kind}:${opts.id}`];
       if (answer instanceof Error) throw answer;
       return { entries: (answer ?? []) as [], truncated: false, totalEntries: 0 };
@@ -264,6 +271,33 @@ async function rejection(promise: Promise<unknown>): Promise<unknown> {
     return error;
   }
   throw new Error("expected the promise to reject");
+}
+
+/**
+ * A clock whose write phase fits the budget and whose verification pass does
+ * not: it jumps past the deadline the moment the first wall read starts. The
+ * hook belongs in the world's `onWall`, the scenario runs inside `during`.
+ */
+function budgetSpentAtFirstWall(): {
+  onWall: () => void;
+  during: <T>(scenario: () => Promise<T>) => Promise<T>;
+} {
+  const realNow = Date.now;
+  const base = realNow();
+  let spent = false;
+  return {
+    onWall: (): void => {
+      spent = true;
+    },
+    during: async <T>(scenario: () => Promise<T>): Promise<T> => {
+      Date.now = (): number => (spent ? base + WRITE_BUDGET_MS + 1_000 : base);
+      try {
+        return await scenario();
+      } finally {
+        Date.now = realNow;
+      }
+    },
+  };
 }
 
 /** Captures the stderr audit channel for one scenario. */
@@ -1103,6 +1137,106 @@ describe("execution", () => {
     expect(lines).toEqual([
       "write batch cancelled after 1 applied item(s): ids=[wall-synthetic-1]",
     ]);
+  });
+
+  test("an abort inside the wall pass is audited by the same one line", async () => {
+    // The writes have already landed and cannot be taken back. A cancel here
+    // must still leave the operator a record of what was written - the write
+    // phase's audit line ends the call before this point can be reached, so
+    // exactly one line is ever emitted.
+    const controller = new AbortController();
+    const scenario = fakeWorld({
+      onWall: () => {
+        controller.abort();
+        throw new Error("synthetic wall failure");
+      },
+    });
+
+    const { value, lines } = await onStderr(async () =>
+      rejection(
+        run(
+          scenario,
+          args({
+            notes: [
+              note({ kind: "deal", id: DEAL_ID }),
+              note({ kind: "deal", id: DEAL_ID, note: "Synthetic note two" }),
+            ],
+            confirm: true,
+          }),
+          { signal: controller.signal },
+        ),
+      ),
+    );
+
+    expect((value as LivespaceError).code).toBe("CANCELLED");
+    expect(scenario.count("addNote")).toBe(2);
+    // One read per DISTINCT target: two notes on one deal is one wall read.
+    expect(scenario.count("recordWall")).toBe(1);
+    expect(lines).toEqual([
+      "write batch cancelled after 2 applied item(s): ids=[wall-synthetic-1, wall-synthetic-2]",
+    ]);
+  });
+
+  test("an abort between wall reads issues no further read", async () => {
+    const controller = new AbortController();
+    const scenario = fakeWorld({
+      onWall: (call) => {
+        if (call === 0) controller.abort();
+      },
+    });
+
+    const { value, lines } = await onStderr(async () =>
+      rejection(
+        run(
+          scenario,
+          args({
+            notes: [note(), note({ kind: "deal", id: DEAL_ID, note: "Synthetic note two" })],
+            confirm: true,
+          }),
+          { signal: controller.signal },
+        ),
+      ),
+    );
+
+    expect((value as LivespaceError).code).toBe("CANCELLED");
+    expect(scenario.inputs("recordWall")).toEqual([`person:${PERSON_ID}`]);
+    expect(lines).toEqual([
+      "write batch cancelled after 2 applied item(s): ids=[wall-synthetic-1, wall-synthetic-2]",
+    ]);
+  });
+
+  test("the wall pass stops at the budget and the unread items stay ok", async () => {
+    // The budget spans BOTH phases: a write phase that ran long leaves no
+    // room for the reads that follow it. A check that could not run reports
+    // itself as unavailable - it never un-applies a write, and never errors.
+    const clock = budgetSpentAtFirstWall();
+    const scenario = fakeWorld({
+      onWall: clock.onWall,
+      walls: {
+        [`person:${PERSON_ID}`]: [wallEntry({ type: "notatka", text: "Synthetic note one" })],
+        [`deal:${DEAL_ID}`]: [wallEntry({ type: "notatka", text: "Synthetic note two" })],
+      },
+    });
+
+    const result = asRun(
+      await clock.during(() =>
+        run(
+          scenario,
+          args({
+            notes: [note(), note({ kind: "deal", id: DEAL_ID, note: "Synthetic note two" })],
+            confirm: true,
+          }),
+        ),
+      ),
+    );
+
+    expect(scenario.inputs("recordWall")).toEqual([`person:${PERSON_ID}`]);
+    expect(statusesOf(result)).toEqual(["ok", "ok"]);
+    // The second deal's wall WOULD have carried its note; it was never read.
+    expect(verificationsOf(result)).toEqual(["verified", "unavailable"]);
+    expect(resultsOf(result)[1]?.["error"]).toEqual(UNVERIFIED);
+    expect(result.isError).toBe(false);
+    expectPayload(result);
   });
 });
 

@@ -32,6 +32,7 @@ import {
   ACTIVITY_BATCH_CAP,
   CONFIRM_INPUT_KEY,
   VERIFICATION_UNAVAILABLE,
+  withCancelAudit,
   WRITE_BUDGET_MS,
   type ActivityWriteItem,
   type ItemResult,
@@ -546,12 +547,20 @@ function carries(
  * whose entry is not on the page, stays `ok` and reports the check as
  * unavailable - the write landed either way, and re-sending it would duplicate
  * an entry that cannot be taken back.
+ *
+ * The budget spans this pass too. It is one logical call per distinct target,
+ * so a batch that spent the clock writing has none left to read with: the
+ * remaining targets go unread and their items report `unavailable`. That is the
+ * designed fallback (docs/security.md par. 5) - a check that could not run
+ * never un-applies a write - and it is what keeps the whole call inside the
+ * client's request timeout.
  */
 async function verifyOnWalls(
   deps: LogActivitiesDeps,
   planned: readonly PlannedActivity[],
   results: readonly ItemResult[],
   signal: AbortSignal | undefined,
+  deadlineAt: number,
 ): Promise<ItemResult[]> {
   const applied = results.filter((result) => result.status === "ok");
   if (applied.length === 0) return [...results];
@@ -563,6 +572,10 @@ async function verifyOnWalls(
     if (entry === undefined) continue;
     const key = targetKey(entry.target);
     if (walls.has(key)) continue;
+    // Between reads, in this order - never mid-dispatch. The clock only moves
+    // forward, so an expired budget ends the pass rather than re-testing it.
+    if (signal?.aborted) throw cancelledError();
+    if (Date.now() >= deadlineAt) break;
     walls.set(key, await readWall(deps, entry.target, signal));
   }
 
@@ -598,8 +611,9 @@ export async function runLogActivities(
   args: LogActivitiesArgs,
   opts: WriteToolOptions = {},
 ): Promise<LogActivitiesResult> {
-  // One wall clock for the whole call - the client's request timeout does not
-  // stop counting while the batch is being written.
+  // One wall clock for the whole call, the verification pass included - the
+  // client's request timeout does not stop counting while the batch is being
+  // written, and it does not stop while the walls are being read either.
   const deadlineAt = Date.now() + WRITE_BUDGET_MS;
   const hint = argumentHint(args);
   if (hint !== null) return failed(badParams(hint));
@@ -658,7 +672,11 @@ export async function runLogActivities(
     planned.map((entry) => entry.item),
     { ...(signal === undefined ? {} : { signal }), deadlineAt },
   );
-  const results = await verifyOnWalls(deps, planned, written, signal);
+  // The entries are in the CRM now and cannot be taken back, so a cancel from
+  // here on is accounted for exactly as one inside the write phase is.
+  const results = await withCancelAudit(written, () =>
+    verifyOnWalls(deps, planned, written, signal, deadlineAt),
+  );
   return {
     text: executedText(results, items.length),
     structured: { results, counts: countResults(results), errors: [] },

@@ -101,14 +101,20 @@ plus a generated `id` - the echo proves nothing about persistence
   <= 15 items total. Par. 3's 50 is a ceiling, not a target.
 - **Write budget**: `WRITE_BUDGET_MS = 45_000` per call, checked BETWEEN
   items (never mid-dispatch); on expiry remaining items report
-  `not_attempted`.
+  `not_attempted`. It spans every phase of the call: log_activities'
+  post-execution wall pass is checked against the same deadline before
+  each read, and targets left unread report `verification: "unavailable"`
+  (execution note 2).
 - **A RATE_LIMITED item stops the batch**: the failing item is `error`,
   every remaining item `not_attempted` (never hammer an upstream that
   said stop).
 - **Abort accountability**: the abort signal is checked between items
   only. Before the CANCELLED throw, ONE stderr audit line with counts and
   written ids only (no names, no payloads - par. 6):
-  `write batch cancelled after N applied item(s): ids=[...]`.
+  `write batch cancelled after N applied item(s): ids=[...]`. Every phase
+  that runs after the writes have landed answers to the same rule and to
+  the same line (execution note 2); the pre-write abort stays silent,
+  because nothing was written.
 - **Item status is decided by the WRITE outcome only.** A failed or null
   re-read NEVER turns an applied write into an error: the item stays `ok`
   with `verification: "unavailable"` and a fixed hint (re-read before
@@ -647,3 +653,18 @@ what changed.
    second advisory, `VERIFICATION_UNCHECKED` - the existing
    VERIFICATION_UNAVAILABLE says "the follow-up read did not answer",
    which is false when the read answered and had nothing to compare.
+
+2. **The wall pass ran outside the budget, and its cancel path outside the
+   audit.** `deadlineAt` reached `executePlan` and stopped there, so
+   log_activities' post-execution verification added one sequential wall
+   read per distinct target on top of a write phase that may already have
+   spent the 45 s - fifteen notes on fifteen records could run past the
+   client's 60 s request timeout with every entry already in the CRM. And
+   an abort landing in that pass threw CANCELLED straight out of
+   `readWall`, with no audit line at all: the operator got no record of
+   entries that a note cannot edit or delete. The pass now takes the same
+   `deadlineAt` and checks the signal, then the clock, before each read
+   (remaining targets simply report `verification: "unavailable"`), and
+   the whole pass runs inside `withCancelAudit` - the accounting
+   `executePlan` uses, exported so the wording has one spelling. The
+   pre-write abort keeps writing no line, because it wrote nothing.
