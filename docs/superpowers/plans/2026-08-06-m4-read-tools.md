@@ -479,3 +479,51 @@ Never against a production CRM.
 ## Execution notes
 
 (fill in during execution)
+
+## Execution notes
+
+Executed 2026-08-06, commits 35e6630..ae1b88d (9 task commits + 3 fix
+commits). Final state: 491 tests green, typecheck and audit clean, live
+smoke passed (18/18 checks + one weak smoke assertion re-verified by direct
+probe).
+
+**Implementation deviations worth knowing** (full per-task reports in the
+orchestration logs): the plan's own tasks-cursor rule could emit a
+non-advancing cursor (fixed by the implementer, then improved again in the
+fix round - see below); get_records gained an `errors[]` channel its plan
+shape lacked; an 8th cross-field rule (dates rejected for source=record)
+was added; `Contact/get` for companies unwraps `company` then falls back to
+`contact` (only the contact form was probed).
+
+**Adversarial pass: 18 confirmed / 1 refuted, applied in 3 commits:**
+
+- Cursor arithmetic: advance by `min(rawCount, limit)` at both nextCursor
+  sites, slice-before-filter in list pages, tasks cursor jumps to the raw
+  page boundary when a page is exhausted (`page * 50`) - the cursor now
+  provably always advances, so the old empty-slice loop guard was removed.
+  A cursor is only minted below `MAX_CURSOR_OFFSET`.
+- stripHtml: residual unterminated `<` is replaced with a space after the
+  tag-strip loop (an unclosed tag or a decode-manufactured `<img` could
+  otherwise survive into the data channel).
+- recordWall requests `WALL_ENTRY_CAP + 1` upstream so `truncated` is
+  detectable even when upstream honors the limit.
+- Phrase-mode `hasMore` means "page was full" (`rawCount >= limit`), not
+  "rows were dropped".
+- get_activity reports `returned` next to `count` (count = raw upstream
+  page size per source; the typeName filter's effect is now visible).
+- Deduplication: `src/livespace/shape.ts` (shared guards + unwrap),
+  `toolErrorSchema` + `ToolRunResult` in tool-error.ts, one registration
+  helper in mcp.ts, shared synthetic builders in tests/support/records.ts.
+
+**Live smoke (2026-08-06, sandbox, done gate):** tools list exactly the five
+read tools; phrase search per kind returns hits and every hit id resolves
+through get_records (id-space gate); companies filter-mode list works (the
+`Contact/getAll` company wrapper resolves through the fallback chain);
+`processId` as a SCALAR filter param is honored live (all returned deals in
+the requested process - the array-form question from Task 2 is settled);
+sortBy=value returns descending values with `sortWindowTruncated` exercised
+live (the sandbox filled the 200-row window); a deal batch returns
+ok/ok/not_found for a bogus id; includeWall attaches wall fields; all three
+get_activity sources respond, the crm-feed cursor continues without
+duplicates and tasks pages are disjoint (20-of-50 slices); no CRM string
+appeared in any text channel.
