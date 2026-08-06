@@ -5,6 +5,7 @@ import type { AppDeps } from "../../src/server/mcp.js";
 import type { MetadataService } from "../../src/server/tools/crm-metadata.js";
 import type { ActivityFetchers } from "../../src/livespace/activity.js";
 import type { RecordFetchers } from "../../src/livespace/records.js";
+import type { DealStepReader } from "../../src/livespace/stage-moves.js";
 import type { WriteFetchers } from "../../src/livespace/writes.js";
 import { person, wallEntry } from "../support/records.js";
 
@@ -121,7 +122,7 @@ function fakeActivity(overrides: Partial<ActivityFetchers> = {}): ActivityFetche
   } as ActivityFetchers;
 }
 
-// Write fetchers that never write: the sweeps below only need the three write
+// Write fetchers that never write: the sweeps below only need the five write
 // tools to be REGISTERED, and a call that reached one would be a loud failure.
 function fakeWrites(): WriteFetchers {
   const never =
@@ -140,10 +141,25 @@ function fakeWrites(): WriteFetchers {
     updateTask: never("updateTask"),
     addNote: never("addNote"),
     addCall: never("addCall"),
+    moveDealSteps: never("moveDealSteps"),
+    sendNotification: never("sendNotification"),
     findPersonByEmail: never("findPersonByEmail"),
     findCompanyByName: never("findCompanyByName"),
   } as unknown as WriteFetchers;
 }
+
+// The deal step reader `move_deals_to_stage` plans from; registration is all
+// the sweeps need, so an actual read is a loud failure here too.
+function fakeDealSteps(): DealStepReader {
+  return {
+    readStepState: async () => {
+      throw new Error("unexpected step-state read");
+    },
+  };
+}
+
+/** The account subdomain notification deep links are built from. */
+const SUBDOMAIN = "synthetic";
 
 // Fully synthetic dictionary data; `read` may throw to simulate a section
 // failure.
@@ -331,6 +347,8 @@ describe("crm_metadata wiring", () => {
         records: fakeRecords(),
         activity: fakeActivity(),
         writes: fakeWrites(),
+        dealSteps: fakeDealSteps(),
+        subdomain: SUBDOMAIN,
       }).request(modernRequest({ method: "tools/list" })),
     );
     const checked: string[] = [];
@@ -347,7 +365,7 @@ describe("crm_metadata wiring", () => {
       checked.push(tool.name);
     }
     // The loop must actually cover the whole surface, not a stale subset.
-    expect(checked.length).toBe(9);
+    expect(checked.length).toBe(11);
   });
 
   test("read-only mode keeps the surface at the six read tools", async () => {
@@ -359,6 +377,8 @@ describe("crm_metadata wiring", () => {
         records: fakeRecords(),
         activity: fakeActivity(),
         writes: fakeWrites(),
+        dealSteps: fakeDealSteps(),
+        subdomain: SUBDOMAIN,
       }).request(modernRequest({ method: "tools/list" })),
     );
     expect(listed.result.tools.map((t: any) => t.name)).toEqual([

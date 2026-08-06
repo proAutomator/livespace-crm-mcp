@@ -6,13 +6,12 @@ Unofficial [MCP](https://modelcontextprotocol.io) server for
 
 > **Status:** the protocol and security core is complete and hardened
 > (stateless MCP 2026-07-28, official conformance suite and dependency audit
-> in CI, rate limiting, cancellation, operation-aware retries). CRM tools
-> land milestone by milestone - all five read tools are live (`crm_metadata`,
-> `search_crm`, `get_records`, `get_activity`, `analyze`, next to `health`),
-> and three write tools are live behind human confirmation and the read-only
-> kill-switch (`create_records`, `update_records`, `log_activities`);
-> `move_deals_to_stage` and `notify_user` are still planned. Point it at a
-> test Livespace account rather than a production CRM.
+> in CI, rate limiting, cancellation, operation-aware retries). Every v1 tool
+> is live: five read tools (`crm_metadata`, `search_crm`, `get_records`,
+> `get_activity`, `analyze`, next to `health`) and five write tools behind
+> human confirmation and the read-only kill-switch (`create_records`,
+> `update_records`, `log_activities`, `move_deals_to_stage`, `notify_user`).
+> Point it at a test Livespace account rather than a production CRM.
 
 ## Why not just wrap the API?
 
@@ -22,9 +21,20 @@ instead, adds the missing capabilities server-side, and teaches the model how
 to use them (operating-manual `instructions`, errors with recovery hints,
 discovery-first dictionaries, batch-first writes with dry-run previews).
 
-Planned tools (5 read / 5 write): `crm_metadata`, `search_crm`, `get_records`,
+The tools (5 read / 5 write): `crm_metadata`, `search_crm`, `get_records`,
 `get_activity`, `analyze`, `create_records`, `update_records`,
-`move_deals_to_stage`, `log_activities`, `notify_user`.
+`log_activities`, `move_deals_to_stage`, `notify_user`.
+
+Two of them earn their keep by hiding an API quirk:
+
+- `move_deals_to_stage` moves deals along the pipeline by checking and
+  unchecking process steps, because Livespace has no "set stage" call - a deal
+  stands where its furthest checked step stands. Each deal is read first, only
+  the minimal set of step flips is sent, and a backward move (which un-marks
+  completed steps) happens only for deals you list explicitly.
+- `notify_user` sends one in-app notification to a validated recipient, with a
+  deep link to a record. Livespace exposes no read-back for notifications, so
+  the result reports it as dispatched, never as delivered.
 
 ## Security
 

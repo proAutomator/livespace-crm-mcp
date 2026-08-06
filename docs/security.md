@@ -76,11 +76,17 @@ names). That content is **untrusted data**:
   listed) - a global kill-switch for cautious operators.
 - Batch writes support `dryRun` previews; destructive ambiguity resolves to
   "do nothing and explain".
-- After every write the server re-reads the affected record and reports
-  before -> after, naming the fields that did not stick. A read never turns an
-  applied write into an error: when the follow-up read itself fails, the item
-  stays successful and reports `verification: unavailable` instead of masking
-  a write that landed.
+- After a write with a read-back the server re-reads the affected record and
+  reports before -> after, naming the fields that did not stick. A read never
+  turns an applied write into an error: when the follow-up read itself fails,
+  the item stays successful and reports `verification: unavailable` instead of
+  masking a write that landed.
+- A write whose upstream exposes NO read-back is unverifiable by construction
+  and says so. An in-app notification is the one such write in v1 - three
+  candidate read endpoints were probed and all refused - so it reports
+  `verification: unavailable` with a fixed advisory, is reported as
+  dispatched, never as delivered, and is never retried on an unknown outcome:
+  a resend would be a second entry in the recipient's bell, not a fix.
 - Contact creation dedupes by default, and the check is OURS: Livespace's
   `__check_if_exists` parameter was probed on a sandbox and does NOT dedupe,
   so a person is looked up by exact e-mail (case-insensitive) and a company by

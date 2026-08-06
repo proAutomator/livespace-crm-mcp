@@ -8,20 +8,23 @@ export function buildInstructions(options: { readOnly: boolean }): string {
   const writeBullet = options.readOnly
     ? ""
     : `
-- Write with "create_records", "update_records" and "log_activities". They
-  work in small batches and never write on the first call - see below.`;
+- Write with "create_records", "update_records", "log_activities",
+  "move_deals_to_stage" and "notify_user". They work in small batches and
+  never write on the first call - see below.`;
 
   const writeSection = options.readOnly
     ? ""
     : `
-Writing (create_records, update_records, log_activities):
+Writing (create_records, update_records, log_activities, move_deals_to_stage,
+notify_user):
 - Nothing is written until a human approves it. A plain call answers with a
   plan and writes nothing; so does dryRun: true. Clients that can prompt a
   human show a confirmation prompt and write only after it is accepted; on
   clients that cannot, re-call with confirm: true and the SAME arguments to
   execute the plan you just previewed.
-- Batches are small on purpose: at most 10 records per create_records or
-  update_records call, and 15 activities per log_activities call.
+- Batches are small on purpose: at most 10 records per create_records,
+  update_records or move_deals_to_stage call, 15 activities per log_activities
+  call, and ONE notification per notify_user call.
 - create_records looks a person up by exact e-mail and a company by exact name
   before creating one, and reports a match as skipped_duplicate with the id it
   found; allowDuplicate: true creates anyway.
@@ -29,6 +32,18 @@ Writing (create_records, update_records, log_activities):
   record id and refuses the same id twice in one call.
 - Notes logged by log_activities are PUBLIC. Livespace ignores every
   visibility setting, so anyone who can see the record can read them.
+- move_deals_to_stage moves deals by checking and unchecking process steps -
+  Livespace has no "set stage" call, a deal stands where its furthest checked
+  step stands. So a forward move marks intermediate steps as completed and a
+  backward move un-marks them - the checkboxes stop being evidence of work
+  done. Say that when you propose one. A backward move happens only for deals
+  listed in allowBackwardDealIds; a deal that is not open, belongs to another
+  process, or whose stage and steps disagree is blocked and never written.
+- Livespace exposes no read-back for notifications: notify_user reports a
+  notification as dispatched, never as delivered. If it matters that the
+  person saw it, do not resend - confirm another way. The recipient id comes
+  from crm_metadata (users), and the tool sends at most 5 notifications per 10
+  minutes.
 - There is no delete and no merge here, and a logged note or call cannot be
   edited or taken back. Every item reports which fields did not stick
   (unappliedFields) or that the check was unavailable - when it was, re-read

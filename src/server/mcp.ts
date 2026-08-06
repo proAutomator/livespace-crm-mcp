@@ -11,6 +11,7 @@ import type * as z from "zod/v4";
 import type { ServerConfig } from "../config/server-env.js";
 import type { ActivityFetchers } from "../livespace/activity.js";
 import type { RecordFetchers } from "../livespace/records.js";
+import type { DealStepReader } from "../livespace/stage-moves.js";
 import type { WriteFetchers } from "../livespace/writes.js";
 import { buildInstructions } from "./instructions.js";
 import { analyzeToolConfig, runAnalyze } from "./tools/analyze.js";
@@ -28,6 +29,11 @@ import { getActivityToolConfig, runGetActivity } from "./tools/get-activity.js";
 import { getRecordsToolConfig, runGetRecords } from "./tools/get-records.js";
 import { healthToolConfig, runHealthCheck } from "./tools/health.js";
 import { logActivitiesToolConfig, runLogActivities } from "./tools/log-activities.js";
+import {
+  moveDealsToStageToolConfig,
+  runMoveDealsToStage,
+} from "./tools/move-deals-to-stage.js";
+import { notifyUserToolConfig, runNotifyUser } from "./tools/notify-user.js";
 import { searchCrmToolConfig, runSearchCrm } from "./tools/search-crm.js";
 import type { ToolRunResult } from "./tools/tool-error.js";
 import { updateRecordsToolConfig, runUpdateRecords } from "./tools/update-records.js";
@@ -46,6 +52,10 @@ export interface AppDeps {
   activity?: ActivityFetchers | undefined;
   /** Absent in read-only mode: `index.ts` does not even build them there. */
   writes?: WriteFetchers | undefined;
+  /** A deal's own step state - what `move_deals_to_stage` plans its diffs on. */
+  dealSteps?: DealStepReader | undefined;
+  /** The account subdomain every notification deep link is built from. */
+  subdomain?: string | undefined;
 }
 
 /**
@@ -61,6 +71,8 @@ interface WriteSetup {
   records: RecordFetchers;
   metadata: MetadataService;
   activity?: ActivityFetchers;
+  dealSteps?: DealStepReader;
+  subdomain?: string;
   codec: RequestStateCodec<WriteState>;
 }
 
@@ -68,8 +80,12 @@ interface WriteSetup {
  * The write surface exists only when the kill-switch is off AND every
  * dependency it needs is present: the write fetchers, the record fetchers a
  * post-write re-read goes through, and the metadata service a deal's process id
- * is validated against. Anything missing leaves the three tools unregistered -
+ * is validated against. Anything missing leaves the write tools unregistered -
  * absent from `tools/list` and refused on a direct call.
+ *
+ * Two of them need one dependency more: a stage move plans on the deal's own
+ * step state, and a notification's deep link is built from the account
+ * subdomain. Each is optional here, and each gates its own tool alone.
  */
 function resolveWriteSetup(deps: AppDeps): WriteSetup | undefined {
   if (deps.config.readOnly) return undefined;
@@ -82,6 +98,11 @@ function resolveWriteSetup(deps: AppDeps): WriteSetup | undefined {
     records,
     metadata,
     ...(deps.activity === undefined ? {} : { activity: deps.activity }),
+    ...(deps.dealSteps === undefined ? {} : { dealSteps: deps.dealSteps }),
+    // An empty subdomain builds a link to nowhere, so it counts as absent.
+    ...(deps.subdomain === undefined || deps.subdomain === ""
+      ? {}
+      : { subdomain: deps.subdomain }),
     codec: buildWriteCodec(deps.config),
   };
 }
@@ -267,6 +288,22 @@ export function createServerFactory(deps: AppDeps): () => McpServer {
         const activity = writing.activity;
         registerWrite("log_activities", logActivitiesToolConfig, (args, opts) =>
           runLogActivities({ writes, records, activity, codec }, args, opts),
+        );
+      }
+
+      // A stage move diffs the deal's OWN steps, so it needs the step reader.
+      if (writing.dealSteps !== undefined) {
+        const deals = writing.dealSteps;
+        registerWrite("move_deals_to_stage", moveDealsToStageToolConfig, (args, opts) =>
+          runMoveDealsToStage({ deals, writes, records, metadata, codec }, args, opts),
+        );
+      }
+
+      // A notification carries a deep link, and a link needs the subdomain.
+      if (writing.subdomain !== undefined) {
+        const subdomain = writing.subdomain;
+        registerWrite("notify_user", notifyUserToolConfig, (args, opts) =>
+          runNotifyUser({ writes, records, metadata, codec, subdomain }, args, opts),
         );
       }
     }

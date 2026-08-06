@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { buildInstructions } from "../../src/server/instructions.js";
 
+const WRITE_TOOLS = [
+  "create_records",
+  "update_records",
+  "log_activities",
+  "move_deals_to_stage",
+  "notify_user",
+];
+
 describe("buildInstructions", () => {
   test("contains the operating-manual anchors", () => {
     const text = buildInstructions({ readOnly: false });
@@ -74,11 +82,9 @@ describe("buildInstructions", () => {
     );
   });
 
-  test("names the three write tools and how a write is approved", () => {
+  test("names the five write tools and how a write is approved", () => {
     const text = buildInstructions({ readOnly: false });
-    for (const tool of ["create_records", "update_records", "log_activities"]) {
-      expect(text).toContain(tool);
-    }
+    for (const tool of WRITE_TOOLS) expect(text).toContain(tool);
     expect(text).toContain("confirm: true");
     expect(text).toContain("dryRun");
     expect(text).not.toContain("Write tools arrive in a later milestone.");
@@ -90,11 +96,25 @@ describe("buildInstructions", () => {
     expect(text).toContain("no delete");
   });
 
+  test("discloses what a stage move does to the process checkboxes", () => {
+    const text = buildInstructions({ readOnly: false }).replace(/\s+/gu, " ");
+    expect(text).toContain(
+      "a forward move marks intermediate steps as completed and a backward move un-marks them - the checkboxes stop being evidence of work done",
+    );
+    expect(text).toContain("allowBackwardDealIds");
+  });
+
+  test("is honest about what a notification can be promised", () => {
+    const text = buildInstructions({ readOnly: false }).replace(/\s+/gu, " ");
+    expect(text).toContain(
+      "Livespace exposes no read-back for notifications: notify_user reports a notification as dispatched, never as delivered",
+    );
+    expect(text).toContain("do not resend");
+  });
+
   test("read-only instructions name none of the write tools", () => {
     const text = buildInstructions({ readOnly: true });
-    for (const tool of ["create_records", "update_records", "log_activities"]) {
-      expect(text).not.toContain(tool);
-    }
+    for (const tool of WRITE_TOOLS) expect(text).not.toContain(tool);
     expect(text).toContain("Write tools are disabled and not listed.");
   });
 });
