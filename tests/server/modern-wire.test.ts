@@ -3,14 +3,9 @@ import { buildApp } from "../../src/server/app.js";
 import type { ServerConfig } from "../../src/config/server-env.js";
 import type { AppDeps } from "../../src/server/mcp.js";
 import type { MetadataService } from "../../src/server/tools/crm-metadata.js";
-import type {
-  ActivityFetchers,
-  WallEntry,
-} from "../../src/livespace/activity.js";
-import type {
-  PersonRecord,
-  RecordFetchers,
-} from "../../src/livespace/records.js";
+import type { ActivityFetchers } from "../../src/livespace/activity.js";
+import type { RecordFetchers } from "../../src/livespace/records.js";
+import { person, wallEntry } from "../support/records.js";
 
 const BASE_CONFIG: ServerConfig = {
   port: 3020,
@@ -114,44 +109,6 @@ function fakeActivity(overrides: Partial<ActivityFetchers> = {}): ActivityFetche
     crmFeed: unexpectedCall,
     ...overrides,
   } as ActivityFetchers;
-}
-
-function syntheticPerson(id: string): PersonRecord {
-  return {
-    id,
-    name: "Synthetic Person",
-    email: "synthetic.person@example.invalid",
-    phone: "+00 000 000 000",
-    companyName: "Synthetic Company",
-    companyId: "company-synthetic-1",
-    ownerName: "Synthetic Owner",
-    ownerId: "user-synthetic-1",
-    tags: ["synthetic-tag"],
-    source: "Synthetic Source",
-    note: "Synthetic note.",
-    created: "2025-01-02 03:04:05+02",
-    modified: "2025-01-03 03:04:05+02",
-    lastActiveDate: "2025-01-03",
-    dealCount: { all: 1, open: 1, won: 0, lost: 0 },
-    cell: "+00 000 000 001",
-    www: "https://example.invalid",
-    address: "Synthetic Street 1, Synthetic City",
-    groups: ["Synthetic Group"],
-  };
-}
-
-function syntheticWallEntry(): WallEntry {
-  return {
-    type: "note",
-    text: "Synthetic wall text.",
-    textTruncated: false,
-    date: "2025-01-03 03:04:05+02",
-    authorName: "Synthetic Author",
-    isPublic: true,
-    commentCount: 0,
-    objectName: "",
-    objectType: "",
-  };
 }
 
 // Fully synthetic dictionary data; `read` may throw to simulate a section
@@ -472,7 +429,7 @@ describe("read tool wiring", () => {
     const instance = fullApp({
       records: fakeRecords({
         getRecord: (async (_kind: string, id: string) =>
-          syntheticPerson(id)) as RecordFetchers["getRecord"],
+          person({ id })) as RecordFetchers["getRecord"],
       }),
     });
     const payload = await jsonFromResponse(
@@ -501,7 +458,7 @@ describe("read tool wiring", () => {
     const instance = fullApp({
       activity: fakeActivity({
         recordWall: async () => ({
-          entries: [syntheticWallEntry()],
+          entries: [wallEntry()],
           truncated: false,
           totalEntries: 1,
         }),
@@ -607,7 +564,7 @@ describe("read tool wiring", () => {
     const instance = fullApp({
       records: fakeRecords({
         getRecord: (async (_kind: string, id: string) =>
-          syntheticPerson(id)) as RecordFetchers["getRecord"],
+          person({ id })) as RecordFetchers["getRecord"],
       }),
       activity: fakeActivity({
         recordWall: async () => {
@@ -646,7 +603,7 @@ describe("read tool wiring", () => {
       records: fakeRecords({
         getRecord: (async (_kind: string, id: string) => {
           calls.push(id);
-          return syntheticPerson(id);
+          return person({ id });
         }) as RecordFetchers["getRecord"],
       }),
     });

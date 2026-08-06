@@ -23,7 +23,12 @@ import {
   taskSchema,
   wallEntrySchema,
 } from "./record-schemas.js";
-import { toToolError, type ToolError } from "./tool-error.js";
+import {
+  toolErrorSchema,
+  toToolError,
+  type ToolError,
+  type ToolRunResult,
+} from "./tool-error.js";
 
 /**
  * `get_records` - read known records by id, one kind per call.
@@ -59,17 +64,7 @@ export interface GetRecordsArgs {
   includeWall?: boolean;
 }
 
-export interface GetRecordsResult {
-  text: string;
-  structured: Record<string, unknown>;
-  isError: boolean;
-}
-
-const toolErrorSchema = z.strictObject({
-  code: z.string(),
-  message: z.string(),
-  hint: z.string(),
-});
+export type GetRecordsResult = ToolRunResult;
 
 // One static item shape with optional keys per kind - never a union. A union of
 // look-alike record shapes would let one kind validate as another and silently

@@ -3,143 +3,21 @@ import * as z from "zod/v4";
 import type {
   ActivityFetchers,
   RecordWallPage,
-  WallEntry,
 } from "../../../src/livespace/activity.js";
 import { LivespaceError } from "../../../src/livespace/errors.js";
 import type {
   CompanyRecord,
   DealRecord,
-  PersonRecord,
   RecordFetchers,
-  TaskRecord,
 } from "../../../src/livespace/records.js";
 import {
   getRecordsToolConfig,
   runGetRecords,
   type GetRecordsArgs,
 } from "../../../src/server/tools/get-records.js";
+import { company, deal, person, task, wallEntry } from "../../support/records.js";
 
 // Every value below is invented. No CRM data, no sandbox values (AGENTS.md).
-
-function person(overrides: Partial<PersonRecord> = {}): PersonRecord {
-  return {
-    id: "person-synthetic-001",
-    name: "Synthetic Person One",
-    email: "person.one@synthetic.example",
-    phone: "+00 000 000 001",
-    companyName: "Synthetic Company Alpha",
-    companyId: "company-synthetic-101",
-    ownerName: "Synthetic Owner",
-    ownerId: "user-synthetic-201",
-    tags: ["alpha"],
-    source: "Synthetic Source",
-    note: "Synthetic note text",
-    created: "2025-10-08 15:19:13+02",
-    modified: "2025-11-02 09:00:00+02",
-    lastActiveDate: "2025-11-03 12:30:00+02",
-    dealCount: { all: 4, open: 2, won: 1, lost: 1 },
-    cell: "+00 000 000 002",
-    www: "https://alpha.synthetic.example",
-    address: "Synthetic Street 1, Synthetic City",
-    groups: ["Group One"],
-    ...overrides,
-  };
-}
-
-function company(overrides: Partial<CompanyRecord> = {}): CompanyRecord {
-  return {
-    id: "company-synthetic-101",
-    name: "Synthetic Company Alpha",
-    nip: "0000000000",
-    email: "office@alpha.synthetic.example",
-    phone: "+00 000 000 003",
-    ownerName: "Synthetic Owner",
-    ownerId: "user-synthetic-201",
-    tags: ["gamma"],
-    source: "Synthetic Source",
-    note: "Synthetic company note",
-    created: "2025-09-01 08:00:00+02",
-    modified: "2025-11-04 10:15:00+02",
-    dealCount: { all: 7, open: 3, won: 2, lost: 2 },
-    www: "https://alpha.synthetic.example",
-    address: "Synthetic Avenue 9, Synthetic City",
-    groups: ["Group Three"],
-    ...overrides,
-  };
-}
-
-function deal(overrides: Partial<DealRecord> = {}): DealRecord {
-  return {
-    id: "deal-synthetic-401",
-    name: "Synthetic Deal One",
-    status: "open",
-    value: 1234.5,
-    currency: "PLN",
-    probability: 5,
-    processId: "process-synthetic-501",
-    processName: "Synthetic Process",
-    stageId: "stage-synthetic-601",
-    stageName: "Synthetic Stage",
-    substageId: "substage-synthetic-701",
-    substageName: "Synthetic Substage",
-    companyId: "company-synthetic-101",
-    companyName: "Synthetic Company Alpha",
-    contactId: "person-synthetic-001",
-    contactName: "Synthetic Person One",
-    ownerId: "user-synthetic-201",
-    ownerName: "Synthetic Owner",
-    dateEnd: "2025-12-13",
-    created: "2025-10-01 11:00:00+02",
-    modified: "2025-11-05 16:45:00+02",
-    lastActiveDate: "2025-11-06 08:10:00+02",
-    tags: ["delta"],
-    source: "Synthetic Source",
-    note: "Synthetic deal note",
-    groups: ["Group Four"],
-    creatorName: "Synthetic Creator",
-    statusChangeDate: "2025-11-05 16:45:00+02",
-    ...overrides,
-  };
-}
-
-function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
-  return {
-    id: "task-synthetic-801",
-    title: "Synthetic Task One",
-    description: "Synthetic task description",
-    typeId: "type-synthetic-901",
-    typeName: "Synthetic Type",
-    statusId: "status-synthetic-911",
-    statusName: "Synthetic Status",
-    isCompleted: false,
-    isPrivate: false,
-    priority: 2,
-    dateFrom: "2025-11-10 09:00:00+02",
-    dateTo: "2025-11-10 10:00:00+02",
-    isAllDay: false,
-    linkedRecords: [
-      { kind: "deal", id: "deal-synthetic-401", name: "Synthetic Deal One" },
-    ],
-    created: "2025-11-01 08:00:00+02",
-    modified: "2025-11-02 08:00:00+02",
-    ...overrides,
-  };
-}
-
-function wallEntry(overrides: Partial<WallEntry> = {}): WallEntry {
-  return {
-    type: "activity",
-    text: "Synthetic wall text",
-    textTruncated: false,
-    date: "2025-11-05 16:45:00+02",
-    authorName: "Synthetic Owner",
-    isPublic: true,
-    commentCount: 0,
-    objectName: "",
-    objectType: "",
-    ...overrides,
-  };
-}
 
 /** `standard` is the full deal minus these three fields. */
 function standardDeal(overrides: Partial<DealRecord> = {}): DealRecord {

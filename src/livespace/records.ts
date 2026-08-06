@@ -1,5 +1,13 @@
 import type { LivespaceClient } from "./client.js";
 import { LivespaceError } from "./errors.js";
+import {
+  asBool,
+  asCount,
+  asName,
+  asRecord,
+  unexpectedShape,
+  unwrapList,
+} from "./shape.js";
 
 /**
  * Record shapes behind the read tools, plus the mappers that turn raw Livespace
@@ -153,24 +161,9 @@ export interface RecordDataMap {
   task: TaskRecord;
 }
 
-// Fixed wording only: upstream content must never reach an error message
-// (docs/security.md par. 6).
-function unexpectedShape(): LivespaceError {
-  return new LivespaceError(
-    "UPSTREAM_ERROR",
-    "Livespace returned an unexpected shape for this record.",
-    "Report it on the issue tracker; the API may have changed.",
-  );
-}
-
-export function asName(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-/** PHP serializes empty maps as `[]`, so an array is never a record here. */
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
+/** Every shape failure in this module speaks about a record. */
+function badShape(): LivespaceError {
+  return unexpectedShape("record");
 }
 
 /**
@@ -189,18 +182,8 @@ function idText(value: unknown): string {
 
 function requiredId(data: Record<string, unknown>): string {
   const id = optionalId(data["id"]);
-  if (id === null) throw unexpectedShape();
+  if (id === null) throw badShape();
   return id;
-}
-
-/** Upstream booleans arrive as `true`, `1` or `"1"` depending on the endpoint. */
-function asBool(value: unknown): boolean {
-  return value === true || value === 1 || value === "1";
-}
-
-function asCount(value: unknown): number {
-  const count = Number(value);
-  return Number.isFinite(count) ? count : 0;
 }
 
 /**
@@ -283,7 +266,7 @@ function mapLinkedRecords(value: unknown): LinkedRecord[] {
 
 function asMappable(raw: unknown): Record<string, unknown> {
   const data = asRecord(raw);
-  if (data === null) throw unexpectedShape();
+  if (data === null) throw badShape();
   return data;
 }
 
@@ -616,22 +599,6 @@ const RECORD_MAPPERS: { [K in RecordKind]: (raw: unknown) => RecordDataMap[K] } 
   task: mapTask,
 };
 
-/**
- * List wrappers follow the requested type (`{contact: [...]}` for `type:
- * "contact"`, `{company: [...]}` for companies). A missing wrapper means an
- * empty page; PHP also serializes an empty result as a bare `[]`.
- */
-function unwrapList(payload: unknown, key: string): unknown[] {
-  if (payload === null || payload === undefined) return [];
-  if (Array.isArray(payload)) return payload;
-  const data = asRecord(payload);
-  if (data === null) throw unexpectedShape();
-  const inner = data[key];
-  if (inner === null || inner === undefined) return [];
-  if (Array.isArray(inner)) return inner;
-  throw unexpectedShape();
-}
-
 function hasId(raw: unknown): boolean {
   const data = asRecord(raw);
   return data !== null && optionalId(data["id"]) !== null;
@@ -648,11 +615,11 @@ function hasId(raw: unknown): boolean {
  */
 function toListPage<T>(
   payload: unknown,
-  key: string,
+  keys: readonly string[],
   limit: number,
   map: (raw: unknown) => T,
 ): ListPage<T> {
-  const raw = unwrapList(payload, key);
+  const raw = unwrapList(payload, keys, badShape);
   const rawCount = raw.length;
   const page = raw.slice(0, limit).filter(hasId);
   return { items: page.map(map), hasMore: rawCount >= limit, rawCount };
@@ -672,11 +639,14 @@ function mapSearchHit(raw: unknown): SearchHit | null {
 }
 
 /**
- * Single-record wrappers are keyed by type as well, but only the contact form
- * was probed live; accept both keys for companies and let the mapper reject
- * anything that is not a record with an id.
+ * Payloads are keyed by the type that was asked for - `{contact: ...}` for
+ * `type: "contact"`, `{deal: ...}` for deals - and lists and single records
+ * follow the same naming. Only the contact form was probed live, so companies
+ * accept the contact key as a fallback: the request already named the type, so
+ * whatever comes back under either key IS the company data. Persons list no
+ * fallback, which keeps a company payload from reading as a person one.
  */
-const GET_WRAPPER_KEYS: Record<RecordKind, readonly string[]> = {
+const WRAPPER_KEYS: Record<RecordKind, readonly string[]> = {
   person: ["contact"],
   company: ["company", "contact"],
   deal: ["deal"],
@@ -686,9 +656,11 @@ const GET_WRAPPER_KEYS: Record<RecordKind, readonly string[]> = {
 function unwrapRecord(payload: unknown, kind: RecordKind): unknown {
   const data = asRecord(payload);
   if (data === null) return payload;
-  for (const key of GET_WRAPPER_KEYS[kind]) {
-    const inner = data[key];
-    if (inner !== null && inner !== undefined) return inner;
+  for (const key of WRAPPER_KEYS[kind]) {
+    // Only a plain object counts as a wrapper, so a key holding something else
+    // does not cut the fallback chain short.
+    const inner = asRecord(data[key]);
+    if (inner !== null) return inner;
   }
   return payload;
 }
@@ -744,7 +716,7 @@ export function createRecordFetchers(
       params["condition"] = "like";
     }
     const payload = await call("Contact", "getAll", params, opts);
-    return toListPage(payload, type, opts.limit, RECORD_MAPPERS[kind]);
+    return toListPage(payload, WRAPPER_KEYS[kind], opts.limit, RECORD_MAPPERS[kind]);
   };
 
   return {
@@ -764,7 +736,7 @@ export function createRecordFetchers(
       if (opts.modifiedFrom !== undefined) params["modified"] = opts.modifiedFrom;
       if (opts.namesLike !== undefined) params["names"] = opts.namesLike;
       const payload = await call("Deal", "getAll", params, opts);
-      return toListPage(payload, "deal", opts.limit, mapDeal);
+      return toListPage(payload, WRAPPER_KEYS["deal"], opts.limit, mapDeal);
     },
 
     listTasks: async (opts) => {
@@ -779,7 +751,7 @@ export function createRecordFetchers(
       if (opts.dateTo !== undefined) datesPeriod["to"] = opts.dateTo;
       if (Object.keys(datesPeriod).length > 0) todo["datesPeriod"] = datesPeriod;
       const payload = await call("Todo", "getTodoObjects", { todo }, opts);
-      return toListPage(payload, TASK_WRAPPER_KEY, TASK_PAGE_SIZE, mapTask);
+      return toListPage(payload, WRAPPER_KEYS["task"], TASK_PAGE_SIZE, mapTask);
     },
 
     searchPhrase: async (opts) => {
@@ -790,7 +762,9 @@ export function createRecordFetchers(
         { q: opts.q, object_type: objectType, limit: opts.limit },
         opts,
       );
-      const raw = unwrapList(payload, objectType);
+      // Search hits carry no fallback key: the wrapper here is the object type
+      // that was searched for, and that form was probed for all three.
+      const raw = unwrapList(payload, [objectType], badShape);
       const hits = raw
         .map(mapSearchHit)
         .filter((hit): hit is SearchHit => hit !== null)

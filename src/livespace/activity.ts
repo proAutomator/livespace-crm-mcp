@@ -1,6 +1,13 @@
 import type { LivespaceClient } from "./client.js";
 import { LivespaceError } from "./errors.js";
-import { asName } from "./records.js";
+import {
+  asBool,
+  asCount,
+  asName,
+  asRecord,
+  unexpectedShape,
+  unwrapList,
+} from "./shape.js";
 
 /**
  * Activity reads: the wall of a single record and the CRM-wide feed.
@@ -74,20 +81,9 @@ export interface ActivityFetchers {
   crmFeed(opts: CrmFeedOptions): Promise<CrmFeedPage>;
 }
 
-// Fixed wording only: upstream content must never reach an error message
-// (docs/security.md par. 6).
-function unexpectedShape(): LivespaceError {
-  return new LivespaceError(
-    "UPSTREAM_ERROR",
-    "Livespace returned an unexpected shape for this activity.",
-    "Report it on the issue tracker; the API may have changed.",
-  );
-}
-
-/** PHP serializes empty maps as `[]`, so an array is never a record here. */
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
+/** Every shape failure in this module speaks about an activity. */
+function badShape(): LivespaceError {
+  return unexpectedShape("activity");
 }
 
 const ENTITIES: Record<string, string> = {
@@ -132,16 +128,6 @@ export function stripHtml(value: unknown): string {
   return stripped.replaceAll("<", " ").replace(/\s+/gu, " ").trim();
 }
 
-/** Upstream booleans arrive as `true`, `1` or `"1"` depending on the endpoint. */
-function asBool(value: unknown): boolean {
-  return value === true || value === 1 || value === "1";
-}
-
-function asCount(value: unknown): number {
-  const count = Number(value);
-  return Number.isFinite(count) ? count : 0;
-}
-
 function firstString(...values: unknown[]): string {
   for (const value of values) {
     const text = asName(value);
@@ -169,21 +155,6 @@ function mapEntry(data: Record<string, unknown>): WallEntry {
     objectName: asName(data["object_name"]),
     objectType: asName(data["object_type"]),
   };
-}
-
-/**
- * Wall payloads are keyed (`{wall: [...]}`, `{items: [...]}`). A missing key is
- * an empty page; PHP also serializes an empty result as a bare `[]`.
- */
-function unwrapList(payload: unknown, key: string): unknown[] {
-  if (payload === null || payload === undefined) return [];
-  if (Array.isArray(payload)) return payload;
-  const data = asRecord(payload);
-  if (data === null) throw unexpectedShape();
-  const inner = data[key];
-  if (inner === null || inner === undefined) return [];
-  if (Array.isArray(inner)) return inner;
-  throw unexpectedShape();
 }
 
 /** Rows that are not records are dropped, but they still count as raw rows. */
@@ -225,7 +196,7 @@ export function createActivityFetchers(
         { type: endpoint.type, id: opts.id, limit: WALL_ENTRY_CAP + 1 },
         opts,
       );
-      const raw = unwrapList(payload, "wall");
+      const raw = unwrapList(payload, ["wall"], badShape);
       const totalEntries = raw.length;
       return {
         entries: mapRows(raw).slice(0, WALL_ENTRY_CAP),
@@ -251,7 +222,7 @@ export function createActivityFetchers(
       // never re-deliver rows. Slicing happens BEFORE mapping for the same
       // reason - a row promoted into the window by a dropped neighbour would
       // come back at the top of the next page.
-      const raw = unwrapList(payload, "items");
+      const raw = unwrapList(payload, ["items"], badShape);
       const rawCount = raw.length;
       return {
         items: mapRows(raw.slice(0, opts.limit)),

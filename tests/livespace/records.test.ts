@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { LivespaceError } from "../../src/livespace/errors.js";
 import {
   ARG_KIND_TO_RECORD_KIND,
-  asName,
   createRecordFetchers,
   mapCompany,
   mapDeal,
@@ -455,16 +454,6 @@ describe("full-record mappers", () => {
   });
 });
 
-describe("asName", () => {
-  test("passes strings through and turns everything else into an empty string", () => {
-    expect(asName("Synthetic")).toBe("Synthetic");
-    expect(asName("")).toBe("");
-    for (const value of [null, undefined, 7, true, {}, [], { name: "x" }]) {
-      expect(asName(value)).toBe("");
-    }
-  });
-});
-
 describe("parseCommaDecimal", () => {
   const cases: Array<[unknown, number | null]> = [
     ["5,00", 5],
@@ -871,12 +860,25 @@ describe("list fetchers", () => {
     }
   });
 
-  test("a wrapper for another type reads as an empty page", async () => {
+  test("companies fall back to the contact wrapper, which is the probed one", async () => {
+    // Only the contact form of the getAll wrapper was probed live. The request
+    // already named type: "company", so whatever comes back under either key IS
+    // the company list - the same fallback getRecord has always made.
     const { fetchers } = recordFetchersFor({
-      "Contact/getAll": { contact: [PERSON_RAW] },
+      "Contact/getAll": { contact: [COMPANY_RAW] },
     });
 
-    expect(await fetchers.listCompanies({ limit: 20, offset: 0 })).toEqual({
+    const page = await fetchers.listCompanies({ limit: 20, offset: 0 });
+
+    expect(page.items).toEqual([COMPANY]);
+  });
+
+  test("persons have no fallback, so a company wrapper reads as an empty page", async () => {
+    const { fetchers } = recordFetchersFor({
+      "Contact/getAll": { company: [COMPANY_RAW] },
+    });
+
+    expect(await fetchers.listPersons({ limit: 20, offset: 0 })).toEqual({
       items: [],
       hasMore: false,
       rawCount: 0,

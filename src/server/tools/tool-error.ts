@@ -1,9 +1,34 @@
+import * as z from "zod/v4";
 import { LivespaceError } from "../../livespace/errors.js";
 
 export interface ToolError {
   code: string;
   message: string;
   hint: string;
+}
+
+/**
+ * The `{code, message, hint}` shape every tool reports errors in. Strict on
+ * purpose (the M3 idiom): a key nobody declared is a bug, not a field to pass
+ * through. Tools that need one more key extend it - `kind` in search_crm,
+ * `section` in crm_metadata.
+ */
+export const toolErrorSchema = z.strictObject({
+  code: z.string(),
+  message: z.string(),
+  hint: z.string(),
+});
+
+/**
+ * What every tool runner returns: the short markdown line, the
+ * schema-validated structured payload, and whether the call failed outright.
+ * The two channels are separate so CRM-authored text never has to travel
+ * through the text one (docs/security.md par. 4).
+ */
+export interface ToolRunResult {
+  text: string;
+  structured: Record<string, unknown>;
+  isError: boolean;
 }
 
 /**

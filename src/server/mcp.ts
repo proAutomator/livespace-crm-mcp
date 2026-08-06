@@ -1,4 +1,10 @@
-import { McpServer } from "@modelcontextprotocol/server";
+import {
+  McpServer,
+  type CallToolResult,
+  type StandardSchemaWithJSON,
+  type ToolCallback,
+} from "@modelcontextprotocol/server";
+import type * as z from "zod/v4";
 import type { ServerConfig } from "../config/server-env.js";
 import type { ActivityFetchers } from "../livespace/activity.js";
 import type { RecordFetchers } from "../livespace/records.js";
@@ -12,6 +18,7 @@ import { getActivityToolConfig, runGetActivity } from "./tools/get-activity.js";
 import { getRecordsToolConfig, runGetRecords } from "./tools/get-records.js";
 import { healthToolConfig, runHealthCheck } from "./tools/health.js";
 import { searchCrmToolConfig, runSearchCrm } from "./tools/search-crm.js";
+import type { ToolRunResult } from "./tools/tool-error.js";
 
 export interface AppDeps {
   config: ServerConfig;
@@ -76,21 +83,39 @@ export function createServerFactory(deps: AppDeps): () => McpServer {
       };
     });
 
+    // Every read tool is registered the same way: run it, then wrap the
+    // dual-channel result. Only the runner differs, so the wrapping lives once.
+    // `health` stays hand-written - it reports failure from its own payload.
+    //
+    // `run` takes the input schema's OWN output type, so a tool whose schema
+    // and Args interface drift apart is a compile error at the call site below.
+    // The SDK types its callback through a conditional on the schema type,
+    // which stays unresolved while `S` is generic - hence the one cast here,
+    // and nowhere else.
+    const register = <S extends z.ZodType & StandardSchemaWithJSON>(
+      name: string,
+      config: { inputSchema: S; outputSchema: StandardSchemaWithJSON },
+      run: (args: z.output<S>, signal: AbortSignal | undefined) => Promise<ToolRunResult>,
+    ): void => {
+      const handler = async (args: z.output<S>, ctx: unknown): Promise<CallToolResult> => {
+        const result = await run(args, requestSignal(ctx));
+        return {
+          content: [{ type: "text" as const, text: result.text }],
+          structuredContent: result.structured,
+          ...(result.isError ? { isError: true } : {}),
+        };
+      };
+      server.registerTool<StandardSchemaWithJSON, S>(
+        name,
+        config,
+        handler as ToolCallback<S>,
+      );
+    };
+
     if (deps.metadata) {
       const metadata = deps.metadata;
-      server.registerTool(
-        "crm_metadata",
-        crmMetadataToolConfig,
-        async (args, ctx) => {
-          const result = await runCrmMetadata(metadata, args, {
-            signal: requestSignal(ctx),
-          });
-          return {
-            content: [{ type: "text" as const, text: result.text }],
-            structuredContent: result.structured,
-            ...(result.isError ? { isError: true } : {}),
-          };
-        },
+      register("crm_metadata", crmMetadataToolConfig, (args, signal) =>
+        runCrmMetadata(metadata, args, { signal }),
       );
     }
 
@@ -99,49 +124,20 @@ export function createServerFactory(deps: AppDeps): () => McpServer {
     if (deps.records) {
       const records = deps.records;
 
-      server.registerTool("search_crm", searchCrmToolConfig, async (args, ctx) => {
-        const result = await runSearchCrm(records, args, {
-          signal: requestSignal(ctx),
-        });
-        return {
-          content: [{ type: "text" as const, text: result.text }],
-          structuredContent: result.structured,
-          ...(result.isError ? { isError: true } : {}),
-        };
-      });
+      register("search_crm", searchCrmToolConfig, (args, signal) =>
+        runSearchCrm(records, args, { signal }),
+      );
 
-      server.registerTool(
-        "get_records",
-        getRecordsToolConfig,
-        async (args, ctx) => {
-          // `activity` may be absent; the runner turns an includeWall request
-          // into a BAD_PARAMS answer instead of failing the whole tool.
-          const result = await runGetRecords(records, deps.activity, args, {
-            signal: requestSignal(ctx),
-          });
-          return {
-            content: [{ type: "text" as const, text: result.text }],
-            structuredContent: result.structured,
-            ...(result.isError ? { isError: true } : {}),
-          };
-        },
+      // `activity` may be absent; the runner turns an includeWall request into a
+      // BAD_PARAMS answer instead of failing the whole tool.
+      register("get_records", getRecordsToolConfig, (args, signal) =>
+        runGetRecords(records, deps.activity, args, { signal }),
       );
 
       if (deps.activity) {
         const activity = deps.activity;
-        server.registerTool(
-          "get_activity",
-          getActivityToolConfig,
-          async (args, ctx) => {
-            const result = await runGetActivity(records, activity, args, {
-              signal: requestSignal(ctx),
-            });
-            return {
-              content: [{ type: "text" as const, text: result.text }],
-              structuredContent: result.structured,
-              ...(result.isError ? { isError: true } : {}),
-            };
-          },
+        register("get_activity", getActivityToolConfig, (args, signal) =>
+          runGetActivity(records, activity, args, { signal }),
         );
       }
     }

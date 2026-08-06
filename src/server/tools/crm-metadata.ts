@@ -10,6 +10,7 @@ import {
   type UserInfo,
 } from "../../livespace/metadata.js";
 import { createTtlCache, type TtlCacheOptions } from "../cache.js";
+import { toolErrorSchema, type ToolRunResult } from "./tool-error.js";
 
 /**
  * Per-section item cap. The dictionary endpoints ignore `limit` upstream (probe
@@ -194,14 +195,8 @@ for a few minutes (see asOf/ageMs/stale per section).`,
   }),
   outputSchema: z.object({
     sections: sectionsSchema,
-    errors: z.array(
-      z.object({
-        section: z.string(),
-        code: z.string(),
-        message: z.string(),
-        hint: z.string(),
-      }),
-    ),
+    // One extra key on the shared shape: which section the failure belongs to.
+    errors: z.array(toolErrorSchema.extend({ section: z.string() })),
   }),
   annotations: {
     readOnlyHint: true,
@@ -211,11 +206,7 @@ for a few minutes (see asOf/ageMs/stale per section).`,
   },
 } as const;
 
-export interface CrmMetadataResult {
-  text: string;
-  structured: Record<string, unknown>;
-  isError: boolean;
-}
+export type CrmMetadataResult = ToolRunResult;
 
 interface SectionEnvelope {
   asOf: number;

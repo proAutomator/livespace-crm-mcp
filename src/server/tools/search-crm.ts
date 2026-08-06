@@ -16,7 +16,12 @@ import {
 } from "../../livespace/records.js";
 import { decodeCursor, encodeCursor, MAX_CURSOR_OFFSET } from "../cursor.js";
 import { companySchema, dealSchema, personSchema } from "./record-schemas.js";
-import { toToolError, type ToolError } from "./tool-error.js";
+import {
+  toolErrorSchema,
+  toToolError,
+  type ToolError,
+  type ToolRunResult,
+} from "./tool-error.js";
 
 /**
  * `search_crm` - the entry point into the CRM: find records by phrase or by
@@ -69,11 +74,7 @@ export interface SearchCrmArgs {
   cursor?: string;
 }
 
-export interface SearchCrmResult {
-  text: string;
-  structured: Record<string, unknown>;
-  isError: boolean;
-}
+export type SearchCrmResult = ToolRunResult;
 
 const DEFAULT_LIMIT = 20;
 
@@ -212,14 +213,8 @@ to get the next page of the same single kind.`,
       companies: envelopeOf(companySchema).optional(),
       deals: envelopeOf(dealSchema).optional(),
     }),
-    errors: z.array(
-      z.strictObject({
-        kind: z.string().optional(),
-        code: z.string(),
-        message: z.string(),
-        hint: z.string(),
-      }),
-    ),
+    // One extra key on the shared shape: which kind the failure belongs to.
+    errors: z.array(toolErrorSchema.extend({ kind: z.string().optional() })),
   }),
   annotations: {
     readOnlyHint: true,

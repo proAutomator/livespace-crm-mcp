@@ -22,47 +22,9 @@ import {
   runGetActivity,
   type GetActivityArgs,
 } from "../../../src/server/tools/get-activity.js";
+import { task, wallEntry } from "../../support/records.js";
 
 // Every value below is invented. No CRM data, no sandbox values (AGENTS.md).
-
-function wallEntry(overrides: Partial<WallEntry> = {}): WallEntry {
-  return {
-    type: "activity",
-    text: "Synthetic wall text",
-    textTruncated: false,
-    date: "2025-11-05 16:45:00+02",
-    authorName: "Synthetic Owner",
-    isPublic: true,
-    commentCount: 0,
-    objectName: "",
-    objectType: "",
-    ...overrides,
-  };
-}
-
-function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
-  return {
-    id: "task-synthetic-801",
-    title: "Synthetic Task One",
-    description: "Synthetic task description",
-    typeId: "type-synthetic-901",
-    typeName: "Synthetic Type",
-    statusId: "status-synthetic-911",
-    statusName: "Synthetic Status",
-    isCompleted: false,
-    isPrivate: false,
-    priority: 2,
-    dateFrom: "2025-11-10 09:00:00+02",
-    dateTo: "2025-11-10 10:00:00+02",
-    isAllDay: false,
-    linkedRecords: [
-      { kind: "deal", id: "deal-synthetic-401", name: "Synthetic Deal One" },
-    ],
-    created: "2025-11-01 08:00:00+02",
-    modified: "2025-11-02 08:00:00+02",
-    ...overrides,
-  };
-}
 
 function taskAt(index: number): TaskRecord {
   const number = String(index).padStart(3, "0");
