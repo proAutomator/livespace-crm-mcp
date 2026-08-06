@@ -4,8 +4,12 @@ Unofficial [MCP](https://modelcontextprotocol.io) server for
 [Livespace CRM](https://www.livespace.io) - designed for the model, not as a
 1:1 API mirror. Built for MCP spec **2026-07-28** (stateless Streamable HTTP).
 
-> **Status: early development.** The tool surface below is the design target;
-> implementation is in progress. Do not point this at a production CRM yet.
+> **Status:** the protocol and security core is complete and hardened
+> (stateless MCP 2026-07-28, official conformance suite and dependency audit
+> in CI, rate limiting, cancellation, operation-aware retries). CRM tools
+> land milestone by milestone - `health` is live, read tools are next. Until
+> the write tools ship with their safety rails, point it at a test Livespace
+> account rather than a production CRM.
 
 ## Why not just wrap the API?
 
@@ -102,6 +106,17 @@ MCP servers, in particular
 (MIT): a few intent-shaped tools instead of endpoint mirrors, operating-manual
 `instructions`, batch-first writes with per-item results, and errors that
 carry recovery hints. Thanks, Adam.
+
+## Author
+
+Built by [Jakub "Kuba" Masztalski](https://kubamasztalski.pl) (proAutomator) -
+business process automation and AI implementation for sales teams.
+
+- LinkedIn: [linkedin.com/in/kuba-masztalski](https://www.linkedin.com/in/kuba-masztalski/)
+- X: [@proAutomator](https://x.com/proAutomator)
+
+Bugs and feature requests: [GitHub Issues](https://github.com/proAutomator/livespace-crm-mcp/issues).
+Security reports: see [SECURITY.md](SECURITY.md).
 
 ## License
 
