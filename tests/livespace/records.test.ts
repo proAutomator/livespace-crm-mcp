@@ -819,6 +819,48 @@ describe("fetcher call table", () => {
   }
 });
 
+describe("large-page read timeouts", () => {
+  function timeoutOf(opts: unknown): number | undefined {
+    return (opts as { timeoutMs?: number }).timeoutMs;
+  }
+
+  test("a 200-row deal window asks for the large-page timeout", async () => {
+    const { fetchers, calls } = recordFetchersFor({ "Deal/getAll": { deal: [] } });
+
+    await fetchers.listDeals({ limit: 200, offset: 0 });
+
+    expect(timeoutOf((calls[0] as FakeCall).opts)).toBe(60_000);
+  });
+
+  test("an ordinary 20-row deal page keeps the client default", async () => {
+    const { fetchers, calls } = recordFetchersFor({ "Deal/getAll": { deal: [] } });
+
+    await fetchers.listDeals({ limit: 20, offset: 0 });
+
+    expect(timeoutOf((calls[0] as FakeCall).opts)).toBeUndefined();
+  });
+
+  test("the contact boundary sits at limit 100", async () => {
+    const at = recordFetchersFor({ "Contact/getAll": { contact: [] } });
+    await at.fetchers.listPersons({ limit: 100, offset: 0 });
+    expect(timeoutOf((at.calls[0] as FakeCall).opts)).toBe(60_000);
+
+    const below = recordFetchersFor({ "Contact/getAll": { contact: [] } });
+    await below.fetchers.listPersons({ limit: 99, offset: 0 });
+    expect(timeoutOf((below.calls[0] as FakeCall).opts)).toBeUndefined();
+  });
+
+  test("fixed-page task lists keep the client default", async () => {
+    const { fetchers, calls } = recordFetchersFor({
+      "Todo/getTodoObjects": { todo: [] },
+    });
+
+    await fetchers.listTasks({ page: 1 });
+
+    expect(timeoutOf((calls[0] as FakeCall).opts)).toBeUndefined();
+  });
+});
+
 describe("list fetchers", () => {
   test("persons unwrap the type-keyed wrapper and map full records", async () => {
     const { fetchers } = recordFetchersFor({

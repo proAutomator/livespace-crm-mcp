@@ -19,6 +19,16 @@ export class LivespaceError extends Error {
     message: string,
     readonly hint: string,
     readonly resultCode?: number,
+    /** Upstream `Retry-After`, in milliseconds, when the response carried one. */
+    readonly retryAfterMs?: number,
+    /**
+     * Retryability is a property of the transport, marked at the source: only
+     * the client's single HTTP attempt sets this. Envelope-mapped and
+     * shape-validation errors are never retried, whatever their `code` - result
+     * codes 400/500/516/520 all map to UPSTREAM_ERROR, so classifying by code
+     * would replay business failures.
+     */
+    readonly transport: boolean = false,
   ) {
     super(message);
     this.name = "LivespaceError";

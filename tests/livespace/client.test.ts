@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { LivespaceClient } from "../../src/livespace/client.js";
+import { LivespaceClient, TOKEN_TIMEOUT_MS } from "../../src/livespace/client.js";
 import { LivespaceError } from "../../src/livespace/errors.js";
 import type { LivespaceConfig } from "../../src/config/env.js";
 
@@ -20,6 +20,49 @@ function envelope(data: unknown, result = 200, status = true): Response {
 
 function tokenEnvelope(): Response {
   return envelope({ token: "tok-1", session_id: "sess-1" });
+}
+
+/** A distinct session per token fetch, so replayed signatures are visible. */
+function tokenEnvelopeFor(nth: number): Response {
+  return envelope({ token: `tok-${nth}`, session_id: `sess-${nth}` });
+}
+
+function isTokenUrl(url: string): boolean {
+  return url.endsWith("getToken");
+}
+
+function timeoutException(): DOMException {
+  return new DOMException("The operation timed out.", "TimeoutError");
+}
+
+/**
+ * Routes token and signed calls separately: tokens answer with a fresh session,
+ * signed calls follow a queue. Nothing here sleeps or hits the network.
+ */
+function routedFetch(
+  calls: Call[],
+  signedResponses: Array<Response | (() => never)>,
+  onToken: (nth: number) => Response | (() => never) = tokenEnvelopeFor,
+): typeof fetch {
+  let tokens = 0;
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, body: new URLSearchParams(String(init?.body ?? "")) });
+    if (isTokenUrl(url)) {
+      tokens += 1;
+      const answer = onToken(tokens);
+      if (typeof answer === "function") answer();
+      return answer;
+    }
+    const next = signedResponses.shift();
+    if (!next) throw new Error("test fetch: no more queued signed responses");
+    if (typeof next === "function") next();
+    return next;
+  }) as typeof fetch;
+}
+
+function signedBody(calls: Call[], index: number): Record<string, unknown> {
+  return JSON.parse(calls[index]?.body.get("data") ?? "{}") as Record<string, unknown>;
 }
 
 function makeFetch(responses: Response[], calls: Call[]): typeof fetch {
@@ -122,18 +165,37 @@ describe("LivespaceClient.call", () => {
     }
   });
 
+  test("every retry attempt is signed with a freshly minted session", async () => {
+    // The 561 bug: the signed body was minted once and replayed, so the second
+    // attempt reused a session Livespace had already consumed.
+    const calls: Call[] = [];
+    const client = new LivespaceClient(CONFIG, {
+      fetchImpl: routedFetch(calls, [
+        new Response("bad gateway", { status: 502 }),
+        envelope({ ok: true }),
+      ]),
+      sleep: async () => {},
+      random: () => 1,
+    });
+
+    await expect(client.call("Default", "ping")).resolves.toEqual({ ok: true });
+
+    expect(calls.map((c) => isTokenUrl(c.url))).toEqual([true, false, true, false]);
+    const first = signedBody(calls, 1);
+    const second = signedBody(calls, 3);
+    expect(first["_api_session"]).toBe("sess-1");
+    expect(second["_api_session"]).toBe("sess-2");
+    expect(second["_api_sha"]).not.toBe(first["_api_sha"]);
+  });
+
   test("retries HTTP 5xx with backoff and then succeeds", async () => {
     const calls: Call[] = [];
     const sleeps: number[] = [];
     const client = new LivespaceClient(CONFIG, {
-      fetchImpl: makeFetch(
-        [
-          new Response("bad gateway", { status: 502 }),
-          tokenEnvelope(),
-          envelope({ ok: true }),
-        ],
-        calls,
-      ),
+      fetchImpl: routedFetch(calls, [
+        new Response("bad gateway", { status: 502 }),
+        envelope({ ok: true }),
+      ]),
       sleep: async (ms) => {
         sleeps.push(ms);
       },
@@ -144,22 +206,18 @@ describe("LivespaceClient.call", () => {
 
     expect(data).toEqual({ ok: true });
     expect(sleeps).toEqual([200]);
-    expect(calls.length).toBe(3);
+    expect(calls.length).toBe(4); // token, signed, token, signed
   });
 
   test("read retry delay uses full jitter: random() scales the capped backoff", async () => {
     const calls: Call[] = [];
     const sleeps: number[] = [];
     const client = new LivespaceClient(CONFIG, {
-      fetchImpl: makeFetch(
-        [
-          new Response("x", { status: 500 }),
-          new Response("x", { status: 500 }),
-          tokenEnvelope(),
-          envelope({ ok: true }),
-        ],
-        calls,
-      ),
+      fetchImpl: routedFetch(calls, [
+        new Response("x", { status: 500 }),
+        new Response("x", { status: 500 }),
+        envelope({ ok: true }),
+      ]),
       sleep: async (ms) => {
         sleeps.push(ms);
       },
@@ -174,17 +232,10 @@ describe("LivespaceClient.call", () => {
     const calls: Call[] = [];
     const sleeps: number[] = [];
     const client = new LivespaceClient(CONFIG, {
-      fetchImpl: makeFetch(
-        [
-          new Response("slow down", {
-            status: 503,
-            headers: { "retry-after": "1" },
-          }),
-          tokenEnvelope(),
-          envelope({ ok: true }),
-        ],
-        calls,
-      ),
+      fetchImpl: routedFetch(calls, [
+        new Response("slow down", { status: 503, headers: { "retry-after": "1" } }),
+        envelope({ ok: true }),
+      ]),
       sleep: async (ms) => {
         sleeps.push(ms);
       },
@@ -197,17 +248,77 @@ describe("LivespaceClient.call", () => {
 
   test("HTTP 429 maps to RATE_LIMITED and is retried for reads", async () => {
     const calls: Call[] = [];
-    const client = makeClient(
-      [
+    const client = new LivespaceClient(CONFIG, {
+      fetchImpl: routedFetch(calls, [
         new Response("limited", { status: 429 }),
-        tokenEnvelope(),
         envelope({ ok: true }),
-      ],
-      calls,
-    );
+      ]),
+      sleep: async () => {},
+      random: () => 1,
+    });
 
     await expect(client.call("Default", "ping")).resolves.toEqual({ ok: true });
-    expect(calls.length).toBe(3);
+    expect(calls.length).toBe(4);
+  });
+
+  test("Retry-After rides the 429 error onto the next sleep", async () => {
+    const calls: Call[] = [];
+    const sleeps: number[] = [];
+    const client = new LivespaceClient(CONFIG, {
+      fetchImpl: routedFetch(calls, [
+        new Response("limited", { status: 429, headers: { "retry-after": "1" } }),
+        envelope({ ok: true }),
+      ]),
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      random: () => 1,
+    });
+
+    await client.call("Default", "ping");
+    expect(sleeps).toEqual([1000]);
+  });
+
+  test("a token business failure fails fast: one token call, no signed call", async () => {
+    for (const [result, code] of [
+      [561, "AUTH_FAILED"],
+      [520, "UPSTREAM_ERROR"],
+    ] as const) {
+      const calls: Call[] = [];
+      const sleeps: number[] = [];
+      const client = new LivespaceClient(CONFIG, {
+        fetchImpl: routedFetch(calls, [], () =>
+          envelope({ internal: "SENSITIVE-DETAIL" }, result, false),
+        ),
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+        random: () => 1,
+      });
+
+      await expect(client.call("Default", "ping")).rejects.toMatchObject({ code });
+      expect(calls.length).toBe(1);
+      expect(calls.every((c) => isTokenUrl(c.url))).toBe(true);
+      expect(sleeps).toEqual([]);
+    }
+  });
+
+  test("a token transport failure retries the whole composite attempt", async () => {
+    const calls: Call[] = [];
+    const client = new LivespaceClient(CONFIG, {
+      fetchImpl: routedFetch(calls, [envelope({ ok: true })], (nth) =>
+        nth === 1
+          ? () => {
+              throw new TypeError("socket hang up (synthetic)");
+            }
+          : tokenEnvelopeFor(nth),
+      ),
+      sleep: async () => {},
+      random: () => 1,
+    });
+
+    await expect(client.call("Default", "ping")).resolves.toEqual({ ok: true });
+    expect(calls.map((c) => isTokenUrl(c.url))).toEqual([true, true, false]);
   });
 
   test("write calls are not retried: HTTP 500 after send maps to WRITE_OUTCOME_UNKNOWN", async () => {
@@ -260,6 +371,106 @@ describe("LivespaceClient.call", () => {
     await expect(
       client.call("Contact", "addContact", {}, { write: true }),
     ).rejects.toMatchObject({ code: "RATE_LIMITED" });
+  });
+
+  test("a write survives a token transport failure in the prepare phase", async () => {
+    // The token fetch is a safe read even inside a write: nothing has been
+    // dispatched yet, so the composite attempt may be retried.
+    const calls: Call[] = [];
+    const client = new LivespaceClient(CONFIG, {
+      fetchImpl: routedFetch(calls, [envelope({ id: "contact-synthetic-1" })], (nth) =>
+        nth === 1
+          ? () => {
+              throw new TypeError("socket hang up (synthetic)");
+            }
+          : tokenEnvelopeFor(nth),
+      ),
+      sleep: async () => {},
+      random: () => 1,
+    });
+
+    await expect(
+      client.call("Contact", "addContact", { firstname: "Syn" }, { write: true }),
+    ).resolves.toEqual({ id: "contact-synthetic-1" });
+    expect(calls.filter((c) => !isTokenUrl(c.url)).length).toBe(1);
+  });
+
+  test("a signed-dispatch timeout on a write maps to WRITE_OUTCOME_UNKNOWN", async () => {
+    const calls: Call[] = [];
+    const client = new LivespaceClient(CONFIG, {
+      fetchImpl: routedFetch(calls, [
+        () => {
+          throw timeoutException();
+        },
+      ]),
+      sleep: async () => {},
+      random: () => 1,
+    });
+
+    await expect(
+      client.call("Contact", "addContact", {}, { write: true }),
+    ).rejects.toMatchObject({ code: "WRITE_OUTCOME_UNKNOWN" });
+    expect(calls.filter((c) => !isTokenUrl(c.url)).length).toBe(1);
+  });
+
+  test("a per-call timeoutMs governs the signed dispatch", async () => {
+    const calls: Call[] = [];
+    const client = new LivespaceClient(CONFIG, {
+      fetchImpl: routedFetch(calls, [
+        () => {
+          throw timeoutException();
+        },
+      ]),
+      sleep: async () => {},
+      random: () => 1,
+      maxAttempts: 1,
+    });
+
+    await expect(
+      client.call("Deal", "getAll", { limit: 200 }, { timeoutMs: 1234 }),
+    ).rejects.toMatchObject({
+      code: "TIMEOUT",
+      message: expect.stringContaining("1234 ms"),
+    });
+  });
+
+  test("a per-call timeoutMs never widens the token attempt", async () => {
+    const calls: Call[] = [];
+    const client = new LivespaceClient(CONFIG, {
+      fetchImpl: routedFetch(calls, [], () => () => {
+        throw timeoutException();
+      }),
+      sleep: async () => {},
+      random: () => 1,
+      maxAttempts: 1,
+    });
+
+    await expect(
+      client.call("Deal", "getAll", { limit: 200 }, { timeoutMs: 60_000 }),
+    ).rejects.toMatchObject({
+      code: "TIMEOUT",
+      message: expect.stringContaining(`${TOKEN_TIMEOUT_MS} ms`),
+    });
+    expect(TOKEN_TIMEOUT_MS).toBe(10_000);
+  });
+
+  test("without an override the signed dispatch uses the 30 s client default", async () => {
+    const calls: Call[] = [];
+    const client = new LivespaceClient(CONFIG, {
+      fetchImpl: routedFetch(calls, [
+        () => {
+          throw timeoutException();
+        },
+      ]),
+      sleep: async () => {},
+      random: () => 1,
+      maxAttempts: 1,
+    });
+
+    await expect(client.call("Default", "ping")).rejects.toMatchObject({
+      code: "TIMEOUT",
+      message: expect.stringContaining("30000 ms"),
+    });
   });
 
   test("redacts echoed _api_* auth fields from response data", async () => {

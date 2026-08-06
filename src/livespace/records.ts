@@ -1,4 +1,4 @@
-import type { LivespaceClient } from "./client.js";
+import type { LivespaceCallOptions, LivespaceClient } from "./client.js";
 import { LivespaceError } from "./errors.js";
 import {
   asBool,
@@ -590,6 +590,21 @@ export interface RecordFetchers {
  */
 const TASK_PAGE_SIZE = 50;
 
+/**
+ * Wide windows are slow upstream, not broken: a 200-row deal page (162 rows,
+ * ~2 MB) took 14-19 s in sandbox measurements, well past the 30 s client
+ * default only in the worst case but far past the old 15 s one. Pages this
+ * large therefore buy extra time instead of timing out honestly and retrying
+ * the whole transfer. `listTasks` keeps the default - its pages are fixed at
+ * 50 rows (~6 s).
+ */
+const LARGE_PAGE_LIMIT = 100;
+const LARGE_PAGE_TIMEOUT_MS = 60_000;
+
+function largePageTimeoutMs(limit: number): number | undefined {
+  return limit >= LARGE_PAGE_LIMIT ? LARGE_PAGE_TIMEOUT_MS : undefined;
+}
+
 const TASK_WRAPPER_KEY = "todo";
 
 const RECORD_MAPPERS: { [K in RecordKind]: (raw: unknown) => RecordDataMap[K] } = {
@@ -699,7 +714,12 @@ export function createRecordFetchers(
     method: string,
     params: Record<string, unknown>,
     opts?: { signal?: AbortSignal },
-  ): Promise<unknown> => client.call(module, method, params, { signal: opts?.signal });
+    timeoutMs?: number,
+  ): Promise<unknown> => {
+    const callOpts: LivespaceCallOptions = { signal: opts?.signal };
+    if (timeoutMs !== undefined) callOpts.timeoutMs = timeoutMs;
+    return client.call(module, method, params, callOpts);
+  };
 
   const listContacts = async <K extends "person" | "company">(
     kind: K,
@@ -715,7 +735,13 @@ export function createRecordFetchers(
       params["names"] = opts.namesLike;
       params["condition"] = "like";
     }
-    const payload = await call("Contact", "getAll", params, opts);
+    const payload = await call(
+      "Contact",
+      "getAll",
+      params,
+      opts,
+      largePageTimeoutMs(opts.limit),
+    );
     return toListPage(payload, WRAPPER_KEYS[kind], opts.limit, RECORD_MAPPERS[kind]);
   };
 
@@ -735,7 +761,13 @@ export function createRecordFetchers(
       if (opts.ownerLogin !== undefined) params["owner_login"] = opts.ownerLogin;
       if (opts.modifiedFrom !== undefined) params["modified"] = opts.modifiedFrom;
       if (opts.namesLike !== undefined) params["names"] = opts.namesLike;
-      const payload = await call("Deal", "getAll", params, opts);
+      const payload = await call(
+        "Deal",
+        "getAll",
+        params,
+        opts,
+        largePageTimeoutMs(opts.limit),
+      );
       return toListPage(payload, WRAPPER_KEYS["deal"], opts.limit, mapDeal);
     },
 

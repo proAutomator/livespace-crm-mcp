@@ -30,6 +30,15 @@ function stripAuthEcho(data: unknown): unknown {
 const BASE_RETRY_DELAY_MS = 200;
 const MAX_RETRY_DELAY_MS = 2_000;
 const MAX_RETRY_AFTER_MS = 10_000;
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+/**
+ * The token fetch is sub-second in practice (measured on a sandbox account),
+ * so it keeps its own tight budget and ignores per-call overrides. That caps a
+ * slow read at roughly maxAttempts x (10 s token + 60 s dispatch) instead of
+ * maxAttempts x (60 + 60) s.
+ */
+export const TOKEN_TIMEOUT_MS = 10_000;
 
 export interface LivespaceClientOptions {
   fetchImpl?: typeof fetch;
@@ -41,8 +50,16 @@ export interface LivespaceClientOptions {
 
 export interface LivespaceCallOptions {
   signal?: AbortSignal;
-  /** Write calls are never auto-retried after being sent. */
+  /** Write calls are never auto-retried once the signed request went out. */
   write?: boolean;
+  /** Overrides the timeout of the signed dispatch only, never of the token fetch. */
+  timeoutMs?: number;
+}
+
+/** One signed request, minted fresh for every attempt. */
+interface PreparedRequest {
+  url: string;
+  body: URLSearchParams;
 }
 
 interface CombinedSignal {
@@ -94,7 +111,7 @@ export class LivespaceClient {
     options: LivespaceClientOptions = {},
   ) {
     this.fetchImpl = options.fetchImpl ?? fetch;
-    this.timeoutMs = options.timeoutMs ?? 15_000;
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.maxAttempts = options.maxAttempts ?? 3;
     this.sleep =
       options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -131,25 +148,36 @@ export class LivespaceClient {
     opts: LivespaceCallOptions,
   ): Promise<T> {
     return this.withSlot(async () => {
-      const { token, sessionId } = await this.getToken(opts.signal);
-      const sha = await buildSignature(this.config.apiKey, token, this.config.apiSecret);
-      // Livespace expects the auth fields inside the `data` JSON for signed
-      // calls (separate form fields return 561). Auth fields are spread last
-      // so caller params can never override them.
-      const body = new URLSearchParams({
-        data: JSON.stringify({
-          ...params,
-          _api_auth: "key",
-          _api_key: this.config.apiKey,
-          _api_sha: sha,
-          _api_session: sessionId,
-        }),
+      const url = `${this.baseUrl()}/${encodeURIComponent(module)}/${encodeURIComponent(method)}`;
+      // Signing happens inside `prepare`, so every retry mints a fresh
+      // token/session pair. Replaying a spent session made Livespace answer
+      // 561 and told the model to go check its credentials.
+      const prepare = async (): Promise<PreparedRequest> => {
+        const { token, sessionId } = await this.getToken(opts.signal);
+        const sha = await buildSignature(
+          this.config.apiKey,
+          token,
+          this.config.apiSecret,
+        );
+        // Livespace expects the auth fields inside the `data` JSON for signed
+        // calls (separate form fields return 561). Auth fields are spread last
+        // so caller params can never override them.
+        const body = new URLSearchParams({
+          data: JSON.stringify({
+            ...params,
+            _api_auth: "key",
+            _api_key: this.config.apiKey,
+            _api_sha: sha,
+            _api_session: sessionId,
+          }),
+        });
+        return { url, body };
+      };
+      const envelope = await this.post(prepare, {
+        write: opts.write === true,
+        signal: opts.signal,
+        timeoutMs: opts.timeoutMs,
       });
-      const envelope = await this.post(
-        `${this.baseUrl()}/${encodeURIComponent(module)}/${encodeURIComponent(method)}`,
-        body,
-        { write: opts.write === true, signal: opts.signal },
-      );
       if (envelope.status !== true || envelope.result !== 200) {
         throw errorFromEnvelope(envelope.result);
       }
@@ -169,11 +197,12 @@ export class LivespaceClient {
       _api_key: this.config.apiKey,
     });
     // The token fetch is always a safe read, even when the logical call is a
-    // write - only the signed call itself gets write semantics.
-    const envelope = await this.post(
+    // write - only the signed dispatch gets write semantics. Retrying is the
+    // caller's business: `post` owns the loop around the whole attempt.
+    const envelope = await this.singleFetch(
       `${this.baseUrl()}/_Api/auth_call/_api_method/getToken`,
       body,
-      { write: false, signal },
+      { timeoutMs: TOKEN_TIMEOUT_MS, signal },
     );
     if (envelope.status !== true || envelope.result !== 200) {
       throw errorFromEnvelope(envelope.result);
@@ -200,84 +229,120 @@ export class LivespaceClient {
     return Math.floor(this.random() * cap);
   }
 
-  private async post(
+  /**
+   * Exactly ONE HTTP attempt. This is the only place that mints retryable
+   * (`transport: true`) errors; the response body is read inside the timed
+   * window and the TIMEOUT message reports the timeout actually used.
+   */
+  private async singleFetch(
     url: string,
     body: URLSearchParams,
-    opts: { write: boolean; signal?: AbortSignal },
+    opts: { timeoutMs: number; signal?: AbortSignal },
   ): Promise<Envelope> {
-    if (opts.signal?.aborted) throw cancelledError();
-    // Reads retry; writes get exactly one attempt because a timeout or 5xx
-    // after the request was sent leaves the outcome unknown - blind retries
-    // could duplicate CRM records (docs/security.md par. 5).
-    const attempts = opts.write ? 1 : this.maxAttempts;
-    let lastError: LivespaceError | undefined;
-    let outcomeUnknown = false;
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      let retryAfterMs: number | undefined;
-      const combined = combineSignals(
-        AbortSignal.timeout(this.timeoutMs),
-        opts.signal,
-      );
-      try {
-        const response = await this.fetchImpl(url, {
-          method: "POST",
-          headers: { "content-type": "application/x-www-form-urlencoded" },
-          body: body.toString(),
-          signal: combined.signal,
-        });
-        if (response.status === 429) {
-          // Rejected before processing, so even a write is safe to retry
-          // explicitly; outcomeUnknown stays false.
-          retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
-          lastError = new LivespaceError(
-            "RATE_LIMITED",
-            "Livespace rate-limited the request (HTTP 429).",
-            "Wait before retrying; reduce request frequency if it persists.",
-          );
-        } else if (response.status >= 500) {
-          retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
-          outcomeUnknown = true;
-          lastError = new LivespaceError(
-            "UPSTREAM_ERROR",
-            `Livespace responded with HTTP ${response.status}.`,
-            "Retry with backoff; reduce the request size if it persists.",
-          );
-        } else {
-          return (await response.json()) as Envelope;
-        }
-      } catch (cause) {
-        if (opts.signal?.aborted) throw cancelledError();
-        outcomeUnknown = true;
-        // The caught error is deliberately reduced to a category: upstream
-        // error text must never enter LivespaceError (docs/security.md par. 6).
-        lastError =
-          cause instanceof DOMException && cause.name === "TimeoutError"
-            ? new LivespaceError(
-                "TIMEOUT",
-                `Livespace did not respond within ${this.timeoutMs} ms.`,
-                "Retry; if it persists, reduce the request size.",
-              )
-            : new LivespaceError(
-                "NETWORK_ERROR",
-                "Network error while calling Livespace.",
-                "Check connectivity and LIVESPACE_SUBDOMAIN, then retry.",
-              );
-      } finally {
-        combined.dispose();
+    const combined = combineSignals(AbortSignal.timeout(opts.timeoutMs), opts.signal);
+    try {
+      const response = await this.fetchImpl(url, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+        signal: combined.signal,
+      });
+      if (response.status === 429) {
+        throw new LivespaceError(
+          "RATE_LIMITED",
+          "Livespace rate-limited the request (HTTP 429).",
+          "Wait before retrying; reduce request frequency if it persists.",
+          undefined,
+          parseRetryAfterMs(response.headers.get("retry-after")),
+          true,
+        );
       }
-      if (attempt < attempts) {
-        await this.sleep(this.retryDelayMs(attempt, retryAfterMs));
+      if (response.status >= 500) {
+        throw new LivespaceError(
+          "UPSTREAM_ERROR",
+          `Livespace responded with HTTP ${response.status}.`,
+          "Retry with backoff; reduce the request size if it persists.",
+          undefined,
+          parseRetryAfterMs(response.headers.get("retry-after")),
+          true,
+        );
       }
-    }
-    if (opts.write && outcomeUnknown) {
-      // The request may have reached Livespace before failing; the caller
-      // must verify by re-reading instead of blindly retrying (M6 contract).
+      return (await response.json()) as Envelope;
+    } catch (cause) {
+      // Our own classification passes through untouched.
+      if (cause instanceof LivespaceError) throw cause;
+      if (opts.signal?.aborted) throw cancelledError();
+      // The caught error is deliberately reduced to a category: upstream
+      // error text must never enter LivespaceError (docs/security.md par. 6).
+      if (cause instanceof DOMException && cause.name === "TimeoutError") {
+        throw new LivespaceError(
+          "TIMEOUT",
+          `Livespace did not respond within ${opts.timeoutMs} ms.`,
+          "Retry; if it persists, reduce the request size.",
+          undefined,
+          undefined,
+          true,
+        );
+      }
       throw new LivespaceError(
-        "WRITE_OUTCOME_UNKNOWN",
-        "The write request failed mid-flight; Livespace may or may not have applied it.",
-        "Re-read the affected records to verify the outcome before retrying.",
-        lastError?.resultCode,
+        "NETWORK_ERROR",
+        "Network error while calling Livespace.",
+        "Check connectivity and LIVESPACE_SUBDOMAIN, then retry.",
+        undefined,
+        undefined,
+        true,
       );
+    } finally {
+      combined.dispose();
+    }
+  }
+
+  /**
+   * The retry engine. It wraps the WHOLE composite attempt: `prepare` mints a
+   * fresh token and signature, then the signed request goes out once. Only
+   * transport failures retry - business failures from the envelope stop dead.
+   *
+   * Write semantics are phase-aware. The token fetch is a safe read, so a
+   * prepare-phase transport failure retries even for writes; the moment the
+   * signed request has been dispatched a write stops, because a 5xx, timeout
+   * or dropped socket leaves the outcome unknown and a blind retry could
+   * duplicate CRM records (docs/security.md par. 5). An HTTP 429 is the
+   * exception: it was rejected before processing, so the outcome is known.
+   */
+  private async post(
+    prepare: () => Promise<PreparedRequest>,
+    opts: { write: boolean; signal?: AbortSignal; timeoutMs?: number },
+  ): Promise<Envelope> {
+    let lastError: LivespaceError | undefined;
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+      if (opts.signal?.aborted) throw cancelledError();
+      let signedDispatch = false;
+      try {
+        const request = await prepare();
+        signedDispatch = true;
+        return await this.singleFetch(request.url, request.body, {
+          timeoutMs: opts.timeoutMs ?? this.timeoutMs,
+          signal: opts.signal,
+        });
+      } catch (error) {
+        if (!(error instanceof LivespaceError) || !error.transport) throw error;
+        if (opts.signal?.aborted) throw cancelledError();
+        if (opts.write && signedDispatch) {
+          if (error.code === "RATE_LIMITED") throw error;
+          // The caller must verify by re-reading instead of blindly retrying
+          // (M6 contract).
+          throw new LivespaceError(
+            "WRITE_OUTCOME_UNKNOWN",
+            "The write request failed mid-flight; Livespace may or may not have applied it.",
+            "Re-read the affected records to verify the outcome before retrying.",
+            error.resultCode,
+          );
+        }
+        lastError = error;
+      }
+      if (attempt < this.maxAttempts) {
+        await this.sleep(this.retryDelayMs(attempt, lastError?.retryAfterMs));
+      }
     }
     throw (
       lastError ??
