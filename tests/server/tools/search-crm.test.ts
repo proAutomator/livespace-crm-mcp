@@ -258,6 +258,38 @@ describe("runSearchCrm phrase mode", () => {
     expect(envelope?.["hasMore"]).toBe(true);
   });
 
+  // Phrase mode has no cursor, so `hasMore` answers one question only: did the
+  // page come back FULL, meaning the cap may have trimmed hits away? Comparing
+  // against the returned hits instead would call a page complete whenever a row
+  // was dropped for having no id.
+  const hasMoreCases: Array<[string, number, number, number, boolean]> = [
+    ["a page fuller than the limit", 9, 5, 3, true],
+    ["a page exactly at the limit", 3, 3, 3, true],
+    ["a short page with a dropped row", 2, 1, 3, false],
+    ["a short page", 1, 1, 3, false],
+  ];
+
+  for (const [label, rawCount, hitCount, limit, expected] of hasMoreCases) {
+    test(`hasMore is ${String(expected)} for ${label}`, async () => {
+      const { fetchers } = fakeFetchers({
+        searchPhrase: {
+          hits: Array.from({ length: hitCount }, (_value, index) =>
+            hit(`deal-synthetic-${index}`, `Synthetic Deal ${index}`),
+          ),
+          rawCount,
+        },
+      });
+
+      const result = await runSearchCrm(fetchers, {
+        kinds: ["deals"],
+        phrase: "synthetic",
+        limit,
+      });
+
+      expect(resultsOf(result)["deals"]?.["hasMore"]).toBe(expected);
+    });
+  }
+
   test("every kind failing makes the whole call an error", async () => {
     const { fetchers } = fakeFetchers({ searchPhrase: permissionDenied() });
 

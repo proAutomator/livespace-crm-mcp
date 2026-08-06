@@ -148,6 +148,24 @@ describe("stripHtml", () => {
       expected: "ipt>x",
     },
     {
+      // A "<" with no closing ">" survives the tag pattern, so it is replaced
+      // outright: no live angle bracket may reach an LLM context. ">" is left
+      // alone - on its own it opens nothing.
+      name: "replaces an unclosed angle bracket",
+      input: "<script",
+      expected: "script",
+    },
+    {
+      name: "replaces an unclosed angle bracket mid-text",
+      input: "a <img b",
+      expected: "a img b",
+    },
+    {
+      name: "strips an escaped tag whole once it is decoded",
+      input: "&lt;img src=x onerror=y&gt; hi",
+      expected: "hi",
+    },
+    {
       name: "decodes the five entities",
       input: "&quot;quoted&quot; &#39;single&#39; &amp; more",
       expected: "\"quoted\" 'single' & more",
@@ -240,6 +258,19 @@ describe("recordWall", () => {
     expect(wall.entries.length).toBe(WALL_ENTRY_CAP);
     expect(wall.truncated).toBe(true);
     expect(wall.totalEntries).toBe(120);
+  });
+
+  test("one row past the cap is enough to report truncation", async () => {
+    // The request asks for CAP + 1 rows precisely so a wall that is one entry
+    // too long can be told apart from one that fits. An upstream that honours
+    // the limit would otherwise return exactly CAP rows and look complete.
+    const { fetchers } = activityFetchersFor({
+      "Deal/getWall": { wall: syntheticWallRows(WALL_ENTRY_CAP + 1) },
+    });
+    const wall = await fetchers.recordWall({ kind: "deal", id: "deal-synthetic-401" });
+    expect(wall.entries.length).toBe(WALL_ENTRY_CAP);
+    expect(wall.truncated).toBe(true);
+    expect(wall.totalEntries).toBe(WALL_ENTRY_CAP + 1);
   });
 
   test("a wall exactly at the cap is not truncated", async () => {
@@ -388,7 +419,7 @@ describe("fetcher call table", () => {
         fetchers.recordWall({ kind: "person", id: "person-synthetic-001", signal }),
       module: "Contact",
       method: "getWall",
-      params: { type: "contact", id: "person-synthetic-001", limit: WALL_ENTRY_CAP },
+      params: { type: "contact", id: "person-synthetic-001", limit: WALL_ENTRY_CAP + 1 },
     },
     {
       name: "recordWall for a company",
@@ -397,7 +428,7 @@ describe("fetcher call table", () => {
         fetchers.recordWall({ kind: "company", id: "company-synthetic-101", signal }),
       module: "Contact",
       method: "getWall",
-      params: { type: "company", id: "company-synthetic-101", limit: WALL_ENTRY_CAP },
+      params: { type: "company", id: "company-synthetic-101", limit: WALL_ENTRY_CAP + 1 },
     },
     {
       name: "recordWall for a deal",
@@ -406,7 +437,7 @@ describe("fetcher call table", () => {
         fetchers.recordWall({ kind: "deal", id: "deal-synthetic-401", signal }),
       module: "Deal",
       method: "getWall",
-      params: { type: "deal", id: "deal-synthetic-401", limit: WALL_ENTRY_CAP },
+      params: { type: "deal", id: "deal-synthetic-401", limit: WALL_ENTRY_CAP + 1 },
     },
     {
       name: "crmFeed",

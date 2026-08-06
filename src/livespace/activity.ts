@@ -108,13 +108,16 @@ const TAG_PATTERN = /<[^>]*>/gu;
  * 1. decode the five entities in ONE pass (chained replacements would cascade
  *    `&amp;lt;` into a live `<`),
  * 2. strip `<...>` spans until the result stops changing,
- * 3. collapse whitespace and trim.
+ * 3. replace whatever `<` is left, since a `<` with no closing `>` never
+ *    matched the tag pattern and would otherwise survive intact,
+ * 4. collapse whitespace and trim.
  *
  * Decode-then-strip means markup can never survive the flattening. The cost is
  * that markup which arrived deliberately escaped ("&lt;b&gt;") is dropped as
  * well, and that a tag-shaped span of prose ("a < b and c > d") loses its
  * middle. That trade is accepted: dropping text is safe, leaking live markup
- * into an LLM context is not.
+ * into an LLM context is not. A lone `>` is left alone - by itself it opens
+ * nothing.
  */
 export function stripHtml(value: unknown): string {
   if (typeof value !== "string") return "";
@@ -126,7 +129,7 @@ export function stripHtml(value: unknown): string {
     if (next === stripped) break;
     stripped = next;
   }
-  return stripped.replace(/\s+/gu, " ").trim();
+  return stripped.replaceAll("<", " ").replace(/\s+/gu, " ").trim();
 }
 
 /** Upstream booleans arrive as `true`, `1` or `"1"` depending on the endpoint. */
@@ -216,7 +219,10 @@ export function createActivityFetchers(
       const payload = await call(
         endpoint.module,
         "getWall",
-        { type: endpoint.type, id: opts.id, limit: WALL_ENTRY_CAP },
+        // One row PAST the cap on purpose: an upstream that honours the limit
+        // would otherwise hand back exactly CAP rows and a wall that is one
+        // entry too long would look complete.
+        { type: endpoint.type, id: opts.id, limit: WALL_ENTRY_CAP + 1 },
         opts,
       );
       const raw = unwrapList(payload, "wall");

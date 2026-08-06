@@ -182,6 +182,7 @@ describe("runGetActivity sources", () => {
     expect(result.structured["source"]).toBe("record");
     expect(entriesOf(result)).toEqual([wallEntry()]);
     expect(result.structured["count"]).toBe(1);
+    expect(result.structured["returned"]).toBe(1);
     expect(result.structured["truncated"]).toBe(false);
     expect(result.isError).toBe(false);
   });
@@ -280,6 +281,7 @@ describe("runGetActivity argument rules", () => {
       expect(String(entry["hint"])).toContain(hintFragment);
       expect(result.structured["source"]).toBe(args.source);
       expect(result.structured["count"]).toBe(0);
+      expect(result.structured["returned"]).toBe(0);
       expect(result.text).toContain("ERROR BAD_PARAMS");
     });
   }
@@ -302,7 +304,9 @@ describe("runGetActivity crm paging", () => {
       "Synthetic feed entry 7",
       "Synthetic feed entry 14",
     ]);
-    expect(first.structured["count"]).toBe(3);
+    // `count` is the page upstream sent; `returned` is what survived the filter.
+    expect(first.structured["count"]).toBe(20);
+    expect(first.structured["returned"]).toBe(3);
     expect(first.structured["hasMore"]).toBe(true);
     expect(decodeCursor(cursorOf(first), "crm")).toEqual({ v: 1, k: "crm", o: 20 });
 
@@ -368,6 +372,8 @@ describe("runGetActivity crm paging", () => {
     });
 
     expect(entriesOf(result)).toHaveLength(4);
+    expect(result.structured["count"]).toBe(4);
+    expect(result.structured["returned"]).toBe(4);
     expect(result.structured["hasMore"]).toBe(false);
     expect(result.structured["nextCursor"]).toBeUndefined();
   });
@@ -401,7 +407,9 @@ describe("runGetActivity task paging", () => {
     expect(tasksOf(third).map((item) => item.id)).toEqual(
       Array.from({ length: 10 }, (_value, index) => taskAt(index + 40).id),
     );
-    expect(third.structured["count"]).toBe(10);
+    // `count` is the raw page upstream sent; `returned` is this slice of it.
+    expect(third.structured["count"]).toBe(50);
+    expect(third.structured["returned"]).toBe(10);
     expect(decodeCursor(cursorOf(third), "tasks")).toEqual({ v: 1, k: "tasks", o: 50 });
 
     // All three slices come from the same upstream page.
@@ -531,6 +539,7 @@ describe("runGetActivity record walls", () => {
 
     expect(entriesOf(result)).toHaveLength(10);
     expect(result.structured["count"]).toBe(120);
+    expect(result.structured["returned"]).toBe(10);
     expect(result.structured["truncated"]).toBe(true);
 
     const short = fakeActivity({
@@ -548,6 +557,7 @@ describe("runGetActivity record walls", () => {
 
     expect(entriesOf(sliced)).toHaveLength(2);
     expect(sliced.structured["count"]).toBe(3);
+    expect(sliced.structured["returned"]).toBe(2);
     expect(sliced.structured["truncated"]).toBe(true);
   });
 });
@@ -576,7 +586,8 @@ describe("runGetActivity output discipline", () => {
       record: { kind: "deal", id: "deal-synthetic-401" },
     });
 
-    expect(result.text).toBe("get_activity record: 1 of 1");
+    // One number, not "1 of 1": the second one would carry no information.
+    expect(result.text).toBe("get_activity record: 1");
     expect(result.text).not.toContain("IGNORE");
     expect(result.text).not.toContain("SENSITIVE");
     // The data channel still carries it: stripped, typed, and clearly data.
@@ -591,7 +602,7 @@ describe("runGetActivity output discipline", () => {
       source: "tasks",
       limit: 20,
     });
-    expect(tasks.text).toBe("get_activity tasks: 20 of 20 (more)");
+    expect(tasks.text).toBe("get_activity tasks: 20 of 50 (more)");
 
     const crm = await runGetActivity(records.fetchers, activity.fetchers, {
       source: "crm",
@@ -599,7 +610,14 @@ describe("runGetActivity output discipline", () => {
       typeName: "email",
       limit: 20,
     });
-    expect(crm.text).toBe("get_activity crm: 3 of 3 (more)");
+    expect(crm.text).toBe("get_activity crm: 3 of 20 (more)");
+
+    const wall = await runGetActivity(records.fetchers, activity.fetchers, {
+      source: "record",
+      record: { kind: "deal", id: "deal-synthetic-401" },
+    });
+    // Nothing was held back, so one number says everything two would.
+    expect(wall.text).toBe("get_activity record: 1");
   });
 
   test("an upstream failure answers with a sanitized error entry", async () => {

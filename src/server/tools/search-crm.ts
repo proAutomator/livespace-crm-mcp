@@ -408,12 +408,15 @@ async function phraseEnvelope(
   if (signal !== undefined) opts.signal = signal;
   const found = await fetchers.searchPhrase(opts);
   const hits = found.hits.slice(0, limit);
-  // Phrase mode has no cursor: `hasMore` only says the cap trimmed the hits.
+  // Phrase mode has no cursor, so `hasMore` answers one question: did the page
+  // come back FULL, meaning the cap may have trimmed matches away? Comparing
+  // against the returned hits instead would call a page complete whenever a row
+  // was dropped for having no id.
   return {
     hits,
     count: found.rawCount,
     returned: hits.length,
-    hasMore: found.rawCount > hits.length,
+    hasMore: found.rawCount >= limit,
   };
 }
 
