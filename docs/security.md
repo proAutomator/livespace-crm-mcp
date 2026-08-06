@@ -1,7 +1,7 @@
 # Security design
 
 This document is the threat model and the binding security requirements for
-`livespace-mcp`. Code that violates a MUST here does not ship.
+`livespace-crm-mcp`. Code that violates a MUST here does not ship.
 
 ## Principles
 

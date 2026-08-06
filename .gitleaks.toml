@@ -1,4 +1,4 @@
-title = "livespace-mcp gitleaks config"
+title = "livespace-crm-mcp gitleaks config"
 
 [extend]
 useDefault = true
