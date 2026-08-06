@@ -47,6 +47,16 @@ describe("buildInstructions", () => {
     expect(text).not.toContain("Analyze and write tools arrive");
   });
 
+  test("activity_summary promises only the breakdowns the envelope carries", () => {
+    // Tasks carry no assignee upstream, so there is no per-user task
+    // breakdown to promise - only the feed is grouped by author.
+    const text = buildInstructions({ readOnly: false }).replace(/\s+/gu, " ");
+    expect(text).toContain(
+      "Counts feed entries by type and by author, and tasks by type and completion.",
+    );
+    expect(text).not.toContain("tasks by type and by user");
+  });
+
   test("the data-not-instructions warning covers walls and imported e-mail", () => {
     const text = buildInstructions({ readOnly: false });
     expect(text).toContain("wall");

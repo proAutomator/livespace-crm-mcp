@@ -231,9 +231,10 @@ export const analyzeToolConfig = {
 process and stage and takes an optional processId scope; "stage_conversion"
 needs processId and estimates stage-to-stage conversion inside it;
 "activity_summary" needs dateFrom and dateTo (YYYY-MM-DD) and counts feed
-entries and tasks by type and by user; "forecast_vs_realization" needs the
-same period, weighs open deals due in it against the deals won and lost in
-it, and takes an optional processId scope. Take process ids from
+entries by type and by author, and tasks by type and completion;
+"forecast_vs_realization" needs the same period, weighs open deals due in it
+against the deals won and lost in it, and takes an optional processId
+scope. Take process ids from
 crm_metadata; never guess them. Notes: Livespace has no aggregations, so
 every number is computed over a window this server fetched - up to 500
 deals per status, 1000 feed entries and 500 tasks, and one call stops after

@@ -269,6 +269,16 @@ describe("analyzeToolConfig", () => {
     expect(json["oneOf"]).toBeUndefined();
   });
 
+  test("the description promises only the breakdowns the schema carries", () => {
+    // `byUser` exists on the FEED envelope only: a TaskRecord has no assignee,
+    // so a per-user task breakdown would be a promise nothing can keep.
+    const description = analyzeToolConfig.description.replace(/\s+/gu, " ");
+    expect(description).toContain(
+      "counts feed entries by type and by author, and tasks by type and completion",
+    );
+    expect(description).not.toContain("tasks by type and by user");
+  });
+
   test("the budget is one minute of wall clock", () => {
     expect(ANALYZE_BUDGET_MS).toBe(60_000);
   });

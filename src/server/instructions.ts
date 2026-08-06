@@ -26,7 +26,8 @@ Quick start:
 - "stage_conversion": needs processId. The API keeps no stage history, so
   this is a point-in-time estimate from where deals stand right now.
 - "activity_summary": needs dateFrom and dateTo (YYYY-MM-DD, both
-  inclusive). Counts feed entries and tasks by type and by user.
+  inclusive). Counts feed entries by type and by author, and tasks by type
+  and completion.
 - "forecast_vs_realization": needs the same period. Weighs open deals due in
   it against the deals won and lost in it.
 Every answer covers a window this server fetched itself, never the whole CRM:
