@@ -400,6 +400,18 @@ export const VERIFICATION_UNCHECKED: ToolError = {
   hint: "Re-read the record if you need proof; do not retry the write.",
 };
 
+/**
+ * The reason an item never made it into the plan: the call's budget ran out
+ * while the earlier items were being looked up. It is a BLOCK, not a silent
+ * skip - the plan phase costs upstream reads, so the caller has to know which
+ * items were never considered and why.
+ */
+export const PLAN_BUDGET_EXPIRED: ToolError = {
+  code: "BUDGET_EXPIRED",
+  message: "The call ran out of time before this item was planned.",
+  hint: "Nothing was written for it. Re-send this item in a smaller batch.",
+};
+
 function base(item: ExecutableItem): { index: number; action: string; kind: string } {
   return { index: item.index, action: item.action, kind: item.kind };
 }
@@ -642,6 +654,13 @@ export async function executePlan(
     if (opts.signal?.aborted) cancel();
     if (!halted && Date.now() >= opts.deadlineAt) halted = true;
 
+    // Before the halt guard: a blocked item already carries the reason it
+    // cannot run - often the very reason the batch halted - and a bare
+    // `not_attempted` would swallow it.
+    if (item.status === "blocked") {
+      results.push({ ...base(item), status: "error", error: item.error });
+      continue;
+    }
     if (halted) {
       results.push({ ...base(item), status: "not_attempted" });
       continue;
@@ -652,10 +671,6 @@ export async function executePlan(
         status: "skipped_duplicate",
         existingId: item.existingId,
       });
-      continue;
-    }
-    if (item.status === "blocked") {
-      results.push({ ...base(item), status: "error", error: item.error });
       continue;
     }
 

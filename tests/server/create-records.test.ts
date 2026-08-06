@@ -25,7 +25,11 @@ import {
 } from "../../src/server/tools/create-records.js";
 import type { MetadataService } from "../../src/server/tools/crm-metadata.js";
 import type { ToolError, ToolRunResult } from "../../src/server/tools/tool-error.js";
-import type { WriteState } from "../../src/server/tools/write-support.js";
+import {
+  PLAN_BUDGET_EXPIRED,
+  WRITE_BUDGET_MS,
+  type WriteState,
+} from "../../src/server/tools/write-support.js";
 import { company, deal, person, task } from "../support/records.js";
 
 /**
@@ -266,6 +270,26 @@ async function rejection(promise: Promise<unknown>): Promise<unknown> {
     return error;
   }
   throw new Error("expected the promise to reject");
+}
+
+/**
+ * A clock that sits past the budget from its THIRD read on: read #1 mints the
+ * deadline, read #2 is the first item's own check, and every check after that
+ * finds the budget spent.
+ */
+async function budgetSpentAfterFirstItem<T>(scenario: () => Promise<T>): Promise<T> {
+  const realNow = Date.now;
+  const base = realNow();
+  let reads = 0;
+  Date.now = (): number => {
+    reads += 1;
+    return reads <= 2 ? base : base + WRITE_BUDGET_MS + 1_000;
+  };
+  try {
+    return await scenario();
+  } finally {
+    Date.now = realNow;
+  }
 }
 
 function personArg(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -1167,6 +1191,66 @@ describe("execution", () => {
     expect(result.text).toBe(
       "create_records: attempted 2 of 3 - ok 1, skipped 0, errors 1, unknown 0, not attempted 1.",
     );
+    expectPayload(result);
+  });
+
+  test("a rate-limited lookup stops the plan instead of asking again", async () => {
+    // An upstream that said stop is not hammered - and the plan phase is where
+    // it says it first, on a dryRun that never reaches the executor at all.
+    const scenario = fakeWorld({ findPerson: () => RATE_LIMITED });
+
+    const result = asRun(
+      await run(
+        scenario,
+        args({
+          persons: [
+            personArg({ emails: ["one@synthetic.example"] }),
+            personArg({ emails: ["two@synthetic.example"] }),
+          ],
+          companies: [{ name: "Synthetic Company Alpha" }],
+          dryRun: true,
+        }),
+      ),
+    );
+
+    expect(scenario.count("findPersonByEmail")).toBe(1);
+    expect(scenario.count("findCompanyByName")).toBe(0);
+    expect(planOf(result).map((item) => item["status"])).toEqual([
+      "blocked",
+      "blocked",
+      "blocked",
+    ]);
+    expect(planOf(result).map((item) => (item["error"] as ToolError).code)).toEqual([
+      "RATE_LIMITED",
+      "RATE_LIMITED",
+      "RATE_LIMITED",
+    ]);
+    expect(result.isError).toBe(false);
+    expectPayload(result);
+  });
+
+  test("the plan phase stops at the budget and blocks what it never reached", async () => {
+    const scenario = fakeWorld();
+
+    const result = asRun(
+      await budgetSpentAfterFirstItem(() =>
+        run(
+          scenario,
+          args({
+            persons: [
+              personArg({ emails: ["one@synthetic.example"] }),
+              personArg({ emails: ["two@synthetic.example"] }),
+            ],
+            dryRun: true,
+          }),
+        ),
+      ),
+    );
+
+    expect(scenario.count("findPersonByEmail")).toBe(1);
+    expect(planOf(result).map((item) => item["status"])).toEqual(["create", "blocked"]);
+    expect(planOf(result)[1]?.["error"]).toEqual(PLAN_BUDGET_EXPIRED);
+    expect(result.isError).toBe(false);
     expectPayload(result);
   });
 

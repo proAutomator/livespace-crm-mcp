@@ -726,6 +726,41 @@ describe("executePlan", () => {
     expect(results.map((entry) => entry.status)).toEqual(["ok", "not_attempted"]);
   });
 
+  test("a halted batch still reports why a blocked item was blocked", async () => {
+    // The plan phase is what blocks an item, and it is also what can burn the
+    // budget. Swallowing the reason into a bare not_attempted would hide the
+    // halt from the only reader who can act on it.
+    const writes: string[] = [];
+    const { deps } = fakeRecords({ "person:person-synthetic-001": person() });
+    const deadlineAt = Date.now() + WRITE_BUDGET_MS;
+    const blocked = {
+      code: "RATE_LIMITED",
+      message: "Livespace rate-limited the request (HTTP 429).",
+      hint: "Wait before retrying; reduce request frequency if it persists.",
+    };
+
+    const results = await pastTheBudget(() =>
+      run(
+        deps,
+        [
+          createPerson(0, writes),
+          {
+            index: 1,
+            action: "create_person",
+            kind: "person",
+            status: "blocked",
+            error: blocked,
+          },
+        ],
+        { deadlineAt },
+      ),
+    );
+
+    expect(writes).toEqual(["create_person#0"]);
+    expect(results.map((entry) => entry.status)).toEqual(["ok", "error"]);
+    expect(results[1]?.error).toEqual(blocked);
+  });
+
   test("an abort between items is audited on stderr and then rejects", async () => {
     const writes: string[] = [];
     const { deps } = fakeRecords({

@@ -37,6 +37,7 @@ import {
   newJti,
   readElicitedConfirm,
   CONFIRM_INPUT_KEY,
+  PLAN_BUDGET_EXPIRED,
   WRITE_BATCH_CAP,
   WRITE_BUDGET_MS,
   type ExecutableItem,
@@ -594,15 +595,22 @@ interface PlannedBatch {
  * follows it build the same plan the same way, which is what makes comparing
  * their digests meaningful - a record edited by someone else in between shows
  * up as a different `before` and sends the batch back for a fresh yes.
+ *
+ * They are upstream calls like any other, so they answer to the call's budget
+ * and to a rate-limited upstream: once either says stop, the remaining items
+ * are blocked with that reason and no further read is issued. A preview never
+ * reaches the executor, where those rules used to live alone.
  */
 async function buildPlan(
   deps: UpdateRecordsDeps,
   prepared: readonly PreparedItem[],
   signal: AbortSignal | undefined,
+  deadlineAt: number,
 ): Promise<PlannedBatch> {
   const opts: WriteCallOptions = signal === undefined ? {} : { signal };
   const items: WriteItemPlan[] = [];
   const executable: ExecutableItem[] = [];
+  let halt: ToolError | undefined;
 
   for (const entry of prepared) {
     const base = { index: entry.index, action: entry.action, kind: entry.kind };
@@ -612,12 +620,27 @@ async function buildPlan(
       executable.push({ ...base, status: "blocked", error });
     };
 
+    // Between items, in this order - never mid-read, the same rule the
+    // executor follows.
+    if (halt === undefined) {
+      if (signal?.aborted) throw cancelledError();
+      if (Date.now() >= deadlineAt) halt = PLAN_BUDGET_EXPIRED;
+    }
+    if (halt !== undefined) {
+      block(halt);
+      continue;
+    }
+
     let record: RecordDataMap[RecordKind] | null;
     try {
       record = await deps.records.getRecord(entry.kind, entry.id, opts);
     } catch (error) {
       // A target we could not read is a target we will not write over.
-      block(toEntry(error, signal));
+      const reason = toEntry(error, signal);
+      // The upstream said stop: this item is blocked and so is every one
+      // after it - none of them is read at all.
+      if (reason.code === "RATE_LIMITED") halt = reason;
+      block(reason);
       continue;
     }
     if (record === null) {
@@ -754,7 +777,7 @@ export async function runUpdateRecords(
   // first read.
   if (!("mode" in decision)) return failed(decision);
 
-  const batch = await buildPlan(deps, prepared, signal);
+  const batch = await buildPlan(deps, prepared, signal, deadlineAt);
   const digest = await hashArgs(batch.items);
 
   if (decision.mode === "input-required") {

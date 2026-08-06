@@ -107,7 +107,10 @@ plus a generated `id` - the echo proves nothing about persistence
   (execution note 2).
 - **A RATE_LIMITED item stops the batch**: the failing item is `error`,
   every remaining item `not_attempted` (never hammer an upstream that
-  said stop).
+  said stop). The rule holds in the PLAN phase too, where the lookups
+  live: a rate-limited lookup or target read blocks its own item and
+  every item after it with the same error, and no further read is issued
+  - a dryRun that never reaches the executor included (execution note 3).
 - **Abort accountability**: the abort signal is checked between items
   only. Before the CANCELLED throw, ONE stderr audit line with counts and
   written ids only (no names, no payloads - par. 6):
@@ -668,3 +671,18 @@ what changed.
    the whole pass runs inside `withCancelAudit` - the accounting
    `executePlan` uses, exported so the wording has one spelling. The
    pre-write abort keeps writing no line, because it wrote nothing.
+
+3. **The plan phase honoured neither the budget nor a stop signal.**
+   `buildPlan` in create_records and update_records looped over every item
+   issuing upstream reads with no deadline and no halt: a 429 on the first
+   lookup blocked that one item and the loop went on to fire the other
+   nine, each internally retried up to three times - dozens of requests
+   into an upstream that had just said stop, on a pure `dryRun` that never
+   reaches the executor where the halt rule lived. Both loops now take the
+   call's `deadlineAt`, check the abort signal and then the clock between
+   items, and carry a halt reason: RATE_LIMITED from a lookup or a target
+   read blocks its own item and every item after it with that same error,
+   and an expired budget blocks the rest with `PLAN_BUDGET_EXPIRED`.
+   `executePlan` also tests `blocked` BEFORE its halted guard now, so a
+   halted batch reports why each item was blocked instead of flattening
+   the reason into a bare `not_attempted`.

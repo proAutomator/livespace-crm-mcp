@@ -35,6 +35,7 @@ import {
   newJti,
   readElicitedConfirm,
   CONFIRM_INPUT_KEY,
+  PLAN_BUDGET_EXPIRED,
   WRITE_BATCH_CAP,
   WRITE_BUDGET_MS,
   type CreateResolution,
@@ -467,6 +468,13 @@ interface PlanState {
   opts: WriteCallOptions;
   signal: AbortSignal | undefined;
   /**
+   * Why the plan stopped: a rate-limited upstream, or a spent budget. Once
+   * set, every remaining item is blocked with it and no further lookup is
+   * issued - the plan phase costs reads too, and an upstream that said stop is
+   * not hammered by the ten lookups that would otherwise follow.
+   */
+  halt: ToolError | undefined;
+  /**
    * Ids that already existed when the plan was built. The array is filled while
    * planning and read at execute time, where it guards the unknown-outcome
    * resolution: landing on a record that was already there proves nothing.
@@ -569,7 +577,11 @@ async function findClaim(
     try {
       hit = await find(identity, state.opts);
     } catch (error) {
-      return { lookup, error: toEntry(error, state.signal) };
+      const entry = toEntry(error, state.signal);
+      // The upstream said stop: this item is blocked and so is every one after
+      // it - none of them is looked up at all.
+      if (entry.code === "RATE_LIMITED") state.halt = entry;
+      return { lookup, error: entry };
     }
     if (hit === null) {
       lookup = "missed";
@@ -617,6 +629,10 @@ async function planPerson(
   const emails = channels(item.emails);
   const input = personInput(item, emails, channels(item.phones));
   const summary = { ...input } as Record<string, unknown>;
+  if (state.halt !== undefined) {
+    pushBlocked(state, base, summary, state.halt);
+    return;
+  }
   // Two spellings of one address are one identity: they are looked up once.
   const identities = [...new Set(emails.map(normalizeIdentity))];
   const find = (email: string, opts: WriteCallOptions): Promise<RecordPointer | null> =>
@@ -661,6 +677,10 @@ async function planCompany(
     ...(item.nip === undefined ? {} : { nip: item.nip }),
   };
   const summary = { ...input } as Record<string, unknown>;
+  if (state.halt !== undefined) {
+    pushBlocked(state, base, summary, state.halt);
+    return;
+  }
   // The lookup gets the trimmed name; the local compare is case-insensitive, so
   // the case the caller sent is what gets written.
   const wanted = item.name.trim();
@@ -712,6 +732,10 @@ function planDeal(state: PlanState, item: DealItem, index: number): void {
     ...(item.budget === undefined ? {} : { budget: item.budget.map(budgetLine) }),
   };
   const summary = { ...input } as Record<string, unknown>;
+  if (state.halt !== undefined) {
+    pushBlocked(state, base, summary, state.halt);
+    return;
+  }
   state.batch.items.push({ ...base, status: "create", summary });
   state.batch.executable.push({
     ...base,
@@ -732,6 +756,10 @@ function planTask(state: PlanState, item: TaskItem, index: number): void {
     ...(item.description === undefined ? {} : { description: item.description }),
   };
   const summary = { ...input } as Record<string, unknown>;
+  if (state.halt !== undefined) {
+    pushBlocked(state, base, summary, state.halt);
+    return;
+  }
   state.batch.items.push({ ...base, status: "create", summary });
   state.batch.executable.push({
     ...base,
@@ -742,21 +770,38 @@ function planTask(state: PlanState, item: TaskItem, index: number): void {
 }
 
 /**
+ * Between items, in this order - never mid-lookup, the same rule the executor
+ * follows. An abort ends the call; a spent budget stops the plan, and every
+ * item it never reached is blocked rather than silently dropped.
+ */
+function checkPlanBudget(state: PlanState, deadlineAt: number): void {
+  if (state.halt !== undefined) return;
+  if (state.signal?.aborted) throw cancelledError();
+  if (Date.now() >= deadlineAt) state.halt = PLAN_BUDGET_EXPIRED;
+}
+
+/**
  * Builds the plan in declaration order - persons, companies, deals, tasks - and
  * numbers the items globally, so a result lines up with the batch that was sent.
  * The lookups run here and nowhere else: a preview and the execute round that
  * follows it build the same plan the same way, which is what makes comparing
  * their digests meaningful.
+ *
+ * They are upstream calls like any other, so they answer to the call's budget
+ * and to a rate-limited upstream - a preview never reaches the executor, where
+ * those rules used to live alone.
  */
 async function buildPlan(
   deps: CreateRecordsDeps,
   args: CreateRecordsArgs,
   signal: AbortSignal | undefined,
+  deadlineAt: number,
 ): Promise<PlannedBatch> {
   const state: PlanState = {
     writes: deps.writes,
     opts: signal === undefined ? {} : { signal },
     signal,
+    halt: undefined,
     knownIds: [],
     claims: new Map(),
     batch: { items: [], executable: [], pending: new Map() },
@@ -775,6 +820,7 @@ async function buildPlan(
 
   let index = 0;
   for (const item of persons) {
+    checkPlanBudget(state, deadlineAt);
     await planPerson(
       state,
       item,
@@ -784,14 +830,17 @@ async function buildPlan(
     index += 1;
   }
   for (const item of companies) {
+    checkPlanBudget(state, deadlineAt);
     await planCompany(state, item, index, unique(companyCounts, [normalizeIdentity(item.name)]));
     index += 1;
   }
   for (const item of args.deals ?? []) {
+    checkPlanBudget(state, deadlineAt);
     planDeal(state, item, index);
     index += 1;
   }
   for (const item of args.tasks ?? []) {
+    checkPlanBudget(state, deadlineAt);
     planTask(state, item, index);
     index += 1;
   }
@@ -952,7 +1001,7 @@ export async function runCreateRecords(
   const processError = await validateProcesses(deps.metadata, args.deals ?? [], signal);
   if (processError !== null) return failed(processError);
 
-  const batch = await buildPlan(deps, args, signal);
+  const batch = await buildPlan(deps, args, signal, deadlineAt);
   const digest = await hashArgs(batch.items);
 
   if (decision.mode === "input-required") {

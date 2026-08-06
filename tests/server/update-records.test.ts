@@ -22,7 +22,11 @@ import {
   type UpdateRecordsDeps,
   type UpdateRecordsResult,
 } from "../../src/server/tools/update-records.js";
-import type { WriteState } from "../../src/server/tools/write-support.js";
+import {
+  PLAN_BUDGET_EXPIRED,
+  WRITE_BUDGET_MS,
+  type WriteState,
+} from "../../src/server/tools/write-support.js";
 import { company, deal, person, task } from "../support/records.js";
 
 /**
@@ -257,6 +261,26 @@ async function rejection(promise: Promise<unknown>): Promise<unknown> {
     return error;
   }
   throw new Error("expected the promise to reject");
+}
+
+/**
+ * A clock that sits past the budget from its THIRD read on: read #1 mints the
+ * deadline, read #2 is the first item's own check, and every check after that
+ * finds the budget spent.
+ */
+async function budgetSpentAfterFirstItem<T>(scenario: () => Promise<T>): Promise<T> {
+  const realNow = Date.now;
+  const base = realNow();
+  let reads = 0;
+  Date.now = (): number => {
+    reads += 1;
+    return reads <= 2 ? base : base + WRITE_BUDGET_MS + 1_000;
+  };
+  try {
+    return await scenario();
+  } finally {
+    Date.now = realNow;
+  }
 }
 
 function args(value: Record<string, unknown>): UpdateRecordsArgs {
@@ -1105,6 +1129,60 @@ describe("execution", () => {
       unknownOutcome: 0,
       notAttempted: 1,
     });
+    expectPayload(result);
+  });
+
+  test("a rate-limited target read stops the plan instead of reading again", async () => {
+    // An upstream that said stop is not hammered - and the plan phase is where
+    // it says it first, on a dryRun that never reaches the executor at all.
+    const scenario = world({ records: { [`person:${PERSON_ID}`]: RATE_LIMITED } });
+
+    const result = asRun(
+      await run(
+        scenario,
+        args({
+          persons: [{ id: PERSON_ID, firstname: "Anna" }],
+          companies: [{ id: COMPANY_ID, nip: "0000000002" }],
+          dryRun: true,
+        }),
+      ),
+    );
+
+    expect(scenario.count("getRecord")).toBe(1);
+    expect(planOf(result).map((item) => item["status"])).toEqual(["blocked", "blocked"]);
+    expect(planOf(result).map((item) => (item["error"] as ToolError).code)).toEqual([
+      "RATE_LIMITED",
+      "RATE_LIMITED",
+    ]);
+    expect(result.isError).toBe(false);
+    expectPayload(result);
+  });
+
+  test("the plan phase stops at the budget and blocks what it never reached", async () => {
+    const scenario = world({
+      records: {
+        [`person:${PERSON_ID}`]: person({ id: PERSON_ID }),
+        [`company:${COMPANY_ID}`]: company({ id: COMPANY_ID }),
+      },
+    });
+
+    const result = asRun(
+      await budgetSpentAfterFirstItem(() =>
+        run(
+          scenario,
+          args({
+            persons: [{ id: PERSON_ID, firstname: "Anna" }],
+            companies: [{ id: COMPANY_ID, nip: "0000000002" }],
+            dryRun: true,
+          }),
+        ),
+      ),
+    );
+
+    expect(scenario.inputs("getRecord")).toEqual([`person:${PERSON_ID}`]);
+    expect(planOf(result).map((item) => item["status"])).toEqual(["update", "blocked"]);
+    expect(planOf(result)[1]?.["error"]).toEqual(PLAN_BUDGET_EXPIRED);
+    expect(result.isError).toBe(false);
     expectPayload(result);
   });
 
