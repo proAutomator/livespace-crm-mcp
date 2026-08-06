@@ -15,6 +15,7 @@ import {
   type SearchOptions,
 } from "../../livespace/records.js";
 import { decodeCursor, encodeCursor } from "../cursor.js";
+import { companySchema, dealSchema, personSchema } from "./record-schemas.js";
 import { toToolError, type ToolError } from "./tool-error.js";
 
 /**
@@ -103,87 +104,8 @@ const DEAL_ONLY_FILTERS = [
   "modifiedFrom",
 ] as const;
 
-const dealCountSchema = z
-  .strictObject({
-    all: z.number(),
-    open: z.number(),
-    won: z.number(),
-    lost: z.number(),
-  })
-  .nullable();
-
-const personSchema = z.strictObject({
-  id: z.string(),
-  name: z.string(),
-  email: z.string(),
-  phone: z.string(),
-  companyName: z.string(),
-  companyId: z.string().nullable(),
-  ownerName: z.string(),
-  ownerId: z.string().nullable(),
-  tags: z.array(z.string()),
-  source: z.string(),
-  note: z.string(),
-  created: z.string(),
-  modified: z.string(),
-  lastActiveDate: z.string(),
-  dealCount: dealCountSchema,
-  cell: z.string(),
-  www: z.string(),
-  address: z.string(),
-  groups: z.array(z.string()),
-});
-
-const companySchema = z.strictObject({
-  id: z.string(),
-  name: z.string(),
-  nip: z.string(),
-  email: z.string(),
-  phone: z.string(),
-  ownerName: z.string(),
-  ownerId: z.string().nullable(),
-  tags: z.array(z.string()),
-  source: z.string(),
-  note: z.string(),
-  created: z.string(),
-  modified: z.string(),
-  dealCount: dealCountSchema,
-  www: z.string(),
-  address: z.string(),
-  groups: z.array(z.string()),
-});
-
-const dealSchema = z.strictObject({
-  id: z.string(),
-  name: z.string(),
-  status: z.string(),
-  value: z.number().nullable(),
-  currency: z.string(),
-  probability: z.number().nullable(),
-  processId: z.string(),
-  processName: z.string(),
-  stageId: z.string(),
-  stageName: z.string(),
-  substageId: z.string(),
-  substageName: z.string(),
-  companyId: z.string().nullable(),
-  companyName: z.string(),
-  contactId: z.string().nullable(),
-  contactName: z.string(),
-  ownerId: z.string().nullable(),
-  ownerName: z.string(),
-  dateEnd: z.string(),
-  created: z.string(),
-  modified: z.string(),
-  lastActiveDate: z.string(),
-  tags: z.array(z.string()),
-  source: z.string(),
-  note: z.string(),
-  groups: z.array(z.string()),
-  creatorName: z.string(),
-  statusChangeDate: z.string(),
-});
-
+// The record shapes are shared with get_records via ./record-schemas.js; only
+// the search-specific hit shape lives here.
 const hitSchema = z.strictObject({
   id: z.string(),
   name: z.string(),
