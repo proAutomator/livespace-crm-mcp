@@ -111,6 +111,19 @@ const RESULT_CODE_MAP: Record<number, MappedError> = {
   },
 };
 
+/**
+ * One shared cancellation error. Callers key off the abort SIGNAL, not off the
+ * shape of the caught error: an abort arrives as a DOMException, a plain Error
+ * or a bare string reason depending on who aborted.
+ */
+export function cancelledError(): LivespaceError {
+  return new LivespaceError(
+    "CANCELLED",
+    "The request was cancelled by the caller.",
+    "Retry the call if the result is still needed.",
+  );
+}
+
 export function errorFromEnvelope(resultCode: number): LivespaceError {
   const mapped = RESULT_CODE_MAP[resultCode];
   if (mapped) {

@@ -289,16 +289,6 @@ function mapPermissions(data: unknown): Record<string, boolean> {
   return permissions;
 }
 
-function resolveCurrentUserId(email: string, users: unknown): string | null {
-  if (!email || !Array.isArray(users)) return null;
-  for (const element of users) {
-    if (element === null || typeof element !== "object") continue;
-    const raw = element as Record<string, unknown>;
-    if (asName(raw["email"]) === email) return readId(element);
-  }
-  return null;
-}
-
 export function createMetadataFetchers(
   client: Pick<LivespaceClient, "call">,
 ): MetadataFetchers {
@@ -322,14 +312,13 @@ export function createMetadataFetchers(
     currentUser: async (opts) => {
       const info = asRecord(await call("Default", "User_getInfo", opts));
       const email = asName(info["email"]);
-      // The id is a nicety resolved from a second call; losing it must not
-      // fail the section.
-      const users = await call("Default", "User_getAll", opts).catch(() => null);
       const fallback = [asName(info["firstname"]), asName(info["lastname"])]
         .filter(Boolean)
         .join(" ");
+      // The id is resolved by the service layer from the cached `users`
+      // section, so both sections cost one User_getAll per ttl.
       return {
-        id: resolveCurrentUserId(email, users),
+        id: null,
         name: asName(info["name"]) || fallback,
         email,
         position: asName(info["position"]),

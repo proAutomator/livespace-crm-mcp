@@ -437,19 +437,11 @@ describe("currentUser mapper", () => {
     ],
   };
 
-  const users = [
-    { id: "user-synthetic-9", name: "Synthetic Other", email: "other@synthetic.example" },
-    { id: "user-synthetic-1", name: "Synthetic User One", email: "one@synthetic.example" },
-  ];
-
-  test("resolves the id by exact email match against the user list", async () => {
-    const { fetchers } = fetchersFor({
-      "Default/User_getInfo": info,
-      "Default/User_getAll": users,
-    });
+  test("maps the info payload and leaves the id to the service layer", async () => {
+    const { fetchers, calls } = fetchersFor({ "Default/User_getInfo": info });
 
     expect(await fetchers.currentUser()).toEqual({
-      id: "user-synthetic-1",
+      id: null,
       name: "Synthetic User One",
       email: "one@synthetic.example",
       position: "Synthetic Position",
@@ -458,31 +450,9 @@ describe("currentUser mapper", () => {
         { id: "team-synthetic-1", name: "Synthetic Team", roles: ["Synthetic Role"] },
       ],
     });
-  });
-
-  test("no email match leaves the id null", async () => {
-    const { fetchers } = fetchersFor({
-      "Default/User_getInfo": info,
-      "Default/User_getAll": [users[0]],
-    });
-
-    expect((await fetchers.currentUser()).id).toBeNull();
-  });
-
-  test("a failing user list still yields the current user with a null id", async () => {
-    const { fetchers } = fetchersFor({
-      "Default/User_getInfo": info,
-      "Default/User_getAll": new LivespaceError(
-        "PERMISSION_DENIED",
-        "The API key's user lacks permission for this record or action (540).",
-        "Use a record the key's user can access.",
-        540,
-      ),
-    });
-
-    const current = await fetchers.currentUser();
-    expect(current.id).toBeNull();
-    expect(current.name).toBe("Synthetic User One");
+    // The user list is read through the cached `users` section instead, so one
+    // User_getAll serves both sections per ttl.
+    expect(calls).toHaveLength(1);
   });
 
   test("normalizes permission values and skips unrecognized ones", async () => {
@@ -501,7 +471,6 @@ describe("currentUser mapper", () => {
           },
         },
       },
-      "Default/User_getAll": users,
     });
 
     expect((await fetchers.currentUser()).permissions).toEqual({
@@ -516,8 +485,10 @@ describe("currentUser mapper", () => {
 
   test("absent app_settings yields no permissions", async () => {
     const { fetchers } = fetchersFor({
-      "Default/User_getInfo": { name: "Synthetic User One", email: "one@synthetic.example" },
-      "Default/User_getAll": users,
+      "Default/User_getInfo": {
+        name: "Synthetic User One",
+        email: "one@synthetic.example",
+      },
     });
 
     const current = await fetchers.currentUser();
@@ -549,13 +520,7 @@ describe("endpoint table", () => {
     ["taskTypes", [["Todo", "getTypes"]]],
     ["taskStatuses", [["Todo", "getStatuses"]]],
     ["products", [["Deal", "product_getAll"]]],
-    [
-      "currentUser",
-      [
-        ["Default", "User_getInfo"],
-        ["Default", "User_getAll"],
-      ],
-    ],
+    ["currentUser", [["Default", "User_getInfo"]]],
   ];
 
   test("the table covers every declared section", () => {

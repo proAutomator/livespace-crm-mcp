@@ -252,6 +252,30 @@ describe("runCrmMetadata", () => {
     expect((error as LivespaceError).code).toBe("CANCELLED");
   });
 
+  for (const [label, abort] of [
+    ["a DOMException reason", (c: AbortController) => c.abort()],
+    ["a string reason", (c: AbortController) => c.abort("synthetic cancel")],
+  ] as const) {
+    test(`a cancelled fetch surfaces as CANCELLED (${label})`, async () => {
+      // The real service over a client that never answers: the abort must not
+      // arrive as an UPSTREAM_ERROR section.
+      const client = { call: (() => new Promise(() => {})) as never };
+      const service = createMetadataService(client);
+      const controller = new AbortController();
+
+      const pending = runCrmMetadata(
+        service,
+        { sections: ["taskTypes"] },
+        { signal: controller.signal },
+      );
+      abort(controller);
+
+      const error = await rejection(pending);
+      expect(error).toBeInstanceOf(LivespaceError);
+      expect((error as LivespaceError).code).toBe("CANCELLED");
+    });
+  }
+
   test("stale sections are marked in both channels", async () => {
     const { service } = fakeService({
       taskTypes: {
@@ -429,6 +453,70 @@ describe("createMetadataService", () => {
         teams: [],
       },
     ]);
+  });
+
+  const CURRENT_USER_INFO = {
+    name: "Synthetic User One",
+    email: "one@synthetic.example",
+    position: "Synthetic Position",
+    app_settings: { permission: { contact_add: true } },
+  };
+
+  const USER_LIST = [
+    { id: "user-synthetic-9", name: "Synthetic Other", email: "other@synthetic.example" },
+    { id: "user-synthetic-1", name: "Synthetic User One", email: "one@synthetic.example" },
+  ];
+
+  test("currentUser gets its id from the cached user list", async () => {
+    const { client } = fakeClient({
+      "Default/User_getInfo": CURRENT_USER_INFO,
+      "Default/User_getAll": USER_LIST,
+    });
+    const service = createMetadataService(client);
+
+    const current = await service.get("currentUser");
+    expect(current.data.id).toBe("user-synthetic-1");
+    expect(current.data.name).toBe("Synthetic User One");
+  });
+
+  test("currentUser keeps a null id when no user matches the email", async () => {
+    const { client } = fakeClient({
+      "Default/User_getInfo": CURRENT_USER_INFO,
+      "Default/User_getAll": [USER_LIST[0]],
+    });
+    const service = createMetadataService(client);
+
+    expect((await service.get("currentUser")).data.id).toBeNull();
+  });
+
+  test("a failing user list still yields currentUser with a null id", async () => {
+    const { client } = fakeClient({
+      "Default/User_getInfo": CURRENT_USER_INFO,
+      "Default/User_getAll": new LivespaceError(
+        "PERMISSION_DENIED",
+        "The API key's user lacks permission for this record or action (540).",
+        "Use a record the key's user can access.",
+        540,
+      ),
+    });
+    const service = createMetadataService(client);
+
+    const current = await service.get("currentUser");
+    expect(current.data.id).toBeNull();
+    expect(current.data.name).toBe("Synthetic User One");
+  });
+
+  test("currentUser and users share a single User_getAll per ttl", async () => {
+    const { client, calls } = fakeClient({
+      "Default/User_getInfo": CURRENT_USER_INFO,
+      "Default/User_getAll": USER_LIST,
+    });
+    const service = createMetadataService(client);
+
+    await service.get("currentUser");
+    await service.get("users");
+
+    expect(calls.filter((key) => key === "Default/User_getAll")).toHaveLength(1);
   });
 
   test("serves stale data when a refresh fails", async () => {

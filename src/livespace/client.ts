@@ -1,6 +1,6 @@
 import type { LivespaceConfig } from "../config/env.js";
 import { buildSignature } from "./crypto.js";
-import { errorFromEnvelope, LivespaceError } from "./errors.js";
+import { cancelledError, errorFromEnvelope, LivespaceError } from "./errors.js";
 import { createThrottle } from "./throttle.js";
 
 interface Envelope {
@@ -68,14 +68,6 @@ function combineSignals(primary: AbortSignal, extra?: AbortSignal): CombinedSign
       extra.removeEventListener("abort", onExtra);
     },
   };
-}
-
-function cancelledError(): LivespaceError {
-  return new LivespaceError(
-    "CANCELLED",
-    "The request was cancelled by the caller.",
-    "Retry the call if the result is still needed.",
-  );
 }
 
 // Only the delta-seconds form is honored; HTTP-date values are ignored.

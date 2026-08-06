@@ -571,4 +571,32 @@ production CRM.
 
 ## Execution notes
 
-(fill in during execution)
+Findings from the adversarial review pass after the milestone was implemented.
+
+**Cache (`src/server/cache.ts`).** Three defects, all fixed:
+
+- a fetcher throwing synchronously settled `runFetch` before `get()` stored the
+  promise, so `finally` cleared the in-flight slot first and the rejected
+  promise stayed in `inFlight` forever - every later `get()` replayed it. The
+  fetch now goes through `Promise.resolve().then(fetch)`.
+- `invalidate()` left the in-flight fetch alone, so a result computed before the
+  invalidation resurrected the key. Keys now carry a generation counter;
+  `invalidate()` bumps it and a superseded fetch skips its writes.
+- retention only ran for keys that were read again. Every `get()` now sweeps all
+  entries and failures past `staleMaxMs`.
+
+**currentUser (plan step "currentUser fetches User_getInfo AND User_getAll").**
+Changed: the fetcher calls only `Default/User_getInfo` and returns `id: null`.
+The service resolves the id by reading the `users` section through the same
+cache, so the two sections cost ONE `User_getAll` per ttl instead of two calls
+per fan-out (docs/security.md par. 3). A failing user list still leaves `id`
+null and the section succeeds, as planned. The id-resolution tests moved from
+`tests/livespace/metadata.test.ts` to the service level in
+`tests/server/tools/crm-metadata.test.ts`.
+
+**Cancellation.** `cancelledError()` now lives in `src/livespace/errors.ts`
+(the client and the metadata tool had private copies). The service maps an
+aborted `cache.get` to `CANCELLED` by checking the SIGNAL state, not the error
+type - the abort reason can be a `DOMException`, a plain `Error` or a bare
+string, so name checks are unreliable. Without this the all-cancelled guard in
+`runCrmMetadata` never fired, because aborts arrived as `UPSTREAM_ERROR`.

@@ -1,11 +1,13 @@
 import * as z from "zod/v4";
 import type { LivespaceClient } from "../../livespace/client.js";
-import { LivespaceError } from "../../livespace/errors.js";
+import { cancelledError, LivespaceError } from "../../livespace/errors.js";
 import {
   createMetadataFetchers,
   METADATA_SECTIONS,
+  type CurrentUser,
   type MetadataSection,
   type SectionDataMap,
+  type UserInfo,
 } from "../../livespace/metadata.js";
 import { createTtlCache, type TtlCacheOptions } from "../cache.js";
 
@@ -47,19 +49,60 @@ export function createMetadataService(
   const fetchers = createMetadataFetchers(client);
   const cache = createTtlCache({ ...CACHE_DEFAULTS, ...cacheOpts });
 
+  // The current user's id lives in the user list, which the `users` section
+  // already caches - reading it through the cache keeps User_getAll at one
+  // call per ttl (docs/security.md par. 3). Losing the id must not fail the
+  // section, so any failure here resolves to null.
+  async function resolveCurrentUserId(
+    email: string,
+    callerOpts?: { signal?: AbortSignal },
+  ): Promise<string | null> {
+    if (!email) return null;
+    try {
+      const users = await cache.get<UserInfo[]>(
+        "users",
+        () => fetchers.users(),
+        callerOpts,
+      );
+      return users.value.find((user) => user.email === email)?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   return {
     async get<S extends MetadataSection>(
       section: S,
       opts?: { signal?: AbortSignal },
     ): Promise<SectionResult<S>> {
-      // The shared fetch runs without the caller signal; the cache races the
-      // caller against it, so one abandoned request cannot cancel the others.
-      const hit = await cache.get<SectionDataMap[S]>(
-        section,
-        () => fetchers[section](),
-        opts?.signal ? { signal: opts.signal } : undefined,
-      );
-      return { data: hit.value, asOf: hit.asOf, stale: hit.stale };
+      const callerOpts = opts?.signal ? { signal: opts.signal } : undefined;
+      try {
+        // The shared fetch runs without the caller signal; the cache races the
+        // caller against it, so one abandoned request cannot cancel the others.
+        const hit = await cache.get<SectionDataMap[S]>(
+          section,
+          () => fetchers[section](),
+          callerOpts,
+        );
+        if (section !== "currentUser") {
+          return { data: hit.value, asOf: hit.asOf, stale: hit.stale };
+        }
+        const current = hit.value as CurrentUser;
+        // Cached values are frozen, so the resolved id goes into a copy.
+        const data = {
+          ...current,
+          id: await resolveCurrentUserId(current.email, callerOpts),
+        } as SectionDataMap[S];
+        return { data, asOf: hit.asOf, stale: hit.stale };
+      } catch (error) {
+        // The cache rejects an aborted caller with whatever the aborter passed
+        // in - a DOMException, a plain Error, or a bare string. Only the signal
+        // state is reliable, so that is what decides.
+        if (opts?.signal?.aborted && !(error instanceof LivespaceError)) {
+          throw cancelledError();
+        }
+        throw error;
+      }
     },
   };
 }
@@ -232,14 +275,6 @@ function sectionLine(outcome: SectionOutcome): string {
   return `${outcome.section}: ${envelope.totalItems}${staleMark}`;
 }
 
-function cancelledError(): LivespaceError {
-  return new LivespaceError(
-    "CANCELLED",
-    "The request was cancelled by the caller.",
-    "Retry the call if the result is still needed.",
-  );
-}
-
 export async function runCrmMetadata(
   service: MetadataService,
   args: { sections?: MetadataSection[] },
@@ -272,7 +307,11 @@ export async function runCrmMetadata(
   const errors = outcomes.flatMap((outcome) =>
     "error" in outcome ? [outcome.error] : [],
   );
-  if (errors.length === requested.length && errors.every((e) => e.code === "CANCELLED")) {
+  if (
+    errors.length > 0 &&
+    errors.length === requested.length &&
+    errors.every((e) => e.code === "CANCELLED")
+  ) {
     throw cancelledError();
   }
 
