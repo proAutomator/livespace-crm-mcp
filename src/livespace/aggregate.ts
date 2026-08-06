@@ -214,8 +214,13 @@ export function fetchFeedWindow(
  * granularity - so the upper bound goes up WIDENED by a day and the summarizer
  * re-filters to the documented inclusive period. No `completed` filter is sent:
  * the split is local, so one sweep answers both halves.
+ *
+ * `async` is load-bearing, not decoration: this is the one window that computes
+ * something (`dayAfter`) before the first await, and callers put it straight
+ * into a `Promise.allSettled([...])` argument list, where a synchronous throw
+ * would escape the settle and orphan the sibling window.
  */
-export function fetchTaskWindow(
+export async function fetchTaskWindow(
   records: RecordFetchers,
   opts: PeriodWindowOptions,
 ): Promise<Window<TaskRecord>> {

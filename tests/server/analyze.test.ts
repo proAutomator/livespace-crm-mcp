@@ -393,6 +393,139 @@ describe("runAnalyze argument rules", () => {
   }
 });
 
+describe("runAnalyze calendar dates", () => {
+  // The shape regex accepts any two digits, so "2026-13-01" reaches `dayAfter`,
+  // where `new Date(NaN).toISOString()` throws a raw RangeError - off the
+  // {code, message, hint} contract entirely. These dates never get that far.
+  const impossible = ["2026-00-01", "2026-13-01", "2026-01-32", "2026-02-31", "2026-02-29"];
+  const outOfRange = ["1899-12-31", "2101-01-01"];
+  const periodAnalyses = ["activity_summary", "forecast_vs_realization"] as const;
+
+  function argsWith(
+    analysis: (typeof periodAnalyses)[number],
+    field: "dateFrom" | "dateTo",
+    value: string,
+  ): AnalyzeArgs {
+    return field === "dateFrom"
+      ? { analysis, dateFrom: value, dateTo: "2026-01-31" }
+      : { analysis, dateFrom: "2026-01-01", dateTo: value };
+  }
+
+  const cases: Array<[string, AnalyzeArgs, string]> = [];
+  for (const analysis of periodAnalyses) {
+    for (const field of ["dateFrom", "dateTo"] as const) {
+      for (const value of impossible) {
+        cases.push([
+          `${analysis} with ${field} ${value}`,
+          argsWith(analysis, field, value),
+          `${field} is not a real calendar date`,
+        ]);
+      }
+      for (const value of outOfRange) {
+        cases.push([
+          `${analysis} with ${field} ${value}`,
+          argsWith(analysis, field, value),
+          `${field} is outside the supported range`,
+        ]);
+      }
+    }
+  }
+
+  for (const [label, args, fragment] of cases) {
+    test(`rejects ${label} without fetching anything`, async () => {
+      const world = fakes();
+
+      const result = await run(world, args);
+
+      expect(world.records.calls).toHaveLength(0);
+      expect(world.activity.calls).toHaveLength(0);
+      expect(world.metadata.calls).toHaveLength(0);
+      expect(result.isError).toBe(true);
+      const entry = errorsOf(result)[0] as ToolError;
+      expect(entry.code).toBe("BAD_PARAMS");
+      expect(entry.hint).toContain(fragment);
+      expect(result.structured).toEqual({
+        analysis: args.analysis,
+        assumptions: [],
+        errors: [entry],
+      });
+      expectEnvelope(result, null);
+    });
+  }
+
+  // The month ends, the leap day and both range boundaries are real days and
+  // must reach the fetchers untouched.
+  for (const date of ["2026-02-28", "2024-02-29", "2026-01-31", "1900-01-01", "2100-12-31"]) {
+    test(`accepts ${date} and goes on fetching`, async () => {
+      const world = fakes({ feed: feedPage(FEED_ENTRIES), tasks: taskPage(TASK_ROWS) });
+
+      const result = await run(world, {
+        analysis: "activity_summary",
+        dateFrom: date,
+        dateTo: date,
+      });
+
+      expect(world.activity.calls).toHaveLength(1);
+      expect(world.records.calls).toHaveLength(1);
+      expect(result.isError).toBe(false);
+      expectEnvelope(result, "activitySummary");
+    });
+  }
+
+  test("a task fetcher that throws synchronously settles instead of escaping", async () => {
+    // The window fetchers are awaited inside `Promise.allSettled`, so a
+    // SYNCHRONOUS throw would escape the settle, orphan the in-flight feed
+    // promise and let Bun kill the process on the later rejection.
+    const boom = new LivespaceError(
+      "UPSTREAM_ERROR",
+      "Livespace reported a general API error (500).",
+      "Retry once; if it persists, reduce the request size.",
+    );
+    const records = {
+      listTasks: (): Promise<ListPage<TaskRecord>> => {
+        throw boom;
+      },
+    } as unknown as RecordFetchers;
+    const world = fakes({ feed: feedPage(FEED_ENTRIES) });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+
+    let result: ToolRunResult;
+    try {
+      result = await runAnalyze(
+        records,
+        world.activity.fetchers,
+        world.metadata.service,
+        { analysis: "activity_summary", dateFrom: "2026-01-01", dateTo: "2026-01-31" },
+      );
+      await new Promise((done) => setTimeout(done, 0));
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+
+    expect(unhandled).toEqual([]);
+    // The feed leg was awaited and its answer carried into the partial.
+    expect(world.activity.calls).toHaveLength(1);
+    const envelope = envelopeOf(result, "activitySummary");
+    expect(envelope["feed"]).toEqual({
+      ...summarizeFeed(FEED_ENTRIES, PERIOD),
+      basedOn: { entries: { fetched: 2, truncated: false } },
+    });
+    expect(envelope["tasks"]).toBeUndefined();
+    expect(errorsOf(result)).toEqual([
+      {
+        code: "UPSTREAM_ERROR",
+        message: "Livespace reported a general API error (500).",
+        hint: "Retry once; if it persists, reduce the request size.",
+      },
+    ]);
+    expect(result.isError).toBe(false);
+  });
+});
+
 describe("runAnalyze dictionary handling", () => {
   const unknownScope: Array<[string, AnalyzeArgs]> = [
     ["stage_conversion", { analysis: "stage_conversion", processId: "proc-gone" }],

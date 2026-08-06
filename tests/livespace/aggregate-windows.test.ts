@@ -323,6 +323,24 @@ describe("fetchTaskWindow", () => {
     expect(window.truncated).toBe(true);
   });
 
+  test("a broken upper bound rejects instead of throwing synchronously", async () => {
+    const { fetchers, options } = fakeTasks(() => ({
+      items: [],
+      hasMore: false,
+      rawCount: 0,
+    }));
+    // `dayAfter` on garbage hands `toISOString` an invalid date. The fetcher is
+    // async on purpose: a SYNCHRONOUS throw inside a `Promise.allSettled([...])`
+    // argument list escapes the settle and orphans the sibling window.
+    let window: Promise<unknown> | undefined;
+    expect(() => {
+      window = fetchTaskWindow(fetchers, { dateFrom: "2026-01-01", dateTo: "not-a-date" });
+    }).not.toThrow();
+
+    await expect(window as Promise<unknown>).rejects.toBeInstanceOf(RangeError);
+    expect(options).toHaveLength(0);
+  });
+
   test("drops a task id delivered on two pages", async () => {
     const { fetchers } = fakeTasks((call) =>
       call === 0

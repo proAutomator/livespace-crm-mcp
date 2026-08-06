@@ -307,6 +307,37 @@ interface DealWindows {
 }
 
 /**
+ * The period the windows are willing to reason about. The bound is not about
+ * data - it keeps a year like 9999 from making `dayAfter` emit a date no
+ * upstream filter would understand.
+ */
+const DATE_MIN = "1900-01-01";
+const DATE_MAX = "2100-12-31";
+
+/**
+ * Whether a shape-valid "YYYY-MM-DD" is a date that actually exists. The NaN
+ * guard comes FIRST: `new Date("2026-13-01T00:00:00Z")` is an invalid date and
+ * calling `toISOString()` on it throws, so the round-trip cannot be the test.
+ * Rolling months ("2026-02-31" -> March 3) fail the round-trip instead.
+ */
+function isCalendarDate(value: string): boolean {
+  const ms = Date.parse(`${value}T00:00:00Z`);
+  if (Number.isNaN(ms)) return false;
+  return new Date(ms).toISOString().slice(0, 10) === value;
+}
+
+/** Both date checks in one place, so dateFrom and dateTo answer identically. */
+function dateHint(field: "dateFrom" | "dateTo", value: string): string | null {
+  if (!isCalendarDate(value)) {
+    return `${field} is not a real calendar date. Send an existing day as YYYY-MM-DD, for example 2026-01-31.`;
+  }
+  if (value < DATE_MIN || value > DATE_MAX) {
+    return `${field} is outside the supported range. Send a date between ${DATE_MIN} and ${DATE_MAX}.`;
+  }
+  return null;
+}
+
+/**
  * Cross-field rules live here rather than in the schema: a zod refinement would
  * turn every combination mistake into a protocol-level validation error, while a
  * returned `{code, message, hint}` tells the model how to fix the call.
@@ -327,6 +358,16 @@ function argumentHint(args: AnalyzeArgs): string | null {
   }
   if (analysis === "activity_summary" && args.processId !== undefined) {
     return "Activity is not scoped by process. Drop processId, or ask for pipeline_summary or forecast_vs_realization.";
+  }
+  // Before the ordering compare: a date that does not exist is answered as
+  // such, whatever it compares to.
+  if (args.dateFrom !== undefined) {
+    const hint = dateHint("dateFrom", args.dateFrom);
+    if (hint !== null) return hint;
+  }
+  if (args.dateTo !== undefined) {
+    const hint = dateHint("dateTo", args.dateTo);
+    if (hint !== null) return hint;
   }
   if (
     args.dateFrom !== undefined &&
