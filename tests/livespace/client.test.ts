@@ -531,24 +531,70 @@ describe("LivespaceClient.call", () => {
     expect(calls.length).toBe(1);
   });
 
-  test("gives up after maxAttempts with a mapped error", async () => {
+  test("gives up after maxAttempts exhausted on the signed dispatch", async () => {
     const calls: Call[] = [];
     const client = new LivespaceClient(CONFIG, {
-      fetchImpl: makeFetch(
-        [
-          new Response("x", { status: 500 }),
-          new Response("x", { status: 500 }),
-          new Response("x", { status: 500 }),
-        ],
-        calls,
-      ),
+      fetchImpl: routedFetch(calls, [
+        new Response("x", { status: 500 }),
+        new Response("x", { status: 500 }),
+        new Response("x", { status: 500 }),
+      ]),
       maxAttempts: 3,
       sleep: async () => {},
+      random: () => 1,
     });
 
     await expect(client.call("Default", "ping")).rejects.toMatchObject({
       code: "UPSTREAM_ERROR",
     });
-    expect(calls.length).toBe(3);
+    // Every attempt re-signs: token, signed, token, signed, token, signed.
+    expect(calls.map((c) => isTokenUrl(c.url))).toEqual([
+      true, false, true, false, true, false,
+    ]);
+  });
+
+  test("a write that never dispatches is not WRITE_OUTCOME_UNKNOWN", async () => {
+    const calls: Call[] = [];
+    let tokenAttempts = 0;
+    const client = new LivespaceClient(CONFIG, {
+      fetchImpl: routedFetch(calls, [], () => {
+        tokenAttempts += 1;
+        return () => {
+          throw new TypeError("socket hang up (synthetic)");
+        };
+      }),
+      maxAttempts: 3,
+      sleep: async () => {},
+      random: () => 1,
+    });
+
+    await expect(
+      client.call("Contact", "addContact", {}, { write: true }),
+    ).rejects.toMatchObject({ code: "NETWORK_ERROR" });
+    // Prepare-phase failures retry even for writes; nothing was dispatched.
+    expect(tokenAttempts).toBe(3);
+    expect(calls.every((c) => isTokenUrl(c.url))).toBe(true);
+  });
+
+  test("a write aborted after the signed dispatch is WRITE_OUTCOME_UNKNOWN", async () => {
+    const calls: Call[] = [];
+    const controller = new AbortController();
+    const client = new LivespaceClient(CONFIG, {
+      fetchImpl: routedFetch(calls, [
+        (() => {
+          controller.abort();
+          throw new DOMException("The operation was aborted.", "AbortError");
+        }) as never,
+      ]),
+      sleep: async () => {},
+      random: () => 1,
+    });
+
+    // The signed POST left the building; a caller abort cannot make the
+    // outcome known again (docs/security.md par. 5).
+    await expect(
+      client.call("Contact", "addContact", {}, { write: true, signal: controller.signal }),
+    ).rejects.toMatchObject({ code: "WRITE_OUTCOME_UNKNOWN" });
+    expect(calls.filter((c) => !isTokenUrl(c.url)).length).toBe(1);
   });
 });

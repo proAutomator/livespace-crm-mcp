@@ -325,12 +325,13 @@ export class LivespaceClient {
           signal: opts.signal,
         });
       } catch (error) {
-        if (!(error instanceof LivespaceError) || !error.transport) throw error;
-        if (opts.signal?.aborted) throw cancelledError();
-        if (opts.write && signedDispatch) {
+        if (!(error instanceof LivespaceError)) throw error;
+        // A write whose signed POST already left may have been applied -
+        // even a caller abort cannot make that outcome known again
+        // (docs/security.md par. 5). 429 is the one dispatch failure with a
+        // KNOWN outcome: rejected before processing.
+        if (opts.write && signedDispatch && (error.transport || error.code === "CANCELLED")) {
           if (error.code === "RATE_LIMITED") throw error;
-          // The caller must verify by re-reading instead of blindly retrying
-          // (M6 contract).
           throw new LivespaceError(
             "WRITE_OUTCOME_UNKNOWN",
             "The write request failed mid-flight; Livespace may or may not have applied it.",
@@ -338,6 +339,8 @@ export class LivespaceClient {
             error.resultCode,
           );
         }
+        if (!error.transport) throw error;
+        if (opts.signal?.aborted) throw cancelledError();
         lastError = error;
       }
       if (attempt < this.maxAttempts) {

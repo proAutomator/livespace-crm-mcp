@@ -494,11 +494,11 @@ const TASK_PAGE_SIZE = 50;
 
 /**
  * Wide windows are slow upstream, not broken: a 200-row deal page (162 rows,
- * ~2 MB) took 14-19 s in sandbox measurements, well past the 30 s client
- * default only in the worst case but far past the old 15 s one. Pages this
- * large therefore buy extra time instead of timing out honestly and retrying
- * the whole transfer. `listTasks` keeps the default - its pages are fixed at
- * 50 rows (~6 s).
+ * ~2 MB) took 14-19 s in sandbox measurements - under the 30 s client
+ * default but close enough that a slow day would time out and retry the
+ * whole 2 MB transfer. Pages this large therefore buy extra headroom
+ * instead. `listTasks` keeps the default - its pages are fixed at 50 rows
+ * (~6 s).
  */
 const LARGE_PAGE_LIMIT = 100;
 const LARGE_PAGE_TIMEOUT_MS = 60_000;

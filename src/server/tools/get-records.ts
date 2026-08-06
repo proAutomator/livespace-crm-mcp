@@ -12,6 +12,7 @@ import {
   type DealRecord,
   type DetailLevel,
   type PersonRecord,
+  type RecordDataMap,
   type RecordFetchers,
   type RecordKind,
   type TaskRecord,
@@ -215,27 +216,21 @@ function rejected(kind: RecordKind, error: ToolError): GetRecordsResult {
   };
 }
 
-/** The record goes under the key of its kind - one static shape, no union. */
+/**
+ * The record goes under the key of its kind - one static shape, no union.
+ * One cast, one assignment: the kind and the item key cannot drift apart.
+ */
 function attachRecord(
   item: RecordItem,
   kind: RecordKind,
   record: unknown,
   detail: DetailLevel,
 ): void {
-  switch (kind) {
-    case "person":
-      item.person = projectRecord("person", record as PersonRecord, detail);
-      return;
-    case "company":
-      item.company = projectRecord("company", record as CompanyRecord, detail);
-      return;
-    case "deal":
-      item.deal = projectRecord("deal", record as DealRecord, detail);
-      return;
-    case "task":
-      item.task = projectRecord("task", record as TaskRecord, detail);
-      return;
-  }
+  (item as unknown as Record<string, unknown>)[kind] = projectRecord(
+    kind,
+    record as RecordDataMap[typeof kind],
+    detail,
+  );
 }
 
 export async function runGetRecords(
