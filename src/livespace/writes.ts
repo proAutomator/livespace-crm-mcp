@@ -416,9 +416,15 @@ export function createWriteFetchers(
  * and `lastname`, which upstream composes into a single `name` - is left out of
  * the verdict entirely. Guessing at it would produce false "unapplied" reports;
  * the before/after pair still shows what changed.
+ *
+ * `comparedFields` is what makes that omission readable: it names the sent
+ * fields a comparator actually ran on. An empty list means the comparison was
+ * vacuous - `unappliedFields: []` there says "nothing was checked", not
+ * "everything landed", and no caller may read it as evidence.
  */
 export interface AppliedVerdict {
   unappliedFields: string[];
+  comparedFields: string[];
   verified: boolean;
 }
 
@@ -547,15 +553,17 @@ export function verifyApplied<K extends RecordKind>(
   sent: Record<string, unknown>,
   reread: RecordDataMap[K] | null,
 ): AppliedVerdict {
-  if (reread === null) return { unappliedFields: [], verified: false };
+  if (reread === null) return { unappliedFields: [], comparedFields: [], verified: false };
   const stored = reread as unknown as Record<string, unknown>;
   const checks = APPLIED_CHECKS[kind];
   const unappliedFields: string[] = [];
+  const comparedFields: string[] = [];
   for (const [field, value] of Object.entries(sent)) {
     if (value === undefined) continue;
     const check = checks[field];
     if (check === undefined) continue;
+    comparedFields.push(field);
     if (!check(value, stored)) unappliedFields.push(field);
   }
-  return { unappliedFields, verified: true };
+  return { unappliedFields, comparedFields, verified: true };
 }

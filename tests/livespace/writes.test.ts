@@ -747,6 +747,7 @@ describe("verifyApplied", () => {
     // ok and reports verification "unavailable" instead.
     expect(verifyApplied("person", { emails: ["a@synthetic.example"] }, null)).toEqual({
       unappliedFields: [],
+      comparedFields: [],
       verified: false,
     });
   });
@@ -758,7 +759,7 @@ describe("verifyApplied", () => {
         { emails: ["  Jan@Synthetic.example "] },
         person({ emails: ["jan@synthetic.example"] }),
       ),
-    ).toEqual({ unappliedFields: [], verified: true });
+    ).toEqual({ unappliedFields: [], comparedFields: ["emails"], verified: true });
   });
 
   test("a dropped email is reported by name", () => {
@@ -768,7 +769,7 @@ describe("verifyApplied", () => {
         { emails: ["jan@synthetic.example", "second@synthetic.example"] },
         person({ emails: ["jan@synthetic.example"] }),
       ),
-    ).toEqual({ unappliedFields: ["emails"], verified: true });
+    ).toEqual({ unappliedFields: ["emails"], comparedFields: ["emails"], verified: true });
   });
 
   test("phones compare digits-only - upstream may strip the separators", () => {
@@ -778,7 +779,7 @@ describe("verifyApplied", () => {
         { phones: ["+48 123 456 789"] },
         person({ phones: ["+48123456789"] }),
       ),
-    ).toEqual({ unappliedFields: [], verified: true });
+    ).toEqual({ unappliedFields: [], comparedFields: ["phones"], verified: true });
     expect(
       verifyApplied("person", { phones: ["+48 123 456 789"] }, person({ phones: [] }))
         .unappliedFields,
@@ -787,7 +788,7 @@ describe("verifyApplied", () => {
 
   test("a dropped scalar note is reported, and the comparison still counts as run", () => {
     expect(verifyApplied("person", { note: "Synthetic note text" }, person({ note: "" }))).toEqual(
-      { unappliedFields: ["note"], verified: true },
+      { unappliedFields: ["note"], comparedFields: ["note"], verified: true },
     );
   });
 
@@ -827,7 +828,7 @@ describe("verifyApplied", () => {
         { budget: [{ productName: "Synthetic line", price: 33.33, amount: 3 }] },
         deal({ value: 99.99 }),
       ),
-    ).toEqual({ unappliedFields: [], verified: true });
+    ).toEqual({ unappliedFields: [], comparedFields: ["budget"], verified: true });
     expect(
       verifyApplied(
         "deal",
@@ -887,8 +888,31 @@ describe("verifyApplied", () => {
     // The mapped person carries the composed `name` only, so firstname and
     // lastname have no stored counterpart to compare with. Reporting them as
     // unapplied would be a lie; the item still reports before -> after.
+    // `comparedFields` is empty, which is how a caller tells "everything
+    // landed" apart from "nothing was ever compared".
     expect(
       verifyApplied("person", { firstname: "Synthetic", lastname: "Person" }, person()),
-    ).toEqual({ unappliedFields: [], verified: true });
+    ).toEqual({ unappliedFields: [], comparedFields: [], verified: true });
+  });
+
+  test("comparedFields names the sent fields a comparator actually ran on", () => {
+    // firstname has no comparator, emails and note do; an undefined value is
+    // not a sent field at all.
+    expect(
+      verifyApplied(
+        "person",
+        {
+          firstname: "Synthetic",
+          emails: ["person.one@synthetic.example"],
+          note: "Synthetic other note",
+          companyId: undefined,
+        },
+        person(),
+      ),
+    ).toEqual({
+      unappliedFields: ["note"],
+      comparedFields: ["emails", "note"],
+      verified: true,
+    });
   });
 });

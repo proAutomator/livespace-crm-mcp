@@ -7,6 +7,7 @@ import {
   ACTIVITY_BATCH_CAP,
   CONFIRMATION_TTL_SECONDS,
   VERIFICATION_UNAVAILABLE,
+  VERIFICATION_UNCHECKED,
   WRITE_BATCH_CAP,
   WRITE_BUDGET_MS,
   buildWriteCodec,
@@ -404,6 +405,33 @@ function updateTask(
   };
 }
 
+/**
+ * A person update, which is the kind whose sent fields may have no comparator
+ * at all: `firstname` and `lastname` are composed into `name` upstream.
+ */
+function updatePerson(
+  index: number,
+  writes: string[],
+  opts: ItemOptions = {},
+): RecordWriteItem {
+  const id = opts.id ?? "person-synthetic-001";
+  return {
+    index,
+    action: "update_person",
+    kind: "person",
+    status: "update",
+    id,
+    sent: opts.sent ?? { firstname: "Anna" },
+    perform: async () => {
+      writes.push(`update_person#${index}`);
+      if (opts.fail !== undefined) throw opts.fail;
+      return id;
+    },
+    view: (record) => ({ name: record["name"] }),
+    ...(opts.before === undefined ? {} : { before: opts.before }),
+  };
+}
+
 function noteItem(index: number, writes: string[], wallItemId: string | null): ExecutableItem {
   return {
     index,
@@ -513,6 +541,32 @@ describe("executePlan", () => {
     expect(results[0]?.status).toBe("ok");
     expect(results[0]?.verification).toBe("unavailable");
     expect(results[0]?.unappliedFields).toBeUndefined();
+  });
+
+  test("a write whose fields have no re-read check is applied but never verified", async () => {
+    // The write landed - the upstream said so - but the re-read compared
+    // nothing, so the item may not claim to be verified. It says the check did
+    // not run, and says why in wording of its own.
+    const writes: string[] = [];
+    const { deps } = fakeRecords({ "person:person-synthetic-001": person() });
+
+    const results = await run(deps, [
+      createPerson(0, writes, { sent: { firstname: "Synthetic", lastname: "Person" } }),
+    ]);
+
+    expect(results).toEqual([
+      {
+        index: 0,
+        action: "create_person",
+        kind: "person",
+        status: "ok",
+        id: "person-synthetic-001",
+        after: { emails: ["person.one@synthetic.example"] },
+        verification: "unavailable",
+        error: VERIFICATION_UNCHECKED,
+      },
+    ]);
+    expect(VERIFICATION_UNCHECKED).not.toEqual(VERIFICATION_UNAVAILABLE);
   });
 
   test("an update carries its before-values through", async () => {
@@ -932,6 +986,60 @@ describe("unknown write outcomes", () => {
       status: "unknown_outcome",
       error: UNKNOWN_ENTRY,
     });
+  });
+
+  test("an update with nothing comparable stays unknown, however the re-read went", async () => {
+    // A person's firstname has no counterpart on the mapped record, so the
+    // re-read compared NOTHING. Zero compared fields is zero evidence, and an
+    // unknown outcome resolved from zero evidence is a guess.
+    const writes: string[] = [];
+    const { deps, calls } = fakeRecords({ "person:person-synthetic-001": person() });
+
+    const results = await run(deps, [
+      updatePerson(0, writes, { fail: UNKNOWN_OUTCOME, sent: { firstname: "Anna" } }),
+    ]);
+
+    expect(calls).toEqual(["person:person-synthetic-001"]);
+    expect(results[0]).toEqual({
+      index: 0,
+      action: "update_person",
+      kind: "person",
+      status: "unknown_outcome",
+      error: UNKNOWN_ENTRY,
+    });
+  });
+
+  test("an unknown outcome is decided by the compared fields alone", async () => {
+    // firstname cannot be checked and emails did not land: every field that
+    // COULD be compared came back missing, so nothing is claimed - the
+    // uncheckable field must not pad the count into a success.
+    const writes: string[] = [];
+    const { deps } = fakeRecords({ "person:person-synthetic-001": person() });
+
+    const results = await run(deps, [
+      updatePerson(0, writes, {
+        fail: UNKNOWN_OUTCOME,
+        sent: { firstname: "Anna", emails: ["anna@synthetic.example"] },
+      }),
+    ]);
+
+    expect(results[0]?.status).toBe("unknown_outcome");
+  });
+
+  test("an unknown outcome with one compared field that landed is resolved", async () => {
+    const writes: string[] = [];
+    const { deps } = fakeRecords({ "person:person-synthetic-001": person() });
+
+    const results = await run(deps, [
+      updatePerson(0, writes, {
+        fail: UNKNOWN_OUTCOME,
+        sent: { firstname: "Anna", note: "Synthetic note text" },
+      }),
+    ]);
+
+    expect(results[0]?.status).toBe("ok");
+    expect(results[0]?.resolvedByReread).toBe(true);
+    expect(results[0]?.verification).toBe("verified");
   });
 
   test("an update whose re-read fails stays unknown", async () => {

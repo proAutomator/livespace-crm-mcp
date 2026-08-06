@@ -195,20 +195,27 @@ plus a generated `id` - the echo proves nothing about persistence
   the item `skipped_duplicate` with `existingId` unless
   `allowDuplicate: true`.
 - **Verification separates outcomes** (par. 5 amended accordingly in
-  Task 6): `verifyApplied` returns `{unappliedFields, verified}`;
+  Task 6): `verifyApplied` returns
+  `{unappliedFields, comparedFields, verified}` (see execution note 1 -
+  `comparedFields` was added during the fix round);
   comparators are pinned: emails compare as sets case-insensitively after
   trim; phones compare digits-only (upstream may strip separators);
   numbers within 0.01; booleans normalized ("1"/"0"/true/false); task
   date compares the full normalized timestamp (date-only -> 00:00:00);
   deal budget compares sum(price*amount) to mapped value within 0.01;
   person companyId against mapped `companyId`; scalars trimmed-exact.
+  A sent field with no comparator (a person's firstname/lastname) is
+  compared by nothing, so `verification: "verified"` is never spoken
+  about it.
 - **WRITE_OUTCOME_UNKNOWN resolution is conservative**: creates - only
   when the plan-time exact-email lookup RAN and returned NULL and the
   item's email set is unique within the batch; a resolution hit whose id
   equals any known pre-existing id stays `unknown_outcome`. Updates - we
-  own the id: re-read + verifyApplied; all sent fields applied -> `ok` +
-  `resolvedByReread`; partially -> `ok` + unappliedFields; none ->
-  `unknown_outcome`. Notes/calls: no resolution (stay `unknown_outcome`).
+  own the id: re-read + verifyApplied, and the verdict is read over
+  `comparedFields` alone: at least one compared field landed -> `ok` +
+  `resolvedByReread` (partially -> plus unappliedFields); none landed,
+  or nothing was comparable at all -> `unknown_outcome`. Notes/calls: no
+  resolution (stay `unknown_outcome`).
 - **log_activities verifies through walls**: after execution, ONE
   `getWall` per DISTINCT target record (bounded by the batch cap);
   a note is `verified` when its `wallItemId` (or, failing that, an entry
@@ -602,9 +609,11 @@ in the execution notes).
      task with date-only (visible in a datesPeriod window);
   3. duplicate person (same email, case-flipped) -> skipped_duplicate
      with existingId; allowDuplicate -> created (then cleaned);
-  4. update_records: firstname (before/after), deal -> won
+  4. update_records: firstname (before/after; no comparator exists for
+     it, so that item reports verification "unavailable" with the
+     VERIFICATION_UNCHECKED advisory - see execution note 1), deal -> won
      (status_change_date stamped), task isCompleted; empty
-     unappliedFields on all;
+     unappliedFields on the two verifiable items;
   5. log_activities: note on the deal + company note + outgoing call with
      date -> wall entries verified (types notatka/telefon), verification
      "verified";
@@ -613,3 +622,28 @@ in the execution notes).
   8. no CRM name in any text channel; per-call wall clock recorded (all
      under 60 s; batch sizes at the cap).
 - Execution notes appended to this doc.
+
+---
+
+## Execution notes
+
+Found by the adversarial verification round after Task 8 and fixed on the
+same branch. Each note names what the plan said, what the code did, and
+what changed.
+
+1. **Verification claimed what it never compared.** `verifyApplied`
+   answered `{unappliedFields: [], verified: true}` for any successful
+   re-read, including one where every sent field was skipped for lack of
+   a comparator - a person update naming only `firstname` is the case by
+   design. Two things followed: a WRITE_OUTCOME_UNKNOWN person update
+   that never landed resolved to `ok` + `resolvedByReread` +
+   `verification: "verified"` with an identical before/after pair, and
+   the ordinary applied path stamped "verified" on the same vacuous
+   comparison. The verdict now carries `comparedFields`; the
+   unknown-outcome resolver is decided by those fields alone (zero of
+   them is zero evidence, and an uncheckable field can no longer pad the
+   count past a compared field that missed); and an applied write with
+   nothing comparable reports `verification: "unavailable"` with a
+   second advisory, `VERIFICATION_UNCHECKED` - the existing
+   VERIFICATION_UNAVAILABLE says "the follow-up read did not answer",
+   which is false when the read answered and had nothing to compare.

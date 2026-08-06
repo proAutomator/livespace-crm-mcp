@@ -935,6 +935,63 @@ describe("execution", () => {
     expectPayload(result);
   });
 
+  test("a name-only update whose outcome is unknown is never claimed as applied", async () => {
+    // The dispatch's outcome is genuinely undetermined and the re-read can
+    // compare nothing - a person's firstname is folded into a composed `name`
+    // upstream. Reporting `ok` here would tell the model a rename landed when
+    // the write may never have reached the CRM at all.
+    const scenario = fakeWorld({
+      updatePerson: () =>
+        new LivespaceError(
+          "WRITE_OUTCOME_UNKNOWN",
+          "The write request failed mid-flight; Livespace may or may not have applied it.",
+          "Re-read the affected records to verify the outcome before retrying.",
+        ),
+      records: { [`person:${PERSON_ID}`]: person({ id: PERSON_ID }) },
+    });
+
+    const result = asRun(
+      await run(
+        scenario,
+        args({ persons: [{ id: PERSON_ID, firstname: "Anna" }], confirm: true }),
+      ),
+    );
+
+    expect(statusesOf(result)).toEqual(["unknown_outcome"]);
+    expect(result.structured["counts"]).toEqual({
+      ok: 0,
+      skippedDuplicate: 0,
+      error: 0,
+      unknownOutcome: 1,
+      notAttempted: 0,
+    });
+    expect(result.isError).toBe(true);
+    expectPayload(result);
+  });
+
+  test("an applied write with nothing comparable is ok but never verified", async () => {
+    const scenario = fakeWorld({
+      records: { [`person:${PERSON_ID}`]: person({ id: PERSON_ID }) },
+    });
+
+    const result = asRun(
+      await run(
+        scenario,
+        args({ persons: [{ id: PERSON_ID, firstname: "Anna" }], confirm: true }),
+      ),
+    );
+
+    expect(statusesOf(result)).toEqual(["ok"]);
+    expect(resultsOf(result)[0]?.["verification"]).toBe("unavailable");
+    expect(resultsOf(result)[0]?.["error"]).toEqual({
+      code: "VERIFICATION_UNCHECKED",
+      message: "The write was applied; the sent fields have no independent re-read check.",
+      hint: "Re-read the record if you need proof; do not retry the write.",
+    });
+    expect(result.isError).toBe(false);
+    expectPayload(result);
+  });
+
   test("a re-read that fails leaves the applied write ok and unverified", async () => {
     const scenario = fakeWorld({
       records: {

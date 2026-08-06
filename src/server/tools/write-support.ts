@@ -385,6 +385,19 @@ export const VERIFICATION_UNAVAILABLE: ToolError = {
   hint: "Re-read the record before writing to it again; never retry the write itself.",
 };
 
+/**
+ * The other reason a check could not run: the read ANSWERED, and not one sent
+ * field has a counterpart to compare it against - a person's firstname, which
+ * upstream folds into a composed `name`. Saying "the read did not answer" there
+ * would be false, and saying "verified" would be a claim about a comparison
+ * that never happened.
+ */
+export const VERIFICATION_UNCHECKED: ToolError = {
+  code: "VERIFICATION_UNCHECKED",
+  message: "The write was applied; the sent fields have no independent re-read check.",
+  hint: "Re-read the record if you need proof; do not retry the write.",
+};
+
 function base(item: ExecutableItem): { index: number; action: string; kind: string } {
   return { index: item.index, action: item.action, kind: item.kind };
 }
@@ -429,11 +442,13 @@ function projected(
   return item.view(reread as unknown as Record<string, unknown>);
 }
 
-function sentKeyCount(sent: Record<string, unknown>): number {
-  return Object.values(sent).filter((value) => value !== undefined).length;
-}
-
-/** The successful path: the write landed, now say how much of it stuck. */
+/**
+ * The successful path: the write landed, now say how much of it stuck.
+ *
+ * "Verified" is only ever spoken about fields a comparator actually ran on. A
+ * read that answered but had nothing to compare is `unavailable` too - with its
+ * own advisory, because the reason differs and the recovery does not.
+ */
 async function verifiedResult(
   deps: ExecuteDeps,
   item: RecordWriteItem,
@@ -443,17 +458,19 @@ async function verifiedResult(
   const reread = await safeReread(deps, item.kind, id, opts);
   const verdict = verifyApplied(item.kind, item.sent, reread);
   const after = projected(item, reread);
+  const compared = verdict.verified && verdict.comparedFields.length > 0;
+  const advisory = verdict.verified ? VERIFICATION_UNCHECKED : VERIFICATION_UNAVAILABLE;
   return {
     ...base(item),
     status: "ok",
     id,
     ...(item.before === undefined ? {} : { before: item.before }),
     ...(after === undefined ? {} : { after }),
-    verification: verdict.verified ? "verified" : "unavailable",
+    verification: compared ? "verified" : "unavailable",
     ...(verdict.unappliedFields.length > 0
       ? { unappliedFields: verdict.unappliedFields }
       : {}),
-    ...(verdict.verified ? {} : { error: VERIFICATION_UNAVAILABLE }),
+    ...(compared ? {} : { error: advisory }),
   };
 }
 
@@ -532,11 +549,13 @@ async function resolveUnknown(
   const verdict = verifyApplied(item.kind, item.sent, reread);
   // No comparison, no claim: the outcome stays unknown.
   if (!verdict.verified) return unknownResult(item, entry);
-  // Every sent field came back missing: nothing landed. Fields the verifier
-  // has no counterpart for - a person's firstname, which upstream folds into
-  // `name` - never appear here, so an update built only from those reads as
-  // applied rather than as a false alarm.
-  if (verdict.unappliedFields.length >= sentKeyCount(item.sent)) {
+  // The resolution is decided by the fields a comparator RAN on, and by
+  // nothing else. Zero of them is zero evidence - an update naming only a
+  // person's firstname, which upstream folds into `name`, can never be
+  // resolved this way. And when every compared field came back missing,
+  // nothing landed: an uncheckable field sent beside them must not pad the
+  // count into a success.
+  if (verdict.unappliedFields.length >= verdict.comparedFields.length) {
     return unknownResult(item, entry);
   }
   const after = projected(item, reread);
