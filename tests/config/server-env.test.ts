@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { loadServerConfig } from "../../src/config/server-env.js";
 
+/** 38 bytes - the codec refuses anything under 32 (AGENTS.md: synthetic). */
+const REQUEST_STATE_KEY = "synthetic-request-state-key-0123456789";
+
 describe("loadServerConfig", () => {
   test("defaults: loopback bind, port 3020, no auth, read-write", () => {
     const config = loadServerConfig({});
@@ -42,10 +45,12 @@ describe("loadServerConfig", () => {
       MCP_PORT: "4100",
       LIVESPACE_MCP_READ_ONLY: "true",
       MCP_AUTH_TOKEN: "synthetic-bearer-token",
+      MCP_REQUEST_STATE_KEY: REQUEST_STATE_KEY,
     });
     expect(config.port).toBe(4100);
     expect(config.readOnly).toBe(true);
     expect(config.authToken).toBe("synthetic-bearer-token");
+    expect(config.requestStateKey).toBe(REQUEST_STATE_KEY);
   });
 
   test("fail-closed: non-loopback bind without MCP_AUTH_TOKEN throws", () => {
@@ -63,13 +68,41 @@ describe("loadServerConfig", () => {
     ).toThrow(/MCP_ALLOWED_HOSTS/);
   });
 
-  test("non-loopback bind with token and hosts is accepted", () => {
+  test("non-loopback bind with token, hosts and a state key is accepted", () => {
     const config = loadServerConfig({
       MCP_BIND_HOST: "0.0.0.0",
       MCP_AUTH_TOKEN: "synthetic-bearer-token",
       MCP_ALLOWED_HOSTS: "mcp.example.com, alt.example.com",
+      MCP_REQUEST_STATE_KEY: REQUEST_STATE_KEY,
     });
     expect(config.allowedHostnames).toEqual(["mcp.example.com", "alt.example.com"]);
+  });
+
+  test("a request-state key shorter than 32 bytes is refused", () => {
+    expect(() =>
+      loadServerConfig({ MCP_REQUEST_STATE_KEY: "synthetic-short-key" }),
+    ).toThrow(/MCP_REQUEST_STATE_KEY/);
+  });
+
+  test("fail-closed: an authenticated server needs MCP_REQUEST_STATE_KEY", () => {
+    expect(() =>
+      loadServerConfig({ MCP_AUTH_TOKEN: "synthetic-bearer-token" }),
+    ).toThrow(/MCP_REQUEST_STATE_KEY/);
+  });
+
+  test("fail-closed: a non-loopback bind needs MCP_REQUEST_STATE_KEY", () => {
+    expect(() =>
+      loadServerConfig({
+        MCP_BIND_HOST: "0.0.0.0",
+        MCP_AUTH_TOKEN: "synthetic-bearer-token",
+        MCP_ALLOWED_HOSTS: "mcp.example.com",
+      }),
+    ).toThrow(/MCP_REQUEST_STATE_KEY/);
+  });
+
+  test("loopback development without a key boots on the process-local fallback", () => {
+    const config = loadServerConfig({});
+    expect(config.requestStateKey).toBeUndefined();
   });
 
   test("extra origin hostnames merge with defaults on loopback", () => {

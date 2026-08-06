@@ -9,10 +9,19 @@ export interface ServerConfig {
   rateLimitBurst: number;
   maxConcurrentRequests: number;
   maxQueuedRequests: number;
+  /**
+   * HMAC secret for the write-confirmation `requestState`. Absent only in
+   * loopback development, where the codec falls back to a per-process random
+   * key (see `buildWriteCodec`).
+   */
+  requestStateKey?: string;
 }
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 const LOCAL_HOSTNAMES = ["localhost", "127.0.0.1", "[::1]"];
+
+/** The SDK's codec refuses a shorter one, and so does startup. */
+const MIN_REQUEST_STATE_KEY_BYTES = 32;
 
 function positiveInt(
   env: Record<string, string | undefined>,
@@ -68,6 +77,28 @@ export function loadServerConfig(
     }
   }
 
+  const requestStateKey = env["MCP_REQUEST_STATE_KEY"]?.trim() || undefined;
+  if (
+    requestStateKey !== undefined &&
+    new TextEncoder().encode(requestStateKey).byteLength < MIN_REQUEST_STATE_KEY_BYTES
+  ) {
+    throw new Error(
+      `MCP_REQUEST_STATE_KEY must be at least ${MIN_REQUEST_STATE_KEY_BYTES} bytes ` +
+        "(the HMAC key that signs write confirmations).",
+    );
+  }
+  if (requestStateKey === undefined && (authToken !== undefined || !loopback)) {
+    // Fail closed (docs/security.md par. 5): a write confirmation is only
+    // single-use and unforgeable while one stable key signs it. The random
+    // per-process fallback is a loopback development convenience and nothing
+    // more - it dies with the process and never spans two of them.
+    throw new Error(
+      "MCP_REQUEST_STATE_KEY is required once the server is authenticated or " +
+        "bound off loopback. Set a random secret of at least " +
+        `${MIN_REQUEST_STATE_KEY_BYTES} bytes; it signs write confirmations.`,
+    );
+  }
+
   const allowedHostnames = loopback ? [...LOCAL_HOSTNAMES, ...extraHosts] : extraHosts;
   const allowedOriginHostnames = loopback
     ? [...LOCAL_HOSTNAMES, ...extraOrigins]
@@ -86,5 +117,6 @@ export function loadServerConfig(
     rateLimitBurst: positiveInt(env, "MCP_RATE_LIMIT_BURST", 30),
     maxConcurrentRequests: positiveInt(env, "MCP_MAX_CONCURRENT_REQUESTS", 8),
     maxQueuedRequests: positiveInt(env, "MCP_MAX_QUEUED_REQUESTS", 16),
+    ...(requestStateKey === undefined ? {} : { requestStateKey }),
   };
 }
