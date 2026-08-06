@@ -1,7 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { buildApp } from "../../src/server/app.js";
 import type { ServerConfig } from "../../src/config/server-env.js";
+import type { AppDeps } from "../../src/server/mcp.js";
 import type { MetadataService } from "../../src/server/tools/crm-metadata.js";
+import type {
+  ActivityFetchers,
+  WallEntry,
+} from "../../src/livespace/activity.js";
+import type {
+  PersonRecord,
+  RecordFetchers,
+} from "../../src/livespace/records.js";
 
 const BASE_CONFIG: ServerConfig = {
   port: 3020,
@@ -76,12 +85,73 @@ async function jsonFromResponse(response: Response): Promise<any> {
   return JSON.parse(text);
 }
 
-function app(metadata?: MetadataService) {
-  return buildApp({
-    config: BASE_CONFIG,
-    version: "0.0.0-test",
-    ...(metadata ? { metadata } : {}),
-  });
+function app(deps: Partial<AppDeps> = {}) {
+  return buildApp({ config: BASE_CONFIG, version: "0.0.0-test", ...deps });
+}
+
+// Fully synthetic record and activity fetchers. Only the members a given test
+// exercises are overridden; everything else throws so an unexpected upstream
+// call is loud rather than silently empty.
+function unexpectedCall(): never {
+  throw new Error("fetcher not configured for this test");
+}
+
+function fakeRecords(overrides: Partial<RecordFetchers> = {}): RecordFetchers {
+  return {
+    listPersons: unexpectedCall,
+    listCompanies: unexpectedCall,
+    listDeals: unexpectedCall,
+    listTasks: unexpectedCall,
+    searchPhrase: unexpectedCall,
+    getRecord: unexpectedCall,
+    ...overrides,
+  } as RecordFetchers;
+}
+
+function fakeActivity(overrides: Partial<ActivityFetchers> = {}): ActivityFetchers {
+  return {
+    recordWall: unexpectedCall,
+    crmFeed: unexpectedCall,
+    ...overrides,
+  } as ActivityFetchers;
+}
+
+function syntheticPerson(id: string): PersonRecord {
+  return {
+    id,
+    name: "Synthetic Person",
+    email: "synthetic.person@example.invalid",
+    phone: "+00 000 000 000",
+    companyName: "Synthetic Company",
+    companyId: "company-synthetic-1",
+    ownerName: "Synthetic Owner",
+    ownerId: "user-synthetic-1",
+    tags: ["synthetic-tag"],
+    source: "Synthetic Source",
+    note: "Synthetic note.",
+    created: "2025-01-02 03:04:05+02",
+    modified: "2025-01-03 03:04:05+02",
+    lastActiveDate: "2025-01-03",
+    dealCount: { all: 1, open: 1, won: 0, lost: 0 },
+    cell: "+00 000 000 001",
+    www: "https://example.invalid",
+    address: "Synthetic Street 1, Synthetic City",
+    groups: ["Synthetic Group"],
+  };
+}
+
+function syntheticWallEntry(): WallEntry {
+  return {
+    type: "note",
+    text: "Synthetic wall text.",
+    textTruncated: false,
+    date: "2025-01-03 03:04:05+02",
+    authorName: "Synthetic Author",
+    isPublic: true,
+    commentCount: 0,
+    objectName: "",
+    objectType: "",
+  };
 }
 
 // Fully synthetic dictionary data; `read` may throw to simulate a section
@@ -221,7 +291,7 @@ describe("modern era (2026-07-28) wire behavior", () => {
 
 describe("crm_metadata wiring", () => {
   test("is listed and callable when a metadata service is configured", async () => {
-    const instance = app(fakeMetadata(syntheticSection));
+    const instance = app({ metadata: fakeMetadata(syntheticSection) });
 
     const listed = await jsonFromResponse(
       await instance.request(modernRequest({ method: "tools/list" })),
@@ -265,11 +335,13 @@ describe("crm_metadata wiring", () => {
 
   test("every listed tool carries the four annotation booleans", async () => {
     const listed = await jsonFromResponse(
-      await app(fakeMetadata(syntheticSection)).request(
-        modernRequest({ method: "tools/list" }),
-      ),
+      await app({
+        metadata: fakeMetadata(syntheticSection),
+        records: fakeRecords(),
+        activity: fakeActivity(),
+      }).request(modernRequest({ method: "tools/list" })),
     );
-    expect(listed.result.tools.length).toBeGreaterThan(1);
+    const checked: string[] = [];
     for (const tool of listed.result.tools) {
       expect(tool.annotations).toBeDefined();
       for (const hint of [
@@ -280,15 +352,18 @@ describe("crm_metadata wiring", () => {
       ]) {
         expect(typeof tool.annotations[hint]).toBe("boolean");
       }
+      checked.push(tool.name);
     }
+    // The loop must actually cover the whole surface, not a stale subset.
+    expect(checked.length).toBe(5);
   });
 
   test("an unexpected upstream failure never leaks its text over the wire", async () => {
-    const instance = app(
-      fakeMetadata(() => {
+    const instance = app({
+      metadata: fakeMetadata(() => {
         throw new Error("SENSITIVE-synthetic upstream body");
       }),
-    );
+    });
     const response = await instance.request(
       modernRequest({
         method: "tools/call",
@@ -306,5 +381,298 @@ describe("crm_metadata wiring", () => {
     const dataLine = raw.split("\n").find((line) => line.startsWith("data: "));
     const payload = JSON.parse(dataLine ? dataLine.slice(6) : raw);
     expect(payload.result.isError).toBe(true);
+  });
+});
+
+describe("read tool wiring", () => {
+  function fullApp(overrides: Partial<AppDeps> = {}) {
+    return app({
+      metadata: fakeMetadata(syntheticSection),
+      records: fakeRecords(),
+      activity: fakeActivity(),
+      ...overrides,
+    });
+  }
+
+  async function listNames(instance: ReturnType<typeof app>): Promise<string[]> {
+    const listed = await jsonFromResponse(
+      await instance.request(modernRequest({ method: "tools/list" })),
+    );
+    return listed.result.tools.map((t: any) => t.name);
+  }
+
+  test("all five tools are listed in registration order", async () => {
+    const listed = await jsonFromResponse(
+      await fullApp().request(modernRequest({ method: "tools/list" })),
+    );
+    expect(listed.result.tools.map((t: any) => t.name)).toEqual([
+      "health",
+      "crm_metadata",
+      "search_crm",
+      "get_records",
+      "get_activity",
+    ]);
+    expect(listed.result.tools.length).toBe(5);
+  });
+
+  test("without record fetchers only health and crm_metadata are listed", async () => {
+    const names = await listNames(
+      app({ metadata: fakeMetadata(syntheticSection), activity: fakeActivity() }),
+    );
+    expect(names).toEqual(["health", "crm_metadata"]);
+  });
+
+  test("records without activity keep get_records but drop get_activity", async () => {
+    const names = await listNames(
+      app({ metadata: fakeMetadata(syntheticSection), records: fakeRecords() }),
+    );
+    expect(names).toEqual([
+      "health",
+      "crm_metadata",
+      "search_crm",
+      "get_records",
+    ]);
+  });
+
+  test("search_crm answers a phrase call end to end", async () => {
+    const instance = fullApp({
+      records: fakeRecords({
+        searchPhrase: async () => ({
+          hits: [
+            {
+              id: "person-synthetic-1",
+              name: "Synthetic Person",
+              description: "Synthetic Company",
+              modified: "2025-01-03 03:04:05+02",
+            },
+          ],
+          rawCount: 1,
+        }),
+      }),
+    });
+    const payload = await jsonFromResponse(
+      await instance.request(
+        modernRequest({
+          method: "tools/call",
+          name: "search_crm",
+          params: {
+            name: "search_crm",
+            arguments: { kinds: ["persons"], phrase: "synthetic" },
+          },
+          id: 10,
+        }),
+      ),
+    );
+    expect(payload.result.resultType).toBe("complete");
+    expect(payload.result.structuredContent.results.persons.returned).toBe(1);
+    expect(payload.result.structuredContent.errors).toEqual([]);
+  });
+
+  test("get_records answers a batch call end to end", async () => {
+    const instance = fullApp({
+      records: fakeRecords({
+        getRecord: (async (_kind: string, id: string) =>
+          syntheticPerson(id)) as RecordFetchers["getRecord"],
+      }),
+    });
+    const payload = await jsonFromResponse(
+      await instance.request(
+        modernRequest({
+          method: "tools/call",
+          name: "get_records",
+          params: {
+            name: "get_records",
+            arguments: { kind: "person", ids: ["person-synthetic-1"] },
+          },
+          id: 11,
+        }),
+      ),
+    );
+    expect(payload.result.resultType).toBe("complete");
+    expect(payload.result.structuredContent.summary).toEqual({
+      requested: 1,
+      ok: 1,
+      notFound: 0,
+      failed: 0,
+    });
+  });
+
+  test("get_activity answers a record wall call end to end", async () => {
+    const instance = fullApp({
+      activity: fakeActivity({
+        recordWall: async () => ({
+          entries: [syntheticWallEntry()],
+          truncated: false,
+          totalEntries: 1,
+        }),
+      }),
+    });
+    const payload = await jsonFromResponse(
+      await instance.request(
+        modernRequest({
+          method: "tools/call",
+          name: "get_activity",
+          params: {
+            name: "get_activity",
+            arguments: {
+              source: "record",
+              record: { kind: "person", id: "person-synthetic-1" },
+            },
+          },
+          id: 12,
+        }),
+      ),
+    );
+    expect(payload.result.resultType).toBe("complete");
+    expect(payload.result.structuredContent.source).toBe("record");
+    expect(payload.result.structuredContent.count).toBe(1);
+  });
+
+  test("an upstream failure in search_crm never leaks its text over the wire", async () => {
+    const instance = fullApp({
+      records: fakeRecords({
+        searchPhrase: async () => {
+          throw new Error("SENSITIVE-synthetic upstream body");
+        },
+      }),
+    });
+    const raw = await (
+      await instance.request(
+        modernRequest({
+          method: "tools/call",
+          name: "search_crm",
+          params: {
+            name: "search_crm",
+            arguments: { kinds: ["persons"], phrase: "synthetic" },
+          },
+          id: 13,
+        }),
+      )
+    ).text();
+    expect(raw).not.toContain("SENSITIVE-synthetic");
+  });
+
+  test("an upstream failure in get_records never leaks its text over the wire", async () => {
+    const instance = fullApp({
+      records: fakeRecords({
+        getRecord: (async () => {
+          throw new Error("SENSITIVE-synthetic upstream body");
+        }) as RecordFetchers["getRecord"],
+      }),
+    });
+    const raw = await (
+      await instance.request(
+        modernRequest({
+          method: "tools/call",
+          name: "get_records",
+          params: {
+            name: "get_records",
+            arguments: { kind: "person", ids: ["person-synthetic-1"] },
+          },
+          id: 14,
+        }),
+      )
+    ).text();
+    expect(raw).not.toContain("SENSITIVE-synthetic");
+  });
+
+  test("an upstream failure in get_activity never leaks its text over the wire", async () => {
+    const instance = fullApp({
+      activity: fakeActivity({
+        recordWall: async () => {
+          throw new Error("SENSITIVE-synthetic upstream body");
+        },
+      }),
+    });
+    const raw = await (
+      await instance.request(
+        modernRequest({
+          method: "tools/call",
+          name: "get_activity",
+          params: {
+            name: "get_activity",
+            arguments: {
+              source: "record",
+              record: { kind: "person", id: "person-synthetic-1" },
+            },
+          },
+          id: 15,
+        }),
+      )
+    ).text();
+    expect(raw).not.toContain("SENSITIVE-synthetic");
+  });
+
+  test("a wall failure degrades to a sanitized wallError, record still ok", async () => {
+    const instance = fullApp({
+      records: fakeRecords({
+        getRecord: (async (_kind: string, id: string) =>
+          syntheticPerson(id)) as RecordFetchers["getRecord"],
+      }),
+      activity: fakeActivity({
+        recordWall: async () => {
+          throw new Error("SENSITIVE-synthetic upstream body");
+        },
+      }),
+    });
+    const response = await instance.request(
+      modernRequest({
+        method: "tools/call",
+        name: "get_records",
+        params: {
+          name: "get_records",
+          arguments: {
+            kind: "person",
+            ids: ["person-synthetic-1"],
+            includeWall: true,
+          },
+        },
+        id: 16,
+      }),
+    );
+    const raw = await response.text();
+    expect(raw).not.toContain("SENSITIVE-synthetic");
+    const dataLine = raw.split("\n").find((line) => line.startsWith("data: "));
+    const payload = JSON.parse(dataLine ? dataLine.slice(6) : raw);
+    const item = payload.result.structuredContent.items[0];
+    expect(item.status).toBe("ok");
+    expect(item.wallError.code).toBe("UPSTREAM_ERROR");
+    expect(payload.result.isError).toBeUndefined();
+  });
+
+  test("record data is never cached: two identical calls hit upstream twice", async () => {
+    const calls: string[] = [];
+    const instance = fullApp({
+      records: fakeRecords({
+        getRecord: (async (_kind: string, id: string) => {
+          calls.push(id);
+          return syntheticPerson(id);
+        }) as RecordFetchers["getRecord"],
+      }),
+    });
+    const request = () =>
+      instance.request(
+        modernRequest({
+          method: "tools/call",
+          name: "get_records",
+          params: {
+            name: "get_records",
+            arguments: { kind: "person", ids: ["person-synthetic-1"] },
+          },
+          id: 17,
+        }),
+      );
+    await request();
+    await request();
+    expect(calls).toEqual(["person-synthetic-1", "person-synthetic-1"]);
+  });
+
+  test("the record and activity modules never reach for the cache", async () => {
+    // docs/security.md par. 8: the only cache is dictionary data. A stray
+    // import here would be the first step to persisting record content.
+    for (const path of ["../../src/livespace/records.ts", "../../src/livespace/activity.ts"]) {
+      const source = await Bun.file(new URL(path, import.meta.url)).text();
+      expect(source).not.toContain("server/cache");
+    }
   });
 });

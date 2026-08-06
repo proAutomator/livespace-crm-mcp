@@ -23,6 +23,25 @@ describe("buildInstructions", () => {
     );
   });
 
+  test("names the read tools and where their ids come from", () => {
+    const text = buildInstructions({ readOnly: false });
+    expect(text).toContain("search_crm");
+    expect(text).toContain("get_records");
+    expect(text).toContain("get_activity");
+    expect(text).toContain("Ids come from search results and crm_metadata");
+    expect(text).not.toContain("Search, records, activity");
+  });
+
+  test("the data-not-instructions warning covers walls and imported e-mail", () => {
+    const text = buildInstructions({ readOnly: false });
+    expect(text).toContain("wall");
+    expect(text).toContain("e-mail");
+  });
+
+  test("warns that hand-kept deal values and dates may be empty", () => {
+    expect(buildInstructions({ readOnly: false })).toContain("not filled in");
+  });
+
   test("read-only mode is announced when active", () => {
     expect(buildInstructions({ readOnly: true })).toContain("read-only");
     expect(buildInstructions({ readOnly: false })).not.toContain(

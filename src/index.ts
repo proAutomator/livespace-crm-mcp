@@ -1,6 +1,8 @@
 import { loadLivespaceConfig } from "./config/env.js";
 import { loadServerConfig } from "./config/server-env.js";
+import { createActivityFetchers } from "./livespace/activity.js";
 import { LivespaceClient } from "./livespace/client.js";
+import { createRecordFetchers } from "./livespace/records.js";
 import { buildApp } from "./server/app.js";
 import { createMetadataService } from "./server/tools/crm-metadata.js";
 import packageJson from "../package.json";
@@ -15,6 +17,10 @@ const app = buildApp({
   // Built once per process: the dictionary cache lives here while the MCP
   // protocol layer stays stateless (docs/security.md par. 8).
   metadata: createMetadataService(client),
+  // Record and activity data is never cached (docs/security.md par. 8); these
+  // fetchers are stateless and only share the client's throttle and auth.
+  records: createRecordFetchers(client),
+  activity: createActivityFetchers(client),
   livespacePing: (opts) =>
     client.call<{ name?: string; login?: string }>(
       "Default",
