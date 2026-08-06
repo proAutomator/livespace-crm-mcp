@@ -16,7 +16,24 @@ Quick start:
 - Find records with "search_crm" (phrase or filters), read them with
   "get_records" (batch by id), and pull history with "get_activity".
   Ids come from search results and crm_metadata - never guess them.
-- Analyze and write tools arrive in later milestones.
+- Ask "analyze" for numbers over many records - pipeline, conversion,
+  activity, forecast - instead of paging the records yourself.
+- Write tools arrive in a later milestone.
+
+"analyze" runs ONE named aggregation per call:
+- "pipeline_summary": open deals per process and stage. Optional processId
+  narrows it to one process.
+- "stage_conversion": needs processId. The API keeps no stage history, so
+  this is a point-in-time estimate from where deals stand right now.
+- "activity_summary": needs dateFrom and dateTo (YYYY-MM-DD, both
+  inclusive). Counts feed entries and tasks by type and by user.
+- "forecast_vs_realization": needs the same period. Weighs open deals due in
+  it against the deals won and lost in it.
+Every answer covers a window this server fetched itself, never the whole CRM:
+read basedOn.truncated. A truncated window withholds period sums and
+conversion ratios (they come back null) while the counts stay. Sums skip
+deals with no value and count them in value.missing, and a sum whose deals
+mix currencies is null - see the currencies list.
 
 CRITICAL - Livespace facts this server enforces for you:
 - Deal status (open/won/lost) is NOT the same as the process stage. Stage

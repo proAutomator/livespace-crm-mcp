@@ -312,7 +312,7 @@ describe("crm_metadata wiring", () => {
       checked.push(tool.name);
     }
     // The loop must actually cover the whole surface, not a stale subset.
-    expect(checked.length).toBe(5);
+    expect(checked.length).toBe(6);
   });
 
   test("an unexpected upstream failure never leaks its text over the wire", async () => {
@@ -358,7 +358,7 @@ describe("read tool wiring", () => {
     return listed.result.tools.map((t: any) => t.name);
   }
 
-  test("all five tools are listed in registration order", async () => {
+  test("all six tools are listed in registration order", async () => {
     const listed = await jsonFromResponse(
       await fullApp().request(modernRequest({ method: "tools/list" })),
     );
@@ -368,8 +368,9 @@ describe("read tool wiring", () => {
       "search_crm",
       "get_records",
       "get_activity",
+      "analyze",
     ]);
-    expect(listed.result.tools.length).toBe(5);
+    expect(listed.result.tools.length).toBe(6);
   });
 
   test("without record fetchers only health and crm_metadata are listed", async () => {

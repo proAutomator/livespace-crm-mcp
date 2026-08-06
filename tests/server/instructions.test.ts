@@ -32,6 +32,21 @@ describe("buildInstructions", () => {
     expect(text).not.toContain("Search, records, activity");
   });
 
+  test("names analyze, its four analyses and the window caveat", () => {
+    const text = buildInstructions({ readOnly: false });
+    expect(text).toContain("analyze");
+    for (const analysis of [
+      "pipeline_summary",
+      "stage_conversion",
+      "activity_summary",
+      "forecast_vs_realization",
+    ]) {
+      expect(text).toContain(analysis);
+    }
+    expect(text).toContain("basedOn.truncated");
+    expect(text).not.toContain("Analyze and write tools arrive");
+  });
+
   test("the data-not-instructions warning covers walls and imported e-mail", () => {
     const text = buildInstructions({ readOnly: false });
     expect(text).toContain("wall");

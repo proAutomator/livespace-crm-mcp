@@ -9,6 +9,7 @@ import type { ServerConfig } from "../config/server-env.js";
 import type { ActivityFetchers } from "../livespace/activity.js";
 import type { RecordFetchers } from "../livespace/records.js";
 import { buildInstructions } from "./instructions.js";
+import { analyzeToolConfig, runAnalyze } from "./tools/analyze.js";
 import {
   crmMetadataToolConfig,
   runCrmMetadata,
@@ -138,6 +139,16 @@ export function createServerFactory(deps: AppDeps): () => McpServer {
         const activity = deps.activity;
         register("get_activity", getActivityToolConfig, (args, signal) =>
           runGetActivity(records, activity, args, { signal }),
+        );
+      }
+
+      // `analyze` sweeps deals, the feed and tasks, and reads the processes
+      // dictionary for stage names and order - so it needs all three deps.
+      if (deps.activity && deps.metadata) {
+        const activity = deps.activity;
+        const metadata = deps.metadata;
+        register("analyze", analyzeToolConfig, (args, signal) =>
+          runAnalyze(records, activity, metadata, args, { signal }),
         );
       }
     }
