@@ -12,7 +12,11 @@ import type {
   RecordFetchers,
   TaskRecord,
 } from "../../../src/livespace/records.js";
-import { decodeCursor, encodeCursor } from "../../../src/server/cursor.js";
+import {
+  decodeCursor,
+  encodeCursor,
+  MAX_CURSOR_OFFSET,
+} from "../../../src/server/cursor.js";
 import {
   getActivityToolConfig,
   runGetActivity,
@@ -319,6 +323,40 @@ describe("runGetActivity crm paging", () => {
     expect(new Set(seen).size).toBe(seen.length);
   });
 
+  test("an over-returning feed page advances the cursor by the delivered rows", async () => {
+    // What the fetcher hands back when upstream ignored the limit: a page cut
+    // to 20 rows, with the raw total still reported.
+    const records = fakeRecords();
+    const activity = fakeActivity({
+      feed: { items: feedPage(20).items, hasMore: true, rawCount: 57 },
+    });
+
+    const result = await runGetActivity(records.fetchers, activity.fetchers, {
+      source: "crm",
+      ...CRM_RANGE,
+      limit: 20,
+    });
+
+    expect(entriesOf(result)).toHaveLength(20);
+    // 20, not 57: rows 20-56 were never delivered and must not be skipped.
+    expect(decodeCursor(cursorOf(result), "crm")).toEqual({ v: 1, k: "crm", o: 20 });
+  });
+
+  test("a crm walk at the cursor bound reports more without minting a cursor", async () => {
+    const records = fakeRecords();
+    const activity = fakeActivity({ feed: feedPage(20) });
+
+    const result = await runGetActivity(records.fetchers, activity.fetchers, {
+      source: "crm",
+      ...CRM_RANGE,
+      limit: 20,
+      cursor: encodeCursor({ v: 1, k: "crm", o: MAX_CURSOR_OFFSET }),
+    });
+
+    expect(result.structured["hasMore"]).toBe(true);
+    expect(result.structured["nextCursor"]).toBeUndefined();
+  });
+
   test("a short page ends the walk without a cursor", async () => {
     const records = fakeRecords();
     const activity = fakeActivity({ feed: feedPage(4) });
@@ -382,9 +420,57 @@ describe("runGetActivity task paging", () => {
     expect(fourth.structured["nextCursor"]).toBeUndefined();
   });
 
-  test("an empty slice ends the walk instead of repeating the cursor", async () => {
-    // A full raw page whose rows were all dropped upstream of us: the offset
-    // cannot advance, so the walk stops rather than looping on the same cursor.
+  test("a page with dropped rows still lands on the next page boundary", async () => {
+    // 50 raw rows upstream, one of them idless, so 49 items reach the tool. The
+    // walk must end that page on the PAGE boundary (50): stopping at 49 would
+    // send the next call back to page one with a 49-row skip.
+    const dropped: ListPage<TaskRecord> = {
+      items: Array.from({ length: 49 }, (_value, index) => taskAt(index)),
+      hasMore: true,
+      rawCount: 50,
+    };
+    const records = fakeRecords(dropped);
+    const activity = fakeActivity();
+    const args: GetActivityArgs = { source: "tasks", limit: 20 };
+
+    const first = await runGetActivity(records.fetchers, activity.fetchers, args);
+    expect(tasksOf(first)).toHaveLength(20);
+    expect(decodeCursor(cursorOf(first), "tasks")).toEqual({ v: 1, k: "tasks", o: 20 });
+
+    const second = await runGetActivity(records.fetchers, activity.fetchers, {
+      ...args,
+      cursor: cursorOf(first),
+    });
+    expect(tasksOf(second)).toHaveLength(20);
+    expect(decodeCursor(cursorOf(second), "tasks")).toEqual({ v: 1, k: "tasks", o: 40 });
+
+    const third = await runGetActivity(records.fetchers, activity.fetchers, {
+      ...args,
+      cursor: cursorOf(second),
+    });
+    expect(tasksOf(third).map((item) => item.id)).toEqual(
+      Array.from({ length: 9 }, (_value, index) => taskAt(index + 40).id),
+    );
+    expect(decodeCursor(cursorOf(third), "tasks")).toEqual({ v: 1, k: "tasks", o: 50 });
+    expect(records.calls.map((call) => call.opts["page"])).toEqual([1, 1, 1]);
+
+    const pageTwo = fakeRecords(taskPage(6, 50));
+    const fourth = await runGetActivity(pageTwo.fetchers, activity.fetchers, {
+      ...args,
+      cursor: cursorOf(third),
+    });
+    expect(pageTwo.calls[0]).toStrictEqual({ method: "listTasks", opts: { page: 2 } });
+    expect(tasksOf(fourth).map((item) => item.id)).toEqual(
+      Array.from({ length: 6 }, (_value, index) => taskAt(index + 50).id),
+    );
+    expect(fourth.structured["hasMore"]).toBe(false);
+    expect(fourth.structured["nextCursor"]).toBeUndefined();
+  });
+
+  test("a page whose rows were all dropped jumps straight past it", async () => {
+    // A full raw page that mapped to nothing. Delivering zero items is honest;
+    // stalling on the same cursor, or ending a walk upstream says continues,
+    // is not.
     const records = fakeRecords({ items: [], hasMore: true, rawCount: 50 });
     const activity = fakeActivity();
 
@@ -394,7 +480,21 @@ describe("runGetActivity task paging", () => {
     });
 
     expect(tasksOf(result)).toEqual([]);
-    expect(result.structured["hasMore"]).toBe(false);
+    expect(result.structured["hasMore"]).toBe(true);
+    expect(decodeCursor(cursorOf(result), "tasks")).toEqual({ v: 1, k: "tasks", o: 50 });
+  });
+
+  test("a tasks walk at the cursor bound reports more without minting a cursor", async () => {
+    const records = fakeRecords(taskPage(50));
+    const activity = fakeActivity();
+
+    const result = await runGetActivity(records.fetchers, activity.fetchers, {
+      source: "tasks",
+      limit: 20,
+      cursor: encodeCursor({ v: 1, k: "tasks", o: MAX_CURSOR_OFFSET }),
+    });
+
+    expect(result.structured["hasMore"]).toBe(true);
     expect(result.structured["nextCursor"]).toBeUndefined();
   });
 

@@ -241,12 +241,14 @@ export function createActivityFetchers(
         opts,
       );
       // The RAW page comes back unfiltered: the tool applies the type filter and
-      // its cursor math advances by the raw row count, so filtered pages never
-      // re-deliver rows.
+      // its cursor math advances by the delivered window, so filtered pages
+      // never re-deliver rows. Slicing happens BEFORE mapping for the same
+      // reason - a row promoted into the window by a dropped neighbour would
+      // come back at the top of the next page.
       const raw = unwrapList(payload, "items");
       const rawCount = raw.length;
       return {
-        items: mapRows(raw).slice(0, opts.limit),
+        items: mapRows(raw.slice(0, opts.limit)),
         hasMore: rawCount >= opts.limit,
         rawCount,
       };

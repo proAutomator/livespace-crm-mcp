@@ -318,6 +318,31 @@ describe("crmFeed", () => {
     expect(feed.hasMore).toBe(true);
   });
 
+  test("a non-record row inside the window does not pull a later row into the page", async () => {
+    // The window is rows 0-2. Dropping the bad row must NOT promote row 3 into
+    // it: the tool's cursor advances by the window, so a promoted row would be
+    // delivered twice - once here and once at the top of the next page.
+    const rows: unknown[] = [
+      { ...FEED_RAW, text: "Synthetic feed body 0" },
+      "not a record",
+      { ...FEED_RAW, text: "Synthetic feed body 2" },
+      { ...FEED_RAW, text: "Synthetic feed body 3" },
+    ];
+    const { fetchers } = activityFetchersFor({ "Wall/getList": { items: rows } });
+    const feed = await fetchers.crmFeed({
+      dateFrom: "2025-11-01",
+      dateTo: "2025-11-30",
+      limit: 3,
+      offset: 0,
+    });
+    expect(feed.items.map((item) => item.text)).toEqual([
+      "Synthetic feed body 0",
+      "Synthetic feed body 2",
+    ]);
+    expect(feed.rawCount).toBe(4);
+    expect(feed.hasMore).toBe(true);
+  });
+
   test("hasMore is false below the limit", async () => {
     const { fetchers } = activityFetchersFor({ "Wall/getList": { items: [FEED_RAW] } });
     const feed = await fetchers.crmFeed({

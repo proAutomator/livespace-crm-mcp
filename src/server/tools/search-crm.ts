@@ -14,7 +14,7 @@ import {
   type SearchHit,
   type SearchOptions,
 } from "../../livespace/records.js";
-import { decodeCursor, encodeCursor } from "../cursor.js";
+import { decodeCursor, encodeCursor, MAX_CURSOR_OFFSET } from "../cursor.js";
 import { companySchema, dealSchema, personSchema } from "./record-schemas.js";
 import { toToolError, type ToolError } from "./tool-error.js";
 
@@ -29,8 +29,8 @@ import { toToolError, type ToolError } from "./tool-error.js";
  *    sorts it locally. That window is the honest limit of the feature, and
  *    `sortWindowTruncated` says so out loud.
  * 2. Pagination is stateless. A cursor is base64url JSON, nothing is stored
- *    (docs/security.md par. 8), and it advances by the RAW upstream row count so
- *    a page that dropped rows never re-delivers them.
+ *    (docs/security.md par. 8), and it advances by the window that was actually
+ *    delivered, so a page that dropped rows neither re-delivers nor skips them.
  * 3. The markdown channel carries counts and fixed wording only. Every
  *    CRM-authored string stays in `structuredContent`, where the schema types it
  *    as data (docs/security.md par. 4).
@@ -436,10 +436,12 @@ async function filterEnvelope(
       returned: items.length,
       hasMore: result.hasMore,
     };
-    if (result.hasMore) {
-      // The cursor advances by the RAW row count, not by the mapped item count:
-      // rows upstream returned but we dropped must not come back next page.
-      envelope.nextCursor = encodeCursor({ v: 1, k: kind, o: offset + result.rawCount });
+    // The cursor advances by the DELIVERED window - the rows we asked for, not
+    // the rows upstream chose to send. Rows we dropped inside the window must
+    // not come back; rows past it were never delivered and must not be skipped.
+    const nextOffset = offset + Math.min(result.rawCount, limit);
+    if (result.hasMore && nextOffset <= MAX_CURSOR_OFFSET) {
+      envelope.nextCursor = encodeCursor({ v: 1, k: kind, o: nextOffset });
     }
     return envelope;
   }

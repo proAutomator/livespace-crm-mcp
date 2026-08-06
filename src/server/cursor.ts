@@ -24,8 +24,12 @@ export interface CursorPayload {
 /** Matches the `cursor` bound in every tool inputSchema. */
 const MAX_CURSOR_CHARS = 512;
 
-/** Far past any page a caller can reasonably walk to, and keeps `o` sane. */
-const MAX_OFFSET = 100_000;
+/**
+ * Far past any page a caller can reasonably walk to, and keeps `o` sane. It
+ * bounds both ends of a cursor's life: `decodeCursor` refuses a larger offset,
+ * and every mint site refuses to hand out one it would then refuse to take back.
+ */
+export const MAX_CURSOR_OFFSET = 100_000;
 
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
 
@@ -81,7 +85,7 @@ export function decodeCursor(cursor: string, expectedKind: string): CursorPayloa
   const { v, k, o } = parsed as Record<string, unknown>;
   if (v !== 1) throw invalidCursor();
   if (typeof k !== "string" || k !== expectedKind) throw invalidCursor();
-  if (typeof o !== "number" || !Number.isInteger(o) || o < 0 || o > MAX_OFFSET) {
+  if (typeof o !== "number" || !Number.isInteger(o) || o < 0 || o > MAX_CURSOR_OFFSET) {
     throw invalidCursor();
   }
 

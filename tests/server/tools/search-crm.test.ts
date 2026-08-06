@@ -1,15 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import * as z from "zod/v4";
 import { LivespaceError } from "../../../src/livespace/errors.js";
-import type {
-  CompanyRecord,
-  DealRecord,
-  ListPage,
-  PersonRecord,
-  RecordFetchers,
-  SearchHit,
+import {
+  createRecordFetchers,
+  type CompanyRecord,
+  type DealRecord,
+  type ListPage,
+  type PersonRecord,
+  type RecordFetchers,
+  type SearchHit,
 } from "../../../src/livespace/records.js";
-import { decodeCursor, encodeCursor } from "../../../src/server/cursor.js";
+import {
+  decodeCursor,
+  encodeCursor,
+  MAX_CURSOR_OFFSET,
+} from "../../../src/server/cursor.js";
 import {
   runSearchCrm,
   searchCrmToolConfig,
@@ -477,6 +482,120 @@ describe("runSearchCrm filter mode", () => {
       address: "",
       groups: [],
     });
+  });
+});
+
+describe("runSearchCrm cursor arithmetic", () => {
+  function personRows(count: number): Array<{ id: string; name: string }> {
+    return Array.from({ length: count }, (_value, index) => ({
+      id: `person-synthetic-${String(index).padStart(3, "0")}`,
+      name: `Synthetic Person ${index}`,
+    }));
+  }
+
+  /**
+   * Drives the REAL record fetchers over a fake upstream, so the defensive
+   * slice and the cursor arithmetic are exercised as one chain rather than
+   * against a hand-written page.
+   */
+  function fetchersOver(rows: unknown[], ignoreLimit = false) {
+    const params: Array<Record<string, unknown>> = [];
+    const client = {
+      call: (async (
+        _module: string,
+        _method: string,
+        sent: Record<string, unknown>,
+      ): Promise<unknown> => {
+        params.push(sent);
+        const offset = Number(sent["offset"]);
+        const limit = Number(sent["limit"]);
+        const window = ignoreLimit
+          ? rows.slice(offset)
+          : rows.slice(offset, offset + limit);
+        return { contact: window };
+      }) as never,
+    };
+    return { fetchers: createRecordFetchers(client), params };
+  }
+
+  test("an upstream that ignores the limit advances the cursor by the delivered page", async () => {
+    const rows = personRows(57);
+    const { fetchers } = fetchersOver(rows, true);
+
+    const result = await runSearchCrm(fetchers, {
+      kinds: ["persons"],
+      filters: {},
+      limit: 20,
+    });
+
+    const items = itemsOf(result, "persons");
+    expect(items.map((item) => item["id"])).toEqual(
+      rows.slice(0, 20).map((row) => row.id),
+    );
+    const envelope = resultsOf(result)["persons"] as Record<string, unknown>;
+    expect(envelope["count"]).toBe(57);
+    expect(envelope["returned"]).toBe(20);
+    // 20, not 57: rows 20-56 were never delivered and must not be skipped.
+    expect(decodeCursor(String(envelope["nextCursor"]), "person")).toEqual({
+      v: 1,
+      k: "person",
+      o: 20,
+    });
+  });
+
+  test("an idless row inside the page neither duplicates nor skips a row", async () => {
+    const rows: unknown[] = personRows(25);
+    rows[5] = { name: "Synthetic row without an id" };
+    const { fetchers, params } = fetchersOver(rows);
+
+    const first = await runSearchCrm(fetchers, {
+      kinds: ["persons"],
+      filters: {},
+      limit: 10,
+    });
+    const envelope = resultsOf(first)["persons"] as Record<string, unknown>;
+    expect(itemsOf(first, "persons")).toHaveLength(9);
+    expect(decodeCursor(String(envelope["nextCursor"]), "person")).toEqual({
+      v: 1,
+      k: "person",
+      o: 10,
+    });
+
+    const second = await runSearchCrm(fetchers, {
+      kinds: ["persons"],
+      filters: {},
+      limit: 10,
+      cursor: String(envelope["nextCursor"]),
+    });
+
+    expect(params[1]).toMatchObject({ offset: 10, limit: 10 });
+    const seen = [...itemsOf(first, "persons"), ...itemsOf(second, "persons")].map(
+      (item) => String(item["id"]),
+    );
+    expect(new Set(seen).size).toBe(seen.length);
+    // Rows 0-19 minus the idless one: nothing repeated, nothing jumped over.
+    expect(seen).toEqual(
+      personRows(20)
+        .map((row) => row.id)
+        .filter((_id, index) => index !== 5),
+    );
+  });
+
+  test("a walk at the cursor bound reports more without minting a cursor", async () => {
+    const { fetchers } = fakeFetchers({
+      listPersons: page([person()], { hasMore: true, rawCount: 20 }),
+    });
+
+    const result = await runSearchCrm(fetchers, {
+      kinds: ["persons"],
+      filters: {},
+      limit: 20,
+      cursor: encodeCursor({ v: 1, k: "person", o: MAX_CURSOR_OFFSET }),
+    });
+
+    const envelope = resultsOf(result)["persons"] as Record<string, unknown>;
+    expect(envelope["hasMore"]).toBe(true);
+    expect(envelope["nextCursor"]).toBeUndefined();
   });
 });
 

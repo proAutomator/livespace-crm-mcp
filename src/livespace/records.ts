@@ -641,6 +641,10 @@ function hasId(raw: unknown): boolean {
  * Idless rows are dropped instead of failing the whole page, but they still
  * count towards `rawCount`. The `slice` is defensive: an endpoint that ignores
  * the limit we sent must never blow up a page (M3 lesson).
+ *
+ * Slice BEFORE filtering, never after. The tools advance their cursor by the
+ * window they asked for, so a row promoted into the window by a dropped
+ * neighbour would be delivered twice - here and at the top of the next page.
  */
 function toListPage<T>(
   payload: unknown,
@@ -650,7 +654,7 @@ function toListPage<T>(
 ): ListPage<T> {
   const raw = unwrapList(payload, key);
   const rawCount = raw.length;
-  const page = raw.filter(hasId).slice(0, limit);
+  const page = raw.slice(0, limit).filter(hasId);
   return { items: page.map(map), hasMore: rawCount >= limit, rawCount };
 }
 

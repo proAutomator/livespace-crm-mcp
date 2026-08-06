@@ -894,6 +894,24 @@ describe("list fetchers", () => {
     expect(page.hasMore).toBe(true);
   });
 
+  test("an idless row inside the window does not pull a later row into the page", async () => {
+    // The window is rows 0-2. Dropping row 1 must NOT promote row 3 into it:
+    // the cursor advances by the window, so a promoted row would be delivered
+    // twice - once here and once at the top of the next page.
+    const rows: unknown[] = syntheticRows(4, "person-synthetic");
+    rows[1] = { name: "Synthetic row without an id" };
+    const { fetchers } = recordFetchersFor({ "Contact/getAll": { contact: rows } });
+
+    const page = await fetchers.listPersons({ limit: 3, offset: 0 });
+
+    expect(page.items.map((item) => item.id)).toEqual([
+      "person-synthetic-000",
+      "person-synthetic-002",
+    ]);
+    expect(page.rawCount).toBe(4);
+    expect(page.hasMore).toBe(true);
+  });
+
   test("an upstream page that ignores the limit is sliced locally", async () => {
     const { fetchers } = recordFetchersFor({
       "Deal/getAll": { deal: syntheticRows(57, "deal-synthetic") },

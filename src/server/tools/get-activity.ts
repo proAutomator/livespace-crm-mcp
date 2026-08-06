@@ -12,7 +12,7 @@ import {
   type TaskListOptions,
   type TaskRecord,
 } from "../../livespace/records.js";
-import { decodeCursor, encodeCursor } from "../cursor.js";
+import { decodeCursor, encodeCursor, MAX_CURSOR_OFFSET } from "../cursor.js";
 import { taskSchema, wallEntrySchema } from "./record-schemas.js";
 import { toToolError, type ToolError } from "./tool-error.js";
 
@@ -25,10 +25,10 @@ import { toToolError, type ToolError } from "./tool-error.js";
  *    single `z.strictObject`, never a discriminated union: a union root emits
  *    `oneOf` without `"type": "object"` and is not a valid MCP inputSchema.
  * 2. Pagination is stateless and shaped by what upstream can do. The CRM feed
- *    takes a real offset, so its cursor advances by the RAW row count and a
- *    filtered page never re-delivers rows. Tasks have no limit parameter at all
- *    (fixed 50-row pages), so their cursor is an ABSOLUTE ITEM INDEX and the
- *    page number is derived from it.
+ *    takes a real offset, so its cursor advances by the window it delivered and
+ *    a filtered page neither re-delivers nor skips rows. Tasks have no limit
+ *    parameter at all (fixed 50-row pages), so their cursor is an ABSOLUTE ITEM
+ *    INDEX and the page number is derived from it.
  * 3. The markdown channel carries counts and fixed wording only. Wall and feed
  *    text is the most hostile content in the API - it stays in
  *    `structuredContent`, where the schema types it as data
@@ -274,10 +274,12 @@ async function crmPayload(
     count: entries.length,
     hasMore: page.hasMore,
   };
-  if (page.hasMore) {
-    // The cursor advances by the RAW row count, not by the filtered entry count:
-    // rows the type filter dropped must not come back on the next page.
-    payload.nextCursor = encodeCursor({ v: 1, k: "crm", o: offset + page.rawCount });
+  // The cursor advances by the DELIVERED window, not by the filtered entry
+  // count: rows the type filter dropped must not come back on the next page,
+  // and rows past the window were never delivered, so they must not be skipped.
+  const nextOffset = offset + Math.min(page.rawCount, limit);
+  if (page.hasMore && nextOffset <= MAX_CURSOR_OFFSET) {
+    payload.nextCursor = encodeCursor({ v: 1, k: "crm", o: nextOffset });
   }
   return payload;
 }
@@ -299,20 +301,21 @@ async function tasksPayload(
   if (signal !== undefined) listOpts.signal = signal;
   const result = await records.listTasks(listOpts);
   const slice = result.items.slice(skip, skip + limit);
-  const consumed = skip + slice.length;
-  const reachedPageEnd = consumed >= result.items.length;
-  // An empty slice would produce a cursor identical to the one we were given,
-  // and the caller would walk it forever. Ending the walk is the honest answer.
-  const hasMore =
-    slice.length > 0 && (consumed < result.rawCount || (reachedPageEnd && result.hasMore));
+  const reachedPageEnd = skip + slice.length >= result.items.length;
+  const hasMore = !reachedPageEnd || result.hasMore;
+  // Finishing a page jumps to its BOUNDARY, not to the item count: rows upstream
+  // dropped would otherwise leave the offset inside the page we just read, and
+  // the next call would re-fetch it and deliver nothing. Since `skip` is always
+  // below the page size, the offset advances on every call - no walk can stall.
+  const nextOffset = reachedPageEnd ? page * TASK_PAGE_SIZE : offset + slice.length;
   const payload: ActivityPayload = {
     source: "tasks",
     tasks: slice.map((item) => projectRecord("task", item, "standard")),
     count: slice.length,
     hasMore,
   };
-  if (hasMore) {
-    payload.nextCursor = encodeCursor({ v: 1, k: "tasks", o: offset + slice.length });
+  if (hasMore && nextOffset <= MAX_CURSOR_OFFSET) {
+    payload.nextCursor = encodeCursor({ v: 1, k: "tasks", o: nextOffset });
   }
   return payload;
 }
