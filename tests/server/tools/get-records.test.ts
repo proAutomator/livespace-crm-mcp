@@ -19,14 +19,22 @@ import { company, deal, person, task, wallEntry } from "../../support/records.js
 
 // Every value below is invented. No CRM data, no sandbox values (AGENTS.md).
 
-/** `standard` is the full deal minus these three fields. */
-function standardDeal(overrides: Partial<DealRecord> = {}): DealRecord {
-  return deal({ groups: [], creatorName: "", statusChangeDate: "", ...overrides });
+/** `standard` is the full deal WITHOUT these three keys - they are omitted. */
+function standardDeal(overrides: Partial<DealRecord> = {}): Partial<DealRecord> {
+  const record: Partial<DealRecord> = deal(overrides);
+  delete record.groups;
+  delete record.creatorName;
+  delete record.statusChangeDate;
+  return record;
 }
 
-/** `standard` is the full company minus these three fields. */
-function standardCompany(overrides: Partial<CompanyRecord> = {}): CompanyRecord {
-  return company({ www: "", address: "", groups: [], ...overrides });
+/** `standard` is the full company WITHOUT these three keys - they are omitted. */
+function standardCompany(overrides: Partial<CompanyRecord> = {}): Partial<CompanyRecord> {
+  const record: Partial<CompanyRecord> = company(overrides);
+  delete record.www;
+  delete record.address;
+  delete record.groups;
+  return record;
 }
 
 interface RecordCall {
@@ -197,20 +205,20 @@ describe("runGetRecords batches", () => {
       detail: "minimal",
     });
 
-    expect(itemsOf(result)[0]?.["task"]).toEqual({
-      ...task(),
-      description: "",
-      typeId: "",
-      statusId: null,
-      statusName: "",
-      isPrivate: false,
-      priority: 0,
-      dateTo: "",
-      isAllDay: false,
-      linkedRecords: [],
-      created: "",
-      modified: "",
+    // Unrequested fields are ABSENT, not blanked: a returned empty value keeps
+    // its upstream meaning of "not filled in".
+    const record = itemsOf(result)[0]?.["task"] as Record<string, unknown>;
+    expect(record).toEqual({
+      id: task().id,
+      title: task().title,
+      typeName: task().typeName,
+      isCompleted: task().isCompleted,
+      dateFrom: task().dateFrom,
     });
+    expect(Object.keys(record).length).toBe(5);
+    expect(getRecordsToolConfig.outputSchema.safeParse(result.structured).success).toBe(
+      true,
+    );
   });
 });
 

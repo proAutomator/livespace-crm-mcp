@@ -419,21 +419,19 @@ describe("runSearchCrm filter mode", () => {
       detail: "minimal",
     });
 
-    expect(itemsOf(result, "companies")[0]).toEqual({
-      ...company(),
-      phone: "",
-      ownerName: "",
-      ownerId: null,
-      tags: [],
-      source: "",
-      note: "",
-      created: "",
-      modified: "",
-      dealCount: null,
-      www: "",
-      address: "",
-      groups: [],
+    // Unrequested fields are ABSENT, not blanked: a returned empty value keeps
+    // its upstream meaning of "not filled in".
+    const item = itemsOf(result, "companies")[0] as Record<string, unknown>;
+    expect(item).toEqual({
+      id: company().id,
+      name: company().name,
+      nip: company().nip,
+      email: company().email,
     });
+    expect(Object.keys(item).length).toBe(4);
+    expect(searchCrmToolConfig.outputSchema.safeParse(result.structured).success).toBe(
+      true,
+    );
   });
 });
 
@@ -735,8 +733,8 @@ describe("runSearchCrm sorting", () => {
       "person-synthetic-3",
       "person-synthetic-1",
     ]);
-    // minimal drops `modified`, so sorting could only have used the full record.
-    expect(items.every((item) => item["modified"] === "")).toBe(true);
+    // minimal omits `modified`, so sorting could only have used the full record.
+    expect(items.every((item) => !("modified" in item))).toBe(true);
   });
 });
 

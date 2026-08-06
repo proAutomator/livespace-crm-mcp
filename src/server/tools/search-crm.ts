@@ -50,6 +50,12 @@ type ListKind = "person" | "company" | "deal";
 
 type ListRecord = PersonRecord | CompanyRecord | DealRecord;
 
+/**
+ * What leaves the projection. `detail` OMITS the keys outside its level, so a
+ * delivered item is a subset of its record - never the full shape with blanks.
+ */
+type ProjectedRecord = Partial<PersonRecord> | Partial<CompanyRecord> | Partial<DealRecord>;
+
 export type SortKey = "name" | "modified" | "value" | "dateEnd";
 
 export type SortDir = "asc" | "desc";
@@ -140,9 +146,10 @@ sorting is done by this server over one window of at most 200 rows, so
 sortBy cannot be combined with cursor and sortWindowTruncated tells you the
 window was full; sortBy value/dateEnd and the deal filters need
 kinds: ["deals"]; empty sort keys always sort last because a blank field
-means "not filled in", not zero; detail controls how much of each record you
-get back (minimal keeps a handful of fields); pass nextCursor back as cursor
-to get the next page of the same single kind.`,
+means "not filled in", not zero; detail picks which fields each record carries
+(minimal keeps a handful) and the ones it leaves out are ABSENT from the item,
+so a field you do get back that is empty really is empty in the CRM; pass
+nextCursor back as cursor to get the next page of the same single kind.`,
   inputSchema: z.strictObject({
     kinds: z
       .array(z.enum(ARG_KINDS))
@@ -225,7 +232,7 @@ to get the next page of the same single kind.`,
 } as const;
 
 interface KindEnvelope {
-  items?: ListRecord[];
+  items?: ProjectedRecord[];
   hits?: SearchHit[];
   count: number;
   returned: number;
@@ -334,7 +341,11 @@ function listFor(
   return fetchers.listDeals(dealOpts);
 }
 
-function project(kind: ListKind, record: ListRecord, detail: DetailLevel): ListRecord {
+function project(
+  kind: ListKind,
+  record: ListRecord,
+  detail: DetailLevel,
+): ProjectedRecord {
   switch (kind) {
     case "person":
       return projectRecord("person", record as PersonRecord, detail);
@@ -445,7 +456,7 @@ async function filterEnvelope(
   }
   const window = await listFor(fetchers, kind, SORT_WINDOW, 0, filters, signal);
   // Sorting runs on FULL records; the detail projection comes after the slice,
-  // because projected-away fields are empty strings and would sort as such.
+  // because a projected record no longer carries the key the sort runs on.
   const sorted = [...window.items].sort(comparatorFor(args.sortBy, args.sortDir));
   const paged = sorted.slice(0, limit);
   return {

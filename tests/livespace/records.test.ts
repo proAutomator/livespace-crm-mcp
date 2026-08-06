@@ -17,6 +17,12 @@ import {
   type RecordFetchers,
   type TaskRecord,
 } from "../../src/livespace/records.js";
+import {
+  companySchema,
+  dealSchema,
+  personSchema,
+  taskSchema,
+} from "../../src/server/tools/record-schemas.js";
 
 const UNEXPECTED_SHAPE = "Livespace returned an unexpected shape for this record.";
 
@@ -484,57 +490,63 @@ describe("parseCommaDecimal", () => {
   }
 });
 
+/** Drops keys from a copy, so a `standard` expectation reads as "full minus". */
+function without(record: object, keys: readonly string[]): Record<string, unknown> {
+  const rest: Record<string, unknown> = { ...record };
+  for (const key of keys) delete rest[key];
+  return rest;
+}
+
 describe("projectRecord", () => {
-  test("person minimal", () => {
-    expect(projectRecord("person", PERSON, "minimal")).toEqual({
-      ...PERSON_EMPTY,
+  test("person minimal keeps only the minimal keys", () => {
+    const projected = projectRecord("person", PERSON, "minimal");
+    expect(projected).toEqual({
       id: PERSON.id,
       name: PERSON.name,
       email: PERSON.email,
       companyName: PERSON.companyName,
     });
+    expect(Object.keys(projected).length).toBe(4);
   });
 
-  test("person standard", () => {
-    expect(projectRecord("person", PERSON, "standard")).toEqual({
-      ...PERSON,
-      cell: "",
-      www: "",
-      address: "",
-      groups: [],
-    });
+  test("person standard omits the full-only keys entirely", () => {
+    const projected = projectRecord("person", PERSON, "standard");
+    expect(projected).toEqual(without(PERSON, ["cell", "www", "address", "groups"]));
+    for (const key of ["cell", "www", "address", "groups"]) {
+      expect(key in projected).toBe(false);
+    }
   });
 
   test("person full", () => {
     expect(projectRecord("person", PERSON, "full")).toEqual(PERSON);
   });
 
-  test("company minimal", () => {
-    expect(projectRecord("company", COMPANY, "minimal")).toEqual({
-      ...COMPANY_EMPTY,
+  test("company minimal keeps only the minimal keys", () => {
+    const projected = projectRecord("company", COMPANY, "minimal");
+    expect(projected).toEqual({
       id: COMPANY.id,
       name: COMPANY.name,
       nip: COMPANY.nip,
       email: COMPANY.email,
     });
+    expect(Object.keys(projected).length).toBe(4);
   });
 
-  test("company standard", () => {
-    expect(projectRecord("company", COMPANY, "standard")).toEqual({
-      ...COMPANY,
-      www: "",
-      address: "",
-      groups: [],
-    });
+  test("company standard omits the full-only keys entirely", () => {
+    const projected = projectRecord("company", COMPANY, "standard");
+    expect(projected).toEqual(without(COMPANY, ["www", "address", "groups"]));
+    for (const key of ["www", "address", "groups"]) {
+      expect(key in projected).toBe(false);
+    }
   });
 
   test("company full", () => {
     expect(projectRecord("company", COMPANY, "full")).toEqual(COMPANY);
   });
 
-  test("deal minimal", () => {
-    expect(projectRecord("deal", DEAL, "minimal")).toEqual({
-      ...DEAL_EMPTY,
+  test("deal minimal keeps only the minimal keys", () => {
+    const projected = projectRecord("deal", DEAL, "minimal");
+    expect(projected).toEqual({
       id: DEAL.id,
       name: DEAL.name,
       status: DEAL.status,
@@ -543,38 +555,72 @@ describe("projectRecord", () => {
       stageName: DEAL.stageName,
       ownerName: DEAL.ownerName,
     });
+    expect(Object.keys(projected).length).toBe(7);
   });
 
-  test("deal standard", () => {
-    expect(projectRecord("deal", DEAL, "standard")).toEqual({
-      ...DEAL,
-      groups: [],
-      creatorName: "",
-      statusChangeDate: "",
-    });
+  test("deal standard omits the full-only keys entirely", () => {
+    const projected = projectRecord("deal", DEAL, "standard");
+    expect(projected).toEqual(
+      without(DEAL, ["groups", "creatorName", "statusChangeDate"]),
+    );
+    for (const key of ["groups", "creatorName", "statusChangeDate"]) {
+      expect(key in projected).toBe(false);
+    }
   });
 
   test("deal full", () => {
     expect(projectRecord("deal", DEAL, "full")).toEqual(DEAL);
   });
 
-  test("task minimal", () => {
-    expect(projectRecord("task", TASK, "minimal")).toEqual({
-      ...TASK_EMPTY,
+  test("task minimal keeps only the minimal keys", () => {
+    const projected = projectRecord("task", TASK, "minimal");
+    expect(projected).toEqual({
       id: TASK.id,
       title: TASK.title,
       typeName: TASK.typeName,
       isCompleted: TASK.isCompleted,
       dateFrom: TASK.dateFrom,
     });
+    expect(Object.keys(projected).length).toBe(5);
   });
 
-  test("task standard equals full", () => {
+  test("task standard equals full - tasks are slim enough already", () => {
     expect(projectRecord("task", TASK, "standard")).toEqual(TASK);
   });
 
   test("task full", () => {
     expect(projectRecord("task", TASK, "full")).toEqual(TASK);
+  });
+
+  test("an empty value inside the level is returned, never omitted", () => {
+    // Absence means "not requested"; an empty value still means "not filled in".
+    const projected = projectRecord("person", { ...PERSON, email: "" }, "minimal");
+    expect(projected).toEqual({
+      id: PERSON.id,
+      name: PERSON.name,
+      email: "",
+      companyName: PERSON.companyName,
+    });
+    expect("email" in projected).toBe(true);
+  });
+
+  /**
+   * The schemas no longer prove completeness on their own - every non-core field
+   * is optional now - so `full` is pinned against the schema key sets instead.
+   */
+  test("full returns exactly the keys its schema declares, for every kind", () => {
+    expect(Object.keys(projectRecord("person", PERSON, "full")).sort()).toEqual(
+      Object.keys(personSchema.shape).sort(),
+    );
+    expect(Object.keys(projectRecord("company", COMPANY, "full")).sort()).toEqual(
+      Object.keys(companySchema.shape).sort(),
+    );
+    expect(Object.keys(projectRecord("deal", DEAL, "full")).sort()).toEqual(
+      Object.keys(dealSchema.shape).sort(),
+    );
+    expect(Object.keys(projectRecord("task", TASK, "full")).sort()).toEqual(
+      Object.keys(taskSchema.shape).sort(),
+    );
   });
 
   test("projection never mutates the source record", () => {

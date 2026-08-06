@@ -19,8 +19,10 @@ import {
  *    the `detail` cut is a separate projection applied after sorting/slicing
  *    (`projectRecord`).
  * 2. Empty conventions are uniform: string -> `""`, array -> `[]`, nullable ->
- *    `null`, boolean -> `false`, number -> `0`. Projected-away fields take those
- *    same values, so the record shape never changes with `detail`.
+ *    `null`, boolean -> `false`, number -> `0`. They mean one thing only: the
+ *    field is not filled in upstream. A field the `detail` level leaves out is
+ *    therefore OMITTED, never blanked - absence says "not requested", so the two
+ *    answers can never be confused.
  * 3. Ids are opaque strings read from `raw.id`. Contact/Deal payloads also carry
  *    `contact_id`/`company_id`/`deal_id`, which are NOT the record id.
  *
@@ -376,111 +378,6 @@ export function mapTask(raw: unknown): TaskRecord {
   };
 }
 
-const EMPTY_PERSON: PersonRecord = {
-  id: "",
-  name: "",
-  email: "",
-  phone: "",
-  companyName: "",
-  companyId: null,
-  ownerName: "",
-  ownerId: null,
-  tags: [],
-  source: "",
-  note: "",
-  created: "",
-  modified: "",
-  lastActiveDate: "",
-  dealCount: null,
-  cell: "",
-  www: "",
-  address: "",
-  groups: [],
-};
-
-const EMPTY_COMPANY: CompanyRecord = {
-  id: "",
-  name: "",
-  nip: "",
-  email: "",
-  phone: "",
-  ownerName: "",
-  ownerId: null,
-  tags: [],
-  source: "",
-  note: "",
-  created: "",
-  modified: "",
-  dealCount: null,
-  www: "",
-  address: "",
-  groups: [],
-};
-
-const EMPTY_DEAL: DealRecord = {
-  id: "",
-  name: "",
-  status: "",
-  value: null,
-  currency: "",
-  probability: null,
-  processId: "",
-  processName: "",
-  stageId: "",
-  stageName: "",
-  substageId: "",
-  substageName: "",
-  companyId: null,
-  companyName: "",
-  contactId: null,
-  contactName: "",
-  ownerId: null,
-  ownerName: "",
-  dateEnd: "",
-  created: "",
-  modified: "",
-  lastActiveDate: "",
-  tags: [],
-  source: "",
-  note: "",
-  groups: [],
-  creatorName: "",
-  statusChangeDate: "",
-};
-
-const EMPTY_TASK: TaskRecord = {
-  id: "",
-  title: "",
-  description: "",
-  typeId: "",
-  typeName: "",
-  statusId: null,
-  statusName: "",
-  isCompleted: false,
-  isPrivate: false,
-  priority: 0,
-  dateFrom: "",
-  dateTo: "",
-  isAllDay: false,
-  linkedRecords: [],
-  created: "",
-  modified: "",
-};
-
-/** A fresh empty record per kind; arrays must never be shared between results. */
-function emptyRecord(kind: RecordKind): Record<string, unknown> {
-  switch (kind) {
-    case "person":
-      return { ...EMPTY_PERSON, tags: [], groups: [] };
-    case "company":
-      return { ...EMPTY_COMPANY, tags: [], groups: [] };
-    case "deal":
-      return { ...EMPTY_DEAL, tags: [], groups: [] };
-    case "task":
-      return { ...EMPTY_TASK, linkedRecords: [] };
-  }
-}
-
 const MINIMAL_FIELDS: Record<RecordKind, readonly string[]> = {
   person: ["id", "name", "email", "companyName"],
   company: ["id", "name", "nip", "email"],
@@ -497,26 +394,31 @@ const STANDARD_OMITTED: Record<RecordKind, readonly string[]> = {
 };
 
 /**
- * Cuts a full record down to a detail level. Applied AFTER sorting and slicing:
- * sorting on projected records would sort empty strings.
+ * Cuts a full record down to a detail level by OMITTING the keys outside it.
+ * Blanking them instead would collide with the upstream convention that an empty
+ * value means "not filled in" - and it would ship the whole record shape on
+ * every `minimal` item for nothing.
+ *
+ * Applied AFTER sorting and slicing: a projected record no longer carries the
+ * key a sort may run on.
  */
 export function projectRecord<K extends RecordKind>(
   kind: K,
   record: RecordDataMap[K],
   detail: DetailLevel,
-): RecordDataMap[K] {
+): Partial<RecordDataMap[K]> {
   if (detail === "full") return { ...record };
   const source = record as unknown as Record<string, unknown>;
-  const projected = emptyRecord(kind);
+  const projected: Record<string, unknown> = {};
   if (detail === "minimal") {
     for (const field of MINIMAL_FIELDS[kind]) projected[field] = source[field];
-    return projected as unknown as RecordDataMap[K];
+    return projected as Partial<RecordDataMap[K]>;
   }
   const omitted = new Set(STANDARD_OMITTED[kind]);
   for (const [field, value] of Object.entries(source)) {
     if (!omitted.has(field)) projected[field] = value;
   }
-  return projected as unknown as RecordDataMap[K];
+  return projected as Partial<RecordDataMap[K]>;
 }
 
 /**

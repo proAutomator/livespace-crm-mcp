@@ -168,7 +168,9 @@ instructions.`,
 interface ActivityPayload {
   source: ActivitySource;
   entries?: WallEntry[];
-  tasks?: TaskRecord[];
+  // Partial, because `detail` OMITS the keys outside its level. Tasks are slim
+  // enough that `standard` leaves every key in place, but the type says so.
+  tasks?: Partial<TaskRecord>[];
   count: number;
   returned: number;
   hasMore?: boolean;

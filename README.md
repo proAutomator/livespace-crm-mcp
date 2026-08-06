@@ -7,9 +7,10 @@ Unofficial [MCP](https://modelcontextprotocol.io) server for
 > **Status:** the protocol and security core is complete and hardened
 > (stateless MCP 2026-07-28, official conformance suite and dependency audit
 > in CI, rate limiting, cancellation, operation-aware retries). CRM tools
-> land milestone by milestone - `health`, `crm_metadata` (CRM dictionaries),
-> `search_crm`, `get_records` and `get_activity` are live; `analyze` and the
-> write tools are next. Until the write tools ship with their safety rails,
+> land milestone by milestone - four of the five read tools are live
+> (`crm_metadata`, `search_crm`, `get_records`, `get_activity`, next to
+> `health`); `analyze` and the five write tools are planned. Until the write
+> tools ship with their safety rails,
 > point it at a test Livespace account rather than a production CRM.
 
 ## Why not just wrap the API?

@@ -94,9 +94,10 @@ them. Every id answers for itself: status "ok" carries the record under the
 key of its kind, "not_found" means the record does not exist OR the API
 key's user cannot see it (Livespace does not distinguish the two), and
 "error" carries a {code, message, hint}. Duplicate ids are collapsed before
-fetching. Notes: detail controls how much of each record you get back
-(minimal keeps a handful of fields); includeWall adds the recent wall
-entries of each record and needs at most 5 ids and a kind other than task -
+fetching. Notes: detail picks which fields each record carries (minimal keeps
+a handful) and the ones it leaves out are ABSENT from the record, so a field
+you do get back that is empty really is empty in the CRM; includeWall adds
+the recent wall entries of each record and needs at most 5 ids and a kind other than task -
 use get_activity for longer histories or for the CRM-wide feed.`,
   inputSchema: z.strictObject({
     kind: z
@@ -143,10 +144,12 @@ type WallKind = "person" | "company" | "deal";
 interface RecordItem {
   id: string;
   status: ItemStatus;
-  person?: PersonRecord;
-  company?: CompanyRecord;
-  deal?: DealRecord;
-  task?: TaskRecord;
+  // Partial, because `detail` OMITS the keys outside its level: a delivered
+  // record is a subset of its shape, never the full shape with blanks.
+  person?: Partial<PersonRecord>;
+  company?: Partial<CompanyRecord>;
+  deal?: Partial<DealRecord>;
+  task?: Partial<TaskRecord>;
   code?: string;
   message?: string;
   hint?: string;
