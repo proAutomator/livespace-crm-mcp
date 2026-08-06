@@ -890,6 +890,73 @@ describe("runAnalyze forecast_vs_realization", () => {
   });
 });
 
+/**
+ * Runs one analyze call under a clock that sits past the budget from its SECOND
+ * read on. Read #1 is the runner's own `deadlineAt = Date.now() + BUDGET`; every
+ * later read is a sweep checking that deadline before a page. A future change
+ * that reads the clock BEFORE computing deadlineAt breaks these tests loudly,
+ * which is the intended alarm rather than a mystery.
+ */
+async function pastTheBudget<T>(scenario: () => Promise<T>): Promise<T> {
+  const realNow = Date.now;
+  const base = realNow();
+  let reads = 0;
+  Date.now = (): number => {
+    reads += 1;
+    return reads === 1 ? base : base + ANALYZE_BUDGET_MS + 1_000;
+  };
+  try {
+    return await scenario();
+  } finally {
+    Date.now = realNow;
+  }
+}
+
+describe("analyze budget wiring", () => {
+  // These pin the deadline INTO the option builders. `basedOn.truncated` is
+  // true with or without it - a sweep that pages to its cap truncates too - so
+  // only the call count tells the two worlds apart.
+  test("pipeline_summary hands the deadline to the deal sweep", async () => {
+    const world = fakes({
+      deals: { open: { items: OPEN_DEALS, hasMore: true, rawCount: 100 } },
+    });
+
+    const result = await pastTheBudget(() => run(world, { analysis: "pipeline_summary" }));
+
+    // Five pages without the wiring.
+    expect(world.records.calls).toHaveLength(1);
+    expect(envelopeOf(result, "pipelineSummary")["basedOn"]).toEqual({
+      deals: { fetched: 3, truncated: true },
+    });
+  });
+
+  test("activity_summary hands the deadline to both sweeps", async () => {
+    const world = fakes({
+      feed: { items: FEED_ENTRIES, hasMore: true, rawCount: 200 },
+      tasks: { items: TASK_ROWS, hasMore: true, rawCount: 50 },
+    });
+
+    const result = await pastTheBudget(() =>
+      run(world, {
+        analysis: "activity_summary",
+        dateFrom: "2026-01-01",
+        dateTo: "2026-01-31",
+      }),
+    );
+
+    // Five feed pages and ten task pages without the wiring.
+    expect(world.activity.calls).toHaveLength(1);
+    expect(world.records.calls).toHaveLength(1);
+    const envelope = envelopeOf(result, "activitySummary");
+    expect((envelope["feed"] as Record<string, unknown>)["basedOn"]).toEqual({
+      entries: { fetched: 2, truncated: true },
+    });
+    expect((envelope["tasks"] as Record<string, unknown>)["basedOn"]).toEqual({
+      tasks: { fetched: 2, truncated: true },
+    });
+  });
+});
+
 describe("runAnalyze cancellation", () => {
   test("a caller who already walked away gets no work and no result", async () => {
     const controller = new AbortController();
