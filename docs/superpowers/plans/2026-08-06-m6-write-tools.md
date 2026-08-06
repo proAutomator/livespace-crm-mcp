@@ -686,3 +686,28 @@ what changed.
    `executePlan` also tests `blocked` BEFORE its halted guard now, so a
    halted batch reports why each item was blocked instead of flattening
    the reason into a bare `not_attempted`.
+
+### Done-gate verdict (2026-08-07, live smoke on the sandbox - ALL PASS)
+
+Suite 644 -> 931 (+1 flake fix: the requestState tamper test now flips the
+MAC segment's first base64url character - the last one carries padding
+bits and decoded identical ~6% of the time). Orchestration: 13 probe
+rounds, 3-lens critique panel (49 findings, plan rewritten to rev. 2),
+6 sequential implementers, 21-agent adversarial verification (4 lenses ->
+17 findings -> 9 confirmed / 8 refuted), 1 fix agent (3 commits), live
+smoke as a real MCP client.
+
+Live smoke highlights: read-only server lists exactly 6 tools; normal
+server 9 in order. Preview and dryRun create NOTHING (paired-control
+exact-email query: 0 rows, then exactly 1 after the confirmed create).
+Confirmed batch: person with emails+phones verified applied (the arrays
+persisted - the silent-drop trap is closed), deal landed in the CHOSEN
+process with value computed upstream from the productName budget line
+(300 = 150x2), date-only task visible; case-flipped duplicate ->
+skipped_duplicate with existingId; allowDuplicate bypass works; firstname
+update reports verification "unavailable" + VERIFICATION_UNCHECKED
+(honest: no comparator exists), deal won verified with
+status_change_date stamped; log_activities wall-verified 3/3 (deal note,
+company note via addCompanyNote, call with its sent timestamp); a bogus
+deal link errored its item without touching siblings; every text channel
+counts-only; full raw-delete cleanup succeeded.
