@@ -5,6 +5,7 @@ import type { AppDeps } from "../../src/server/mcp.js";
 import type { MetadataService } from "../../src/server/tools/crm-metadata.js";
 import type { ActivityFetchers } from "../../src/livespace/activity.js";
 import type { RecordFetchers } from "../../src/livespace/records.js";
+import type { WriteFetchers } from "../../src/livespace/writes.js";
 import { person, wallEntry } from "../support/records.js";
 
 const BASE_CONFIG: ServerConfig = {
@@ -18,18 +19,24 @@ const BASE_CONFIG: ServerConfig = {
   rateLimitBurst: 1000,
   maxConcurrentRequests: 16,
   maxQueuedRequests: 32,
+  // 44 ASCII bytes, invented: it keeps the write codec off its per-process
+  // random fallback so nothing here depends on a startup warning.
+  requestStateKey: "synthetic-request-state-key-0123456789-abcd",
 };
 
 const PROTOCOL = "2026-07-28";
 
-function meta(protocolVersion: string = PROTOCOL): Record<string, unknown> {
+function meta(
+  protocolVersion: string = PROTOCOL,
+  clientCapabilities: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     "io.modelcontextprotocol/protocolVersion": protocolVersion,
     "io.modelcontextprotocol/clientInfo": {
       name: "modern-wire-test",
       version: "0.0.0",
     },
-    "io.modelcontextprotocol/clientCapabilities": {},
+    "io.modelcontextprotocol/clientCapabilities": clientCapabilities,
   };
 }
 
@@ -39,6 +46,7 @@ interface ModernRequestOptions {
   name?: string;
   id?: number;
   metaProtocolVersion?: string;
+  clientCapabilities?: Record<string, unknown>;
   headerOverrides?: Record<string, string>;
   omitHeaders?: string[];
   omitMeta?: boolean;
@@ -47,7 +55,9 @@ interface ModernRequestOptions {
 function modernRequest(options: ModernRequestOptions): Request {
   const params: Record<string, unknown> = {
     ...(options.params ?? {}),
-    ...(options.omitMeta ? {} : { _meta: meta(options.metaProtocolVersion) }),
+    ...(options.omitMeta
+      ? {}
+      : { _meta: meta(options.metaProtocolVersion, options.clientCapabilities) }),
   };
   const headers: Record<string, string> = {
     host: "127.0.0.1:3020",
@@ -109,6 +119,30 @@ function fakeActivity(overrides: Partial<ActivityFetchers> = {}): ActivityFetche
     crmFeed: unexpectedCall,
     ...overrides,
   } as ActivityFetchers;
+}
+
+// Write fetchers that never write: the sweeps below only need the three write
+// tools to be REGISTERED, and a call that reached one would be a loud failure.
+function fakeWrites(): WriteFetchers {
+  const never =
+    (method: string) =>
+    async (): Promise<never> => {
+      throw new Error(`unexpected write call: ${method}`);
+    };
+  return {
+    createPerson: never("createPerson"),
+    createCompany: never("createCompany"),
+    createDeal: never("createDeal"),
+    createTask: never("createTask"),
+    updatePerson: never("updatePerson"),
+    updateCompany: never("updateCompany"),
+    updateDeal: never("updateDeal"),
+    updateTask: never("updateTask"),
+    addNote: never("addNote"),
+    addCall: never("addCall"),
+    findPersonByEmail: never("findPersonByEmail"),
+    findCompanyByName: never("findCompanyByName"),
+  } as unknown as WriteFetchers;
 }
 
 // Fully synthetic dictionary data; `read` may throw to simulate a section
@@ -296,6 +330,7 @@ describe("crm_metadata wiring", () => {
         metadata: fakeMetadata(syntheticSection),
         records: fakeRecords(),
         activity: fakeActivity(),
+        writes: fakeWrites(),
       }).request(modernRequest({ method: "tools/list" })),
     );
     const checked: string[] = [];
@@ -312,7 +347,54 @@ describe("crm_metadata wiring", () => {
       checked.push(tool.name);
     }
     // The loop must actually cover the whole surface, not a stale subset.
-    expect(checked.length).toBe(6);
+    expect(checked.length).toBe(9);
+  });
+
+  test("read-only mode keeps the surface at the six read tools", async () => {
+    const listed = await jsonFromResponse(
+      await buildApp({
+        config: { ...BASE_CONFIG, readOnly: true },
+        version: "0.0.0-test",
+        metadata: fakeMetadata(syntheticSection),
+        records: fakeRecords(),
+        activity: fakeActivity(),
+        writes: fakeWrites(),
+      }).request(modernRequest({ method: "tools/list" })),
+    );
+    expect(listed.result.tools.map((t: any) => t.name)).toEqual([
+      "health",
+      "crm_metadata",
+      "search_crm",
+      "get_records",
+      "get_activity",
+      "analyze",
+    ]);
+  });
+
+  test("an elicitation-capable client gets input_required from a write tool", async () => {
+    // The capability travels in the request's own `_meta` envelope, so the
+    // helper has to be able to declare it.
+    const payload = await jsonFromResponse(
+      await app({
+        metadata: fakeMetadata(syntheticSection),
+        records: fakeRecords(),
+        activity: fakeActivity(),
+        writes: fakeWrites(),
+      }).request(
+        modernRequest({
+          method: "tools/call",
+          name: "create_records",
+          clientCapabilities: { elicitation: {} },
+          params: {
+            name: "create_records",
+            arguments: { persons: [{ firstname: "Synthetic Given" }] },
+          },
+          id: 30,
+        }),
+      ),
+    );
+    expect(payload.result.resultType).toBe("input_required");
+    expect(payload.result.inputRequests.confirm.method).toBe("elicitation/create");
   });
 
   test("an unexpected upstream failure never leaks its text over the wire", async () => {

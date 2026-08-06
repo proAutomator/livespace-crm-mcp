@@ -73,4 +73,28 @@ describe("buildInstructions", () => {
       "read-only mode is ON",
     );
   });
+
+  test("names the three write tools and how a write is approved", () => {
+    const text = buildInstructions({ readOnly: false });
+    for (const tool of ["create_records", "update_records", "log_activities"]) {
+      expect(text).toContain(tool);
+    }
+    expect(text).toContain("confirm: true");
+    expect(text).toContain("dryRun");
+    expect(text).not.toContain("Write tools arrive in a later milestone.");
+  });
+
+  test("warns that logged notes are public and that nothing can be deleted", () => {
+    const text = buildInstructions({ readOnly: false });
+    expect(text).toContain("PUBLIC");
+    expect(text).toContain("no delete");
+  });
+
+  test("read-only instructions name none of the write tools", () => {
+    const text = buildInstructions({ readOnly: true });
+    for (const tool of ["create_records", "update_records", "log_activities"]) {
+      expect(text).not.toContain(tool);
+    }
+    expect(text).toContain("Write tools are disabled and not listed.");
+  });
 });

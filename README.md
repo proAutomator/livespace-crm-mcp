@@ -8,10 +8,11 @@ Unofficial [MCP](https://modelcontextprotocol.io) server for
 > (stateless MCP 2026-07-28, official conformance suite and dependency audit
 > in CI, rate limiting, cancellation, operation-aware retries). CRM tools
 > land milestone by milestone - all five read tools are live (`crm_metadata`,
-> `search_crm`, `get_records`, `get_activity`, `analyze`, next to `health`);
-> the five write tools are planned. Until the write
-> tools ship with their safety rails,
-> point it at a test Livespace account rather than a production CRM.
+> `search_crm`, `get_records`, `get_activity`, `analyze`, next to `health`),
+> and three write tools are live behind human confirmation and the read-only
+> kill-switch (`create_records`, `update_records`, `log_activities`);
+> `move_deals_to_stage` and `notify_user` are still planned. Point it at a
+> test Livespace account rather than a production CRM.
 
 ## Why not just wrap the API?
 
@@ -55,6 +56,7 @@ Copy `.env.example` to `.env` and fill in your values. Never commit `.env`.
 | `MCP_BIND_HOST` | Default `127.0.0.1`; non-loopback requires `MCP_AUTH_TOKEN` |
 | `MCP_AUTH_TOKEN` | Bearer token for `/mcp`; mandatory on public binds |
 | `LIVESPACE_MCP_READ_ONLY` | `true` disables all write tools |
+| `MCP_REQUEST_STATE_KEY` | HMAC secret (32+ bytes) signing write confirmations; required once auth is on or the bind is public |
 | `MCP_RATE_LIMIT_PER_MINUTE` / `MCP_RATE_LIMIT_BURST` | Per-principal request budget (default 120/min, burst 30) |
 | `MCP_MAX_CONCURRENT_REQUESTS` / `MCP_MAX_QUEUED_REQUESTS` | Overload protection (default 8 in flight, 16 queued; excess gets 429 + `Retry-After`) |
 

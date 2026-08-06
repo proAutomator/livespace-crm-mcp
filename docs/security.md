@@ -76,9 +76,15 @@ names). That content is **untrusted data**:
   listed) - a global kill-switch for cautious operators.
 - Batch writes support `dryRun` previews; destructive ambiguity resolves to
   "do nothing and explain".
-- After every write the server re-reads the affected records and reports
-  "before → after", so silent partial failures cannot hide.
-- Contact creation uses Livespace's native dedupe check by default.
+- After every write the server re-reads the affected record and reports
+  before -> after, naming the fields that did not stick. A read never turns an
+  applied write into an error: when the follow-up read itself fails, the item
+  stays successful and reports `verification: unavailable` instead of masking
+  a write that landed.
+- Contact creation dedupes by default, and the check is OURS: Livespace's
+  `__check_if_exists` parameter was probed on a sandbox and does NOT dedupe,
+  so a person is looked up by exact e-mail (case-insensitive) and a company by
+  exact name before anything is created.
 - Every tool carries accurate `readOnlyHint` / `destructiveHint` /
   `idempotentHint` annotations, enforced by tests.
 

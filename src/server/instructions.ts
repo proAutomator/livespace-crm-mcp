@@ -3,6 +3,38 @@ export function buildInstructions(options: { readOnly: boolean }): string {
     ? "\nNOTE: read-only mode is ON. Write tools are disabled and not listed.\n"
     : "";
 
+  // In read-only mode the write tools do not exist: naming them would only
+  // teach the model to call something that answers "not found".
+  const writeBullet = options.readOnly
+    ? ""
+    : `
+- Write with "create_records", "update_records" and "log_activities". They
+  work in small batches and never write on the first call - see below.`;
+
+  const writeSection = options.readOnly
+    ? ""
+    : `
+Writing (create_records, update_records, log_activities):
+- Nothing is written until a human approves it. A plain call answers with a
+  plan and writes nothing; so does dryRun: true. Clients that can prompt a
+  human show a confirmation prompt and write only after it is accepted; on
+  clients that cannot, re-call with confirm: true and the SAME arguments to
+  execute the plan you just previewed.
+- Batches are small on purpose: at most 10 records per create_records or
+  update_records call, and 15 activities per log_activities call.
+- create_records looks a person up by exact e-mail and a company by exact name
+  before creating one, and reports a match as skipped_duplicate with the id it
+  found; allowDuplicate: true creates anyway.
+- update_records merges: a field you do not send is left alone. It needs the
+  record id and refuses the same id twice in one call.
+- Notes logged by log_activities are PUBLIC. Livespace ignores every
+  visibility setting, so anyone who can see the record can read them.
+- There is no delete and no merge here, and a logged note or call cannot be
+  edited or taken back. Every item reports which fields did not stick
+  (unappliedFields) or that the check was unavailable - when it was, re-read
+  the record instead of repeating the write.
+`;
+
   return `Unofficial MCP server for Livespace CRM. It exposes intent-shaped tools
 instead of mirroring the raw API, adds server-side sorting and aggregation the
 API lacks, and returns errors with recovery hints.
@@ -17,8 +49,7 @@ Quick start:
   "get_records" (batch by id), and pull history with "get_activity".
   Ids come from search results and crm_metadata - never guess them.
 - Ask "analyze" for numbers over many records - pipeline, conversion,
-  activity, forecast - instead of paging the records yourself.
-- Write tools arrive in a later milestone.
+  activity, forecast - instead of paging the records yourself.${writeBullet}
 
 "analyze" runs ONE named aggregation per call:
 - "pipeline_summary": open deals per process and stage. Optional processId
@@ -35,7 +66,7 @@ read basedOn.truncated. A truncated window withholds period sums and
 conversion ratios (they come back null) while the counts stay. Sums skip
 deals with no value and count them in value.missing, and a sum whose deals
 mix currencies is null - see the currencies list.
-
+${writeSection}
 CRITICAL - Livespace facts this server enforces for you:
 - Deal status (open/won/lost) is NOT the same as the process stage. Stage
   changes happen by completing process steps; dedicated tools handle that.
