@@ -393,7 +393,16 @@ describe("write tool registration", () => {
       await instance.request(createCall({ id: 28, clientCapabilities: ELICITATION_CAPABLE })),
     );
     const wire: string = first.result.requestState;
-    const tampered = `${wire.slice(0, -1)}${wire.endsWith("A") ? "B" : "A"}`;
+    // Flip the FIRST character after the last dot (the MAC segment's first
+    // base64url char): all six of its bits are significant, so the decoded
+    // MAC always changes. The final char carries padding bits and a flip
+    // there can decode to identical bytes (~6% of mints) - a flaky tamper.
+    const dot = wire.lastIndexOf(".");
+    const target = dot + 1;
+    const tampered =
+      wire.slice(0, target) +
+      (wire[target] === "A" ? "B" : "A") +
+      wire.slice(target + 1);
     const payload = await jsonFromResponse(
       await instance.request(
         createCall({
