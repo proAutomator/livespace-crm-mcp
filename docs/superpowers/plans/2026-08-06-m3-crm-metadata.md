@@ -622,3 +622,26 @@ CRM-authored display name (`Livespace: reachable as <name>.`). Same rule
 `crm_metadata` already enforces: the name stays in
 `structuredContent.livespace.user`, the text line is fixed wording
 (docs/security.md par. 4).
+
+**Consciously skipped review findings.** (a) A cap on NESTED collections
+(stages/steps/teams inside a section): real Livespace accounts run a handful
+of processes, so the multiplicative-nesting risk is theoretical at dictionary
+scale; revisit in M4 where list payloads are genuinely unbounded. (b) Test
+helper deduplication: the adversarial pass itself reduced the claim to ~20
+lines of true redundancy - not worth the churn now.
+
+**Live smoke (2026-08-06, sandbox, done gate).** Modern-era calls against
+`bun run dev` on port 3021: tools list is exactly health + crm_metadata; a
+subset call (processes, currentUser) and a full call both returned every
+requested section with zero errors and `resultType: "complete"`;
+`currentUser.id` resolved non-null through the service-level composition;
+the text channel carried counts only; a repeat call returned the same `asOf`
+(cache hit). Section counts matched the sandbox reference kept in the
+maintainer's untracked notes - with one correction recorded there: the
+sandbox has more processes than the initial probe skim suggested (the probe
+file was read partially; the smoke is the source of truth).
+
+Orchestration provenance: plan critiqued by a 3-lens panel (13+10+14
+findings, 8 blockers - all resolved in rev. 2), implemented by 5 sequential
+agents, verified by a 4-lens adversarial pass (22 confirmed / 2 refuted
+findings, deduplicated into 7 fix clusters, applied in 3 commits).
