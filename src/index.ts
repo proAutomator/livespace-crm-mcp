@@ -2,6 +2,7 @@ import { loadLivespaceConfig } from "./config/env.js";
 import { loadServerConfig } from "./config/server-env.js";
 import { LivespaceClient } from "./livespace/client.js";
 import { buildApp } from "./server/app.js";
+import { createMetadataService } from "./server/tools/crm-metadata.js";
 import packageJson from "../package.json";
 
 const serverConfig = loadServerConfig(process.env);
@@ -11,6 +12,9 @@ const client = new LivespaceClient(livespaceConfig);
 const app = buildApp({
   config: serverConfig,
   version: packageJson.version,
+  // Built once per process: the dictionary cache lives here while the MCP
+  // protocol layer stays stateless (docs/security.md par. 8).
+  metadata: createMetadataService(client),
   livespacePing: (opts) =>
     client.call<{ name?: string; login?: string }>(
       "Default",

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildApp } from "../../src/server/app.js";
 import type { ServerConfig } from "../../src/config/server-env.js";
+import type { MetadataService } from "../../src/server/tools/crm-metadata.js";
 
 const BASE_CONFIG: ServerConfig = {
   port: 3020,
@@ -75,8 +76,39 @@ async function jsonFromResponse(response: Response): Promise<any> {
   return JSON.parse(text);
 }
 
-function app() {
-  return buildApp({ config: BASE_CONFIG, version: "0.0.0-test" });
+function app(metadata?: MetadataService) {
+  return buildApp({
+    config: BASE_CONFIG,
+    version: "0.0.0-test",
+    ...(metadata ? { metadata } : {}),
+  });
+}
+
+// Fully synthetic dictionary data; `read` may throw to simulate a section
+// failure.
+function fakeMetadata(read: (section: string) => unknown): MetadataService {
+  return {
+    get: async (section: string) => ({
+      data: read(section),
+      asOf: 1_000,
+      stale: false,
+    }),
+  } as unknown as MetadataService;
+}
+
+const SYNTHETIC_CURRENT_USER = {
+  id: "user-synthetic-1",
+  name: "Synthetic User",
+  email: "synthetic.user@example.invalid",
+  position: "Synthetic Position",
+  permissions: { contact_add: true },
+  teams: [],
+};
+
+function syntheticSection(section: string): unknown {
+  if (section === "currentUser") return SYNTHETIC_CURRENT_USER;
+  if (section === "sources") return ["Synthetic Source"];
+  return [];
 }
 
 describe("modern era (2026-07-28) wire behavior", () => {
@@ -184,5 +216,95 @@ describe("modern era (2026-07-28) wire behavior", () => {
       );
       expect([405, 400]).toContain(response.status);
     }
+  });
+});
+
+describe("crm_metadata wiring", () => {
+  test("is listed and callable when a metadata service is configured", async () => {
+    const instance = app(fakeMetadata(syntheticSection));
+
+    const listed = await jsonFromResponse(
+      await instance.request(modernRequest({ method: "tools/list" })),
+    );
+    expect(listed.result.tools.map((t: any) => t.name)).toEqual([
+      "health",
+      "crm_metadata",
+    ]);
+    const entry = listed.result.tools.find(
+      (t: any) => t.name === "crm_metadata",
+    );
+    expect(entry.annotations.readOnlyHint).toBe(true);
+    expect(entry.annotations.openWorldHint).toBe(false);
+
+    const response = await instance.request(
+      modernRequest({
+        method: "tools/call",
+        name: "crm_metadata",
+        params: {
+          name: "crm_metadata",
+          arguments: { sections: ["currentUser"] },
+        },
+        id: 3,
+      }),
+    );
+    expect(response.status).toBe(200);
+    const payload = await jsonFromResponse(response);
+    expect(payload.result.resultType).toBe("complete");
+    expect(payload.result.structuredContent.sections.currentUser.data.name).toBe(
+      "Synthetic User",
+    );
+    expect(payload.result.structuredContent.errors).toEqual([]);
+  });
+
+  test("is not listed when no metadata service is configured", async () => {
+    const listed = await jsonFromResponse(
+      await app().request(modernRequest({ method: "tools/list" })),
+    );
+    expect(listed.result.tools.map((t: any) => t.name)).toEqual(["health"]);
+  });
+
+  test("every listed tool carries the four annotation booleans", async () => {
+    const listed = await jsonFromResponse(
+      await app(fakeMetadata(syntheticSection)).request(
+        modernRequest({ method: "tools/list" }),
+      ),
+    );
+    expect(listed.result.tools.length).toBeGreaterThan(1);
+    for (const tool of listed.result.tools) {
+      expect(tool.annotations).toBeDefined();
+      for (const hint of [
+        "readOnlyHint",
+        "destructiveHint",
+        "idempotentHint",
+        "openWorldHint",
+      ]) {
+        expect(typeof tool.annotations[hint]).toBe("boolean");
+      }
+    }
+  });
+
+  test("an unexpected upstream failure never leaks its text over the wire", async () => {
+    const instance = app(
+      fakeMetadata(() => {
+        throw new Error("SENSITIVE-synthetic upstream body");
+      }),
+    );
+    const response = await instance.request(
+      modernRequest({
+        method: "tools/call",
+        name: "crm_metadata",
+        params: {
+          name: "crm_metadata",
+          arguments: { sections: ["currentUser"] },
+        },
+        id: 4,
+      }),
+    );
+    expect(response.status).toBe(200);
+    const raw = await response.text();
+    expect(raw).not.toContain("SENSITIVE-synthetic");
+    const dataLine = raw.split("\n").find((line) => line.startsWith("data: "));
+    const payload = JSON.parse(dataLine ? dataLine.slice(6) : raw);
+    expect(payload.result.isError).toBe(true);
   });
 });

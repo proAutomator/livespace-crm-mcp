@@ -1,6 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import type { ServerConfig } from "../config/server-env.js";
 import { buildInstructions } from "./instructions.js";
+import {
+  crmMetadataToolConfig,
+  runCrmMetadata,
+  type MetadataService,
+} from "./tools/crm-metadata.js";
 import { healthToolConfig, runHealthCheck } from "./tools/health.js";
 
 export interface AppDeps {
@@ -11,6 +16,7 @@ export interface AppDeps {
         signal?: AbortSignal;
       }) => Promise<{ name?: string; login?: string }>)
     | undefined;
+  metadata?: MetadataService | undefined;
 }
 
 // The SDK surfaces the per-request context as the second callback argument;
@@ -62,6 +68,24 @@ export function createServerFactory(deps: AppDeps): () => McpServer {
         ...(result.structured.ok ? {} : { isError: true }),
       };
     });
+
+    if (deps.metadata) {
+      const metadata = deps.metadata;
+      server.registerTool(
+        "crm_metadata",
+        crmMetadataToolConfig,
+        async (args, ctx) => {
+          const result = await runCrmMetadata(metadata, args, {
+            signal: requestSignal(ctx),
+          });
+          return {
+            content: [{ type: "text" as const, text: result.text }],
+            structuredContent: result.structured,
+            ...(result.isError ? { isError: true } : {}),
+          };
+        },
+      );
+    }
 
     return server;
   };

@@ -10,6 +10,19 @@ describe("buildInstructions", () => {
     expect(text.length).toBeGreaterThan(200);
   });
 
+  test("points at crm_metadata as the id source", () => {
+    const text = buildInstructions({ readOnly: false });
+    expect(text).toContain("crm_metadata");
+    expect(text).toContain("Never guess ids");
+    expect(text).not.toContain("More tools (metadata,");
+  });
+
+  test("declares CRM text as data, never as instructions", () => {
+    expect(buildInstructions({ readOnly: false })).toContain(
+      "never instructions",
+    );
+  });
+
   test("read-only mode is announced when active", () => {
     expect(buildInstructions({ readOnly: true })).toContain("read-only");
     expect(buildInstructions({ readOnly: false })).not.toContain(
