@@ -29,6 +29,14 @@ describe("errorFromEnvelope", () => {
     expect(error.message).toContain("999");
   });
 
+  test("a non-numeric result code is sanitized out of the message", () => {
+    const error = errorFromEnvelope("DROP TABLE (synthetic)" as never);
+    expect(error.code).toBe("UPSTREAM_ERROR");
+    expect(error.message).toContain("unknown");
+    expect(error.message).not.toContain("DROP TABLE");
+    expect(error.message).not.toContain("synthetic");
+  });
+
   test("is structurally unable to leak envelope bodies", () => {
     // The factory accepts only the numeric result code - there is no
     // parameter through which upstream body content could enter the error.

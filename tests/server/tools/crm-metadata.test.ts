@@ -394,6 +394,22 @@ describe("crmMetadataToolConfig", () => {
       }).success,
     ).toBe(false);
   });
+
+  test("the products envelope survives a schema round trip intact", async () => {
+    const { service } = fakeService();
+    const result = await runCrmMetadata(service, { sections: ["products"] });
+    const parsed = crmMetadataToolConfig.outputSchema.safeParse(result.structured);
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.sections.products?.data).toEqual([
+      {
+        id: "prod-synthetic-1",
+        name: "Synthetic Product",
+        sku: "SYNTHETIC-SKU-1",
+        defaultPrice: "2500.00",
+      },
+    ]);
+  });
 });
 
 function fakeClient(responses: Record<string, unknown>) {

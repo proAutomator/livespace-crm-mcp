@@ -73,7 +73,9 @@ export async function runHealthCheck(
         me.name === undefined
           ? { reachable: true }
           : { reachable: true, user: me.name };
-      lines.push(`Livespace: reachable${me.name ? ` as ${me.name}` : ""}.`);
+      // The display name is CRM-authored text: it stays in structuredContent,
+      // where the schema types it as data (docs/security.md par. 4).
+      lines.push("Livespace: reachable.");
     } catch (error) {
       ok = false;
       livespace = { reachable: false };

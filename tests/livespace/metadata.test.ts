@@ -283,6 +283,28 @@ describe("dealGroups tolerant mapper", () => {
     ]);
   });
 
+  test("an array of bare strings is an unknown shape", async () => {
+    const { fetchers } = fetchersFor({
+      "Deal/getGroupList": ["Synthetic A", "Synthetic B"],
+    });
+
+    const error = await fetchers.dealGroups().then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(LivespaceError);
+    expect((error as LivespaceError).code).toBe("UPSTREAM_ERROR");
+    expect((error as LivespaceError).message).toBe(UNEXPECTED_SHAPE);
+  });
+
+  test("an array of objects that all lack ids still maps to an empty array", async () => {
+    const { fetchers } = fetchersFor({
+      "Deal/getGroupList": [{ name: "Synthetic no-id" }],
+    });
+
+    expect(await fetchers.dealGroups()).toEqual([]);
+  });
+
   test("a record of objects is an unknown shape", async () => {
     const { fetchers } = fetchersFor({
       "Deal/getGroupList": {

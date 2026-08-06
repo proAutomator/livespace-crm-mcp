@@ -110,51 +110,66 @@ export function createMetadataService(
 const idName = z.object({ id: z.string(), name: z.string() });
 const team = z.object({ id: z.string(), name: z.string(), roles: z.array(z.string()) });
 
-const sectionData = z.union([
-  z.array(
-    z.object({
-      id: z.string(),
-      name: z.string(),
-      stages: z.array(
-        z.object({ id: z.string(), name: z.string(), steps: z.array(idName) }),
-      ),
-    }),
-  ),
-  z.array(
-    z.object({
-      id: z.string(),
-      name: z.string(),
-      email: z.string(),
-      teams: z.array(team),
-    }),
-  ),
-  z.array(idName),
-  z.array(z.string()),
-  z.array(
-    z.object({
-      id: z.string(),
-      name: z.string(),
-      sku: z.string(),
-      defaultPrice: z.string(),
-    }),
-  ),
+// One envelope type per section. A union would let a section validate against
+// the wrong member and silently strip fields it does not know (products losing
+// sku/defaultPrice, for one), so each section names its own shape.
+const envelopeOf = <T extends z.ZodType>(data: T) =>
   z.object({
-    id: z.string().nullable(),
+    asOf: z.number(),
+    ageMs: z.number(),
+    stale: z.boolean(),
+    truncated: z.boolean(),
+    totalItems: z.number().optional(),
+    data,
+  });
+
+const processData = z.array(
+  z.object({
+    id: z.string(),
+    name: z.string(),
+    stages: z.array(
+      z.object({ id: z.string(), name: z.string(), steps: z.array(idName) }),
+    ),
+  }),
+);
+
+const userData = z.array(
+  z.object({
+    id: z.string(),
     name: z.string(),
     email: z.string(),
-    position: z.string(),
-    permissions: z.record(z.string(), z.boolean()),
     teams: z.array(team),
   }),
-]);
+);
 
-const sectionEnvelope = z.object({
-  asOf: z.number(),
-  ageMs: z.number(),
-  stale: z.boolean(),
-  truncated: z.boolean(),
-  totalItems: z.number().optional(),
-  data: sectionData,
+const productData = z.array(
+  z.object({
+    id: z.string(),
+    name: z.string(),
+    sku: z.string(),
+    defaultPrice: z.string(),
+  }),
+);
+
+const currentUserData = z.object({
+  id: z.string().nullable(),
+  name: z.string(),
+  email: z.string(),
+  position: z.string(),
+  permissions: z.record(z.string(), z.boolean()),
+  teams: z.array(team),
+});
+
+const sectionsSchema = z.strictObject({
+  processes: envelopeOf(processData).optional(),
+  users: envelopeOf(userData).optional(),
+  contactGroups: envelopeOf(z.array(idName)).optional(),
+  dealGroups: envelopeOf(z.array(idName)).optional(),
+  sources: envelopeOf(z.array(z.string())).optional(),
+  taskTypes: envelopeOf(z.array(idName)).optional(),
+  taskStatuses: envelopeOf(z.array(idName)).optional(),
+  products: envelopeOf(productData).optional(),
+  currentUser: envelopeOf(currentUserData).optional(),
 });
 
 export const crmMetadataToolConfig = {
@@ -178,7 +193,7 @@ for a few minutes (see asOf/ageMs/stale per section).`,
       ),
   }),
   outputSchema: z.object({
-    sections: z.partialRecord(z.enum(METADATA_SECTIONS), sectionEnvelope),
+    sections: sectionsSchema,
     errors: z.array(
       z.object({
         section: z.string(),

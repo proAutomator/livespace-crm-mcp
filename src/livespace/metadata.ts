@@ -157,11 +157,16 @@ function idNameFromRecord(data: unknown): IdName[] {
 function idNameTolerant(data: unknown): IdName[] {
   if (Array.isArray(data)) {
     const items: IdName[] = [];
+    let sawObject = false;
     for (const element of data) {
+      if (element !== null && typeof element === "object") sawObject = true;
       const id = readId(element);
       if (id === null) continue;
       items.push({ id, name: asName((element as Record<string, unknown>)["name"]) });
     }
+    // Objects without an id are skipped, but an array carrying no object at
+    // all (bare strings, numbers) is a shape we do not understand.
+    if (data.length > 0 && !sawObject) throw unexpectedShape();
     return items;
   }
   const record = asRecord(data);

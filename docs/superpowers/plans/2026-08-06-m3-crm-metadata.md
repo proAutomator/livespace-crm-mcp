@@ -599,4 +599,26 @@ null and the section succeeds, as planned. The id-resolution tests moved from
 aborted `cache.get` to `CANCELLED` by checking the SIGNAL state, not the error
 type - the abort reason can be a `DOMException`, a plain `Error` or a bare
 string, so name checks are unreliable. Without this the all-cancelled guard in
-`runCrmMetadata` never fired, because aborts arrived as `UPSTREAM_ERROR`.
+`runCrmMetadata` never fired, because aborts arrived as `UPSTREAM_ERROR`. The
+guard also required a non-empty error list, so an empty fan-out cannot throw.
+
+**Output schema.** The planned `z.union` of section shapes plus
+`z.partialRecord` was replaced with one envelope per section under a
+`z.strictObject`. A union matches its first compatible member, so a products
+envelope validated as `z.array(idName)` and lost `sku` and `defaultPrice` on the
+way out. A round-trip test now pins the products shape.
+
+**Tolerant mapper.** `idNameTolerant` accepted an array of bare strings and
+returned `[]`, hiding an unknown upstream shape. A non-empty array with no
+object element now throws the fixed unexpected-shape error; an array of objects
+that all lack ids still maps to `[]`, as planned.
+
+**Error sanitization.** `errorFromEnvelope` interpolated the raw `result` field
+into the fallback message. The field is upstream data, so a non-integer now
+renders as `unknown`.
+
+**Health tool (M2 file, fixed in this pass).** The text line carried the
+CRM-authored display name (`Livespace: reachable as <name>.`). Same rule
+`crm_metadata` already enforces: the name stays in
+`structuredContent.livespace.user`, the text line is fixed wording
+(docs/security.md par. 4).

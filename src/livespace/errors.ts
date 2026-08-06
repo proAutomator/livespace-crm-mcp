@@ -129,9 +129,13 @@ export function errorFromEnvelope(resultCode: number): LivespaceError {
   if (mapped) {
     return new LivespaceError(mapped.code, mapped.message, mapped.hint, resultCode);
   }
+  // The envelope is upstream data: only a real integer is echoed back, so a
+  // malformed `result` field cannot smuggle text into the message
+  // (docs/security.md par. 6).
+  const safe = Number.isInteger(resultCode) ? String(resultCode) : "unknown";
   return new LivespaceError(
     "UPSTREAM_ERROR",
-    `Livespace returned unexpected result code ${resultCode}.`,
+    `Livespace returned unexpected result code ${safe}.`,
     "Retry once; report the code on the issue tracker if it persists.",
     resultCode,
   );
