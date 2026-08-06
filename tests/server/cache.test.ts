@@ -268,6 +268,66 @@ describe("createTtlCache", () => {
     expect(calls).toBe(2);
   });
 
+  test("a synchronously throwing fetcher does not poison the key", async () => {
+    const clock = fixedClock();
+    const cache = makeCache(clock);
+    let calls = 0;
+    const fetcher = (): Promise<string> => {
+      calls += 1;
+      if (calls === 1) throw new Error("synthetic synchronous failure");
+      return Promise.resolve(`v${calls}`);
+    };
+
+    const error = await rejection(cache.get("k", fetcher));
+    expect((error as Error).message).toBe("synthetic synchronous failure");
+
+    clock.advance(201);
+    expect(await cache.get("k", fetcher)).toEqual({
+      value: "v2",
+      asOf: 201,
+      stale: false,
+    });
+    expect(calls).toBe(2);
+  });
+
+  test("invalidate during a pending fetch keeps the result from resurrecting", async () => {
+    const clock = fixedClock();
+    const cache = makeCache(clock);
+    const pending = deferred<string>();
+    let calls = 0;
+    const fetcher = () => {
+      calls += 1;
+      return calls === 1 ? pending.promise : Promise.resolve(`v${calls}`);
+    };
+
+    const first = cache.get("k", fetcher);
+    cache.invalidate("k");
+    pending.resolve("v1");
+    expect((await first).value).toBe("v1");
+
+    expect((await cache.get("k", fetcher)).value).toBe("v2");
+    expect(calls).toBe(2);
+  });
+
+  test("the retention sweep drops expired entries of keys nobody re-reads", async () => {
+    const clock = fixedClock();
+    const cache = makeCache(clock);
+    await cache.get("a", async () => "va1");
+    await cache.get("b", async () => "vb1");
+
+    clock.advance(5001);
+    expect((await cache.get("a", async () => "va2")).value).toBe("va2");
+
+    // "b" was swept by the get("a") call, so there is no stale value left to
+    // fall back on when its next fetch fails.
+    const error = await rejection(
+      cache.get("b", async () => {
+        throw new Error("synthetic upstream failure");
+      }),
+    );
+    expect((error as Error).message).toBe("synthetic upstream failure");
+  });
+
   test("stored values are deep frozen", async () => {
     const clock = fixedClock();
     const cache = makeCache(clock);

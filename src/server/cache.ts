@@ -65,6 +65,25 @@ export function createTtlCache(opts: TtlCacheOptions): {
   const entries = new Map<string, Entry>();
   const failures = new Map<string, Failure>();
   const inFlight = new Map<string, Promise<Entry>>();
+  // Bumped by invalidate(): a fetch that started before it must not write its
+  // result back, or the invalidated key resurrects.
+  const generations = new Map<string, number>();
+
+  function generationOf(key: string): number {
+    return generations.get(key) ?? 0;
+  }
+
+  // Retention is a hard bound (docs/security.md par. 8), so it cannot depend on
+  // a key being read again: every get() drops everything past the window.
+  function sweep(): void {
+    const cutoff = now() - opts.staleMaxMs;
+    for (const [key, entry] of entries) {
+      if (entry.asOf < cutoff) entries.delete(key);
+    }
+    for (const [key, failure] of failures) {
+      if (failure.failedAt < cutoff) failures.delete(key);
+    }
+  }
 
   function liveEntry(key: string): Entry | undefined {
     const entry = entries.get(key);
@@ -77,22 +96,31 @@ export function createTtlCache(opts: TtlCacheOptions): {
   }
 
   async function runFetch(key: string, fetch: () => Promise<unknown>): Promise<Entry> {
+    const generation = generationOf(key);
+    const current = () => generationOf(key) === generation;
     try {
-      const value = deepFreeze(await fetch());
+      // Promise.resolve().then(fetch) keeps a synchronously throwing fetcher
+      // from settling before get() stores this promise - otherwise `finally`
+      // clears the in-flight slot first and the rejected flight stays cached.
+      const value = deepFreeze(await Promise.resolve().then(fetch));
       const asOf = now();
       const entry: Entry = {
         value,
         asOf,
         expiresAt: asOf + opts.ttlMs * (0.9 + 0.2 * jitter()),
       };
-      entries.set(key, entry);
-      failures.delete(key);
+      if (current()) {
+        entries.set(key, entry);
+        failures.delete(key);
+      }
       return entry;
     } catch (error) {
-      failures.set(key, { failedAt: now(), error });
+      if (current()) failures.set(key, { failedAt: now(), error });
       throw error;
     } finally {
-      inFlight.delete(key);
+      // Only ever clear our own slot: after an invalidate the slot may already
+      // belong to a newer fetch.
+      if (current()) inFlight.delete(key);
     }
   }
 
@@ -121,6 +149,7 @@ export function createTtlCache(opts: TtlCacheOptions): {
     const signal = callerOpts?.signal;
     if (signal?.aborted) throw abortError(signal);
 
+    sweep();
     const entry = liveEntry(key);
     if (entry && now() < entry.expiresAt) {
       return { value: entry.value as T, asOf: entry.asOf, stale: false };
@@ -155,8 +184,10 @@ export function createTtlCache(opts: TtlCacheOptions): {
   }
 
   function invalidate(key: string): void {
+    generations.set(key, generationOf(key) + 1);
     entries.delete(key);
     failures.delete(key);
+    inFlight.delete(key);
   }
 
   return { get, invalidate };
