@@ -186,20 +186,24 @@ export function readElicitedConfirm(ctx: unknown): boolean | undefined {
 }
 
 /**
- * Spent confirmations, bounded. 512 entries is sound under the single-process
- * deployment the codec key already assumes; past that the oldest is evicted
- * and becomes replayable, which is the documented bound of an in-memory set.
+ * Spent confirmations live for a full codec TTL after they are consumed.
+ * Never evict an unexpired entry: a count-bound set made an old but still
+ * valid signed state replayable once enough later confirmations were used.
+ * Expiry bounds this process-local store by the valid-time window instead.
  */
-const CONSUMED_JTI_LIMIT = 512;
-const consumedJtis = new Set<string>();
+const consumedJtis = new Map<string, number>();
+
+function purgeExpiredJtis(now: number): void {
+  for (const [jti, expiresAt] of consumedJtis) {
+    if (expiresAt < now) consumedJtis.delete(jti);
+  }
+}
 
 export function consumeJti(jti: string): boolean {
+  const now = Date.now();
+  purgeExpiredJtis(now);
   if (consumedJtis.has(jti)) return false;
-  consumedJtis.add(jti);
-  if (consumedJtis.size > CONSUMED_JTI_LIMIT) {
-    const oldest = consumedJtis.values().next().value;
-    if (oldest !== undefined) consumedJtis.delete(oldest);
-  }
+  consumedJtis.set(jti, now + CONFIRMATION_TTL_SECONDS * 1000);
   return true;
 }
 

@@ -44,6 +44,21 @@ async function jsonFromResponse(response: Response): Promise<any> {
   return JSON.parse(text);
 }
 
+async function captureStderr<T>(
+  scenario: () => Promise<T>,
+): Promise<{ value: T; lines: string[] }> {
+  const real = console.error;
+  const lines: string[] = [];
+  console.error = (...args: unknown[]): void => {
+    lines.push(args.map(String).join(" "));
+  };
+  try {
+    return { value: await scenario(), lines };
+  } finally {
+    console.error = real;
+  }
+}
+
 describe("MCP HTTP surface", () => {
   test("tools/list exposes the health tool with annotations", async () => {
     const app = buildApp({ config: BASE_CONFIG, version: "0.0.0-test" });
@@ -87,18 +102,21 @@ describe("MCP HTTP surface", () => {
     expect(response.status).toBe(200);
   });
 
-  test("bearer auth: missing and wrong tokens get 401 with WWW-Authenticate", async () => {
+  test("bearer auth: every rejected form gets 401 with the exact challenge", async () => {
     const config = { ...BASE_CONFIG, authToken: "synthetic-bearer-token" };
     const app = buildApp({ config, version: "0.0.0-test" });
 
-    const missing = await app.request(mcpRequest(TOOLS_LIST));
-    expect(missing.status).toBe(401);
-    expect(missing.headers.get("www-authenticate")).toContain("Bearer");
-
-    const wrong = await app.request(
-      mcpRequest(TOOLS_LIST, { authorization: "Bearer synthetic-wrong-token" }),
-    );
-    expect(wrong.status).toBe(401);
+    const rejectedHeaders: Array<Record<string, string>> = [
+      {},
+      { authorization: "Bearer synthetic-wrong-token" },
+      { authorization: "Bearer " },
+      { authorization: "Basic synthetic-basic-token" },
+    ];
+    for (const headers of rejectedHeaders) {
+      const response = await app.request(mcpRequest(TOOLS_LIST, headers));
+      expect(response.status).toBe(401);
+      expect(response.headers.get("www-authenticate")).toBe('Bearer realm="mcp"');
+    }
   });
 
   test("bearer auth: correct token passes", async () => {
@@ -163,5 +181,42 @@ describe("MCP HTTP surface", () => {
     const body = await response.json();
     expect(body.status).toBe("ok");
     expect(JSON.stringify(body)).not.toContain("synthetic-bearer-token");
+  });
+
+  test("upstream bodies and bearer tokens reach neither results nor stderr", async () => {
+    const bearer = "synthetic-bearer-token-log-marker";
+    const rejectedBearer = "synthetic-rejected-bearer-log-marker";
+    const upstream = "SENSITIVE-synthetic-upstream-body";
+    const app = buildApp({
+      config: { ...BASE_CONFIG, authToken: bearer },
+      version: "0.0.0-test",
+      livespacePing: async () => {
+        throw new Error(`${upstream} ${bearer}`);
+      },
+    });
+
+    const { value, lines } = await captureStderr(async () => {
+      const rejected = await app.request(
+        mcpRequest(TOOLS_LIST, { authorization: `Bearer ${rejectedBearer}` }),
+      );
+      const tool = await app.request(
+        mcpRequest(
+          {
+            jsonrpc: "2.0",
+            id: 9,
+            method: "tools/call",
+            params: { name: "health", arguments: { checkLivespace: true } },
+          },
+          { authorization: `Bearer ${bearer}` },
+        ),
+      );
+      return { rejected: await rejected.text(), tool: await tool.text() };
+    });
+
+    const visible = `${value.rejected}\n${value.tool}\n${lines.join("\n")}`;
+    expect(visible).not.toContain(upstream);
+    expect(visible).not.toContain(bearer);
+    expect(visible).not.toContain(rejectedBearer);
+    expect(lines).toEqual([]);
   });
 });

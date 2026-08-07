@@ -340,7 +340,7 @@ describe("crm_metadata wiring", () => {
     expect(listed.result.tools.map((t: any) => t.name)).toEqual(["health"]);
   });
 
-  test("every listed tool carries the four annotation booleans", async () => {
+  test("every listed tool carries its exact security annotations", async () => {
     const listed = await jsonFromResponse(
       await app({
         metadata: fakeMetadata(syntheticSection),
@@ -351,21 +351,56 @@ describe("crm_metadata wiring", () => {
         subdomain: SUBDOMAIN,
       }).request(modernRequest({ method: "tools/list" })),
     );
+    const read = {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    };
+    const expected: Record<string, Record<string, boolean>> = {
+      health: read,
+      crm_metadata: read,
+      search_crm: read,
+      get_records: read,
+      get_activity: read,
+      analyze: read,
+      create_records: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+      update_records: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+      log_activities: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+      move_deals_to_stage: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      notify_user: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    };
     const checked: string[] = [];
     for (const tool of listed.result.tools) {
-      expect(tool.annotations).toBeDefined();
-      for (const hint of [
-        "readOnlyHint",
-        "destructiveHint",
-        "idempotentHint",
-        "openWorldHint",
-      ]) {
-        expect(typeof tool.annotations[hint]).toBe("boolean");
-      }
+      expect(tool.annotations).toEqual(expected[tool.name]);
       checked.push(tool.name);
     }
-    // The loop must actually cover the whole surface, not a stale subset.
-    expect(checked.length).toBe(11);
+    expect(checked).toEqual(Object.keys(expected));
   });
 
   test("read-only mode keeps the surface at the six read tools", async () => {

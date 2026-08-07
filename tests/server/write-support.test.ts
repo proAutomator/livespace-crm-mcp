@@ -320,14 +320,31 @@ describe("consumeJti", () => {
     expect(consumeJti(jti)).toBe(false);
   });
 
-  test("the set is bounded: the 513th entry evicts the oldest", () => {
-    const oldest = "jti-synthetic-evicted";
+  test("more than 512 later entries never unburn an unexpired jti", () => {
+    const oldest = "jti-synthetic-stays-burned";
     expect(consumeJti(oldest)).toBe(true);
-    for (let i = 0; i < 512; i += 1) {
+    for (let i = 0; i < 600; i += 1) {
       expect(consumeJti(`jti-synthetic-filler-${i}`)).toBe(true);
     }
-    // Documented bound: an evicted confirmation becomes replayable.
-    expect(consumeJti(oldest)).toBe(true);
+    expect(consumeJti(oldest)).toBe(false);
+  });
+
+  test("expired entries are purged without unburning a live sibling", () => {
+    const realNow = Date.now;
+    const base = realNow();
+    try {
+      Date.now = () => base;
+      expect(consumeJti("jti-synthetic-expires")).toBe(true);
+
+      Date.now = () => base + CONFIRMATION_TTL_SECONDS * 1000 - 1;
+      expect(consumeJti("jti-synthetic-still-live")).toBe(true);
+
+      Date.now = () => base + CONFIRMATION_TTL_SECONDS * 1000 + 1;
+      expect(consumeJti("jti-synthetic-expires")).toBe(true);
+      expect(consumeJti("jti-synthetic-still-live")).toBe(false);
+    } finally {
+      Date.now = realNow;
+    }
   });
 });
 

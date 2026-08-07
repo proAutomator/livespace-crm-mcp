@@ -40,6 +40,23 @@ describe("buildInstructions", () => {
     expect(text).not.toContain("Search, records, activity");
   });
 
+  test("is a per-tool cheat sheet for the five CRM read tools", () => {
+    const text = buildInstructions({ readOnly: false }).replace(/\s+/gu, " ");
+    expect(text).toContain("nine dictionary sections");
+    expect(text).toContain("Custom-field datasets are not available");
+    expect(text).toContain("Use phrase or filters, never both");
+    expect(text).toContain("sortWindowTruncated");
+    expect(text).toContain("sortBy and cursor cannot be combined");
+    expect(text).toContain("one record kind and up to 25 ids");
+    expect(text).toContain("includeWall");
+    expect(text).toContain("at most five records");
+    expect(text).toContain("not_found can also mean");
+    expect(text).toContain('source: "record", "crm" or "tasks"');
+    expect(text).toContain("count is the raw upstream page size");
+    expect(text).toContain("returned is what remains");
+    expect(text).toContain("Fields omitted by a detail level are absent");
+  });
+
   test("names analyze, its four analyses and the window caveat", () => {
     const text = buildInstructions({ readOnly: false });
     expect(text).toContain("analyze");
@@ -90,6 +107,39 @@ describe("buildInstructions", () => {
     expect(text).not.toContain("Write tools arrive in a later milestone.");
   });
 
+  test("states the real elicitation-first and direct-fallback contract", () => {
+    const text = buildInstructions({ readOnly: false }).replace(/\s+/gu, " ");
+    expect(text).not.toContain("never write on the first call");
+    expect(text).toContain(
+      "On an elicitation-capable client, a non-dry-run request always asks a human",
+    );
+    expect(text).toContain("confirm: true cannot bypass that prompt");
+    expect(text).toContain(
+      "On a client without elicitation, confirm: true executes immediately",
+    );
+    expect(text).toContain("Preview first, review the plan");
+  });
+
+  test("explains signed-state changes and uncertain write outcomes", () => {
+    const text = buildInstructions({ readOnly: false }).replace(/\s+/gu, " ");
+    expect(text).toContain("requestState");
+    expect(text).toContain("single-use");
+    expect(text).toContain("five minutes");
+    expect(text).toContain("recordsChanged");
+    expect(text).toContain("unknown_outcome");
+    expect(text).toContain("not_attempted");
+    expect(text).toContain("verification: unavailable");
+    expect(text).toContain("never retry a write blindly");
+  });
+
+  test("pins the remaining write-tool limits and irreversible cases", () => {
+    const text = buildInstructions({ readOnly: false }).replace(/\s+/gu, " ");
+    expect(text).toContain("Phone calls can target persons only");
+    expect(text).toContain("recordKind and recordId together, or neither");
+    expect(text).toContain("one notification per recipient per minute");
+    expect(text).toContain("logged note or call cannot be edited or removed");
+  });
+
   test("warns that logged notes are public and that nothing can be deleted", () => {
     const text = buildInstructions({ readOnly: false });
     expect(text).toContain("PUBLIC");
@@ -116,5 +166,11 @@ describe("buildInstructions", () => {
     const text = buildInstructions({ readOnly: true });
     for (const tool of WRITE_TOOLS) expect(text).not.toContain(tool);
     expect(text).toContain("Write tools are disabled and not listed.");
+  });
+
+  test("uses only ASCII hyphens in both modes", () => {
+    for (const readOnly of [false, true]) {
+      expect(buildInstructions({ readOnly })).not.toMatch(/[—–]/u);
+    }
   });
 });

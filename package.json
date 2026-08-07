@@ -7,6 +7,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:security": "bun test tests/security-contract.test.ts tests/config/env.test.ts tests/config/server-env.test.ts tests/server/auth.test.ts tests/server/http.test.ts tests/livespace/client.test.ts tests/livespace/metadata.test.ts tests/server/tools/crm-metadata.test.ts tests/livespace/records.test.ts tests/livespace/activity.test.ts tests/livespace/aggregate-windows.test.ts tests/livespace/writes.test.ts tests/server/modern-wire.test.ts tests/server/write-registration.test.ts tests/server/write-support.test.ts tests/server/tools/tool-error.test.ts tests/server/tools/search-crm.test.ts tests/server/tools/get-activity.test.ts tests/server/analyze.test.ts tests/server/create-records.test.ts tests/server/update-records.test.ts tests/server/log-activities.test.ts tests/server/move-deals-to-stage.test.ts tests/server/notify-user.test.ts",
     "smoke": "bun run scripts/smoke.ts",
     "dev": "bun run src/index.ts"
   },

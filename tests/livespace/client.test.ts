@@ -128,6 +128,20 @@ describe("LivespaceClient.call", () => {
     expect(dataPayload["limit"]).toBe(5);
   });
 
+  test("keeps an opaque user id in POST data and out of the request URL", async () => {
+    const calls: Call[] = [];
+    const client = makeClient([tokenEnvelope(), envelope({ ok: true })], calls);
+    const id = "person-synthetic/../opaque?id=1#fragment";
+
+    await client.call("Contact", "get", { id });
+
+    const url = new URL(calls[1]?.url ?? "https://invalid.synthetic");
+    expect(calls[1]?.url).not.toContain(id);
+    expect(url.search).toBe("");
+    expect(url.hash).toBe("");
+    expect(signedBody(calls, 1)["id"]).toBe(id);
+  });
+
   test("fetches a fresh token for every logical call", async () => {
     const calls: Call[] = [];
     const client = makeClient(

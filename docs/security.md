@@ -49,7 +49,9 @@ and sanction only excessive server load. Therefore the client MUST implement:
 
 - a global concurrency cap and conservative request throttle,
 - exponential backoff with jitter on failures; no hot retry loops,
-- explicit `limit` on every list call (the API defaults to returning ALL),
+- an explicit `limit` on every list call where the endpoint supports it;
+  `Todo/getTodoObjects` uses fixed 50-row pages, while dictionary endpoints
+  that ignore `limit` are bounded by local caps,
 - batch caps (max 50 items per write batch),
 - in-memory caching of dictionaries (processes, users, datasets) with TTL to
   avoid re-fetching static data.
@@ -138,7 +140,25 @@ The suite MUST cover at least:
 5. origin guard denies unknown origins;
 6. user-supplied IDs are encoded, never interpolated into paths/queries;
 7. every listed tool carries correct annotations (read-only enforcement test);
-8. `analyze`/list tools always send an explicit `limit` upstream.
+8. `analyze` and list-style calls send an explicit `limit` where the endpoint
+   supports it; `Todo/getTodoObjects` uses fixed 50-row pages with bounded page
+   counts, and limit-ignoring dictionary endpoints use bounded local caps.
+
+### Regression map
+
+Run `bun run test:security` for the focused contract below. `bun test` remains
+the complete gate and MUST also pass before release.
+
+| Requirement | Regression proof |
+|---|---|
+| 1 | `tests/config/server-env.test.ts` - `fail-closed: non-loopback bind without MCP_AUTH_TOKEN throws` |
+| 2 | `tests/server/http.test.ts` - `bearer auth: every rejected form gets 401 with the exact challenge` |
+| 3 | `tests/server/write-registration.test.ts` - `read-only mode lists the six read tools and none of the write tools`; `read-only refuses a direct call to every write tool, fetchers untouched` |
+| 4 | `tests/server/http.test.ts` - `upstream bodies and bearer tokens reach neither results nor stderr`; `tests/livespace/client.test.ts` - envelope and auth-echo redaction; `tests/server/tools/tool-error.test.ts` - fixed generic mapping |
+| 5 | `tests/server/http.test.ts` - `unknown Origin is rejected` and the localhost control |
+| 6 | `tests/livespace/client.test.ts` - `keeps an opaque user id in POST data and out of the request URL`; `tests/livespace/writes.test.ts` - `recordUrl percent-encodes the id it is given` |
+| 7 | `tests/server/modern-wire.test.ts` - `every listed tool carries its exact security annotations`; `tests/server/write-registration.test.ts` - read-only enforcement |
+| 8 | `tests/livespace/metadata.test.ts`, `tests/server/tools/crm-metadata.test.ts`, `tests/livespace/records.test.ts`, `tests/livespace/activity.test.ts`, `tests/livespace/aggregate-windows.test.ts`, `tests/server/tools/search-crm.test.ts`, `tests/server/tools/get-activity.test.ts`, and `tests/server/analyze.test.ts` pin upstream limits, dictionary caps, fixed pages and bounded windows |
 
 ## Trust boundaries (out of scope)
 

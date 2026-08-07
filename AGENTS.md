@@ -35,7 +35,9 @@ pinned to an exact version.
   over the Postman portal and confirm every method with a live smoke test on a
   sandbox account before release.
 - `Deal/getAll` requires at least one condition. List endpoints default to
-  returning ALL records - always send an explicit `limit`.
+  returning ALL records - send an explicit `limit` where the endpoint supports
+  it. `Todo/getTodoObjects` uses fixed 50-row pages; dictionary endpoints that
+  ignore `limit` need bounded local caps.
 - There is no "set stage" call: stage changes = marking process steps via
   `editDeal stages{step_id: 0|1}` mapped from `Deal/process_getList`.
 - Every logical call costs 2 HTTP requests (auth token + call): batch
