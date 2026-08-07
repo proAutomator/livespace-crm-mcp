@@ -1,4 +1,4 @@
-# Livespace CRM MCP
+# Livespace CRM MCP Server
 
 Unofficial [MCP](https://modelcontextprotocol.io) server for
 [Livespace CRM](https://www.livespace.io) - designed for the model, not as a
