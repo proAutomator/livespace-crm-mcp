@@ -155,7 +155,10 @@ const resultItemSchema = z.strictObject({
   // A move never skips a duplicate: the same id twice is refused outright.
   status: z.enum(["ok", "error", "unknown_outcome", "not_attempted"]),
   id: z.string().optional(),
-  /** Whether THIS call sent a step edit for the deal. */
+  /**
+   * Whether THIS call moved the deal. Absent when the outcome is unknown: the
+   * step edit went out and may have landed.
+   */
   moved: z.boolean().optional(),
   stepsChecked: z.number().optional(),
   stepsUnchecked: z.number().optional(),
@@ -711,8 +714,16 @@ function mergeDetails(
       // An item the budget or a halt never reached still says where the deal
       // stands - the executor had nothing to report for it.
       ...(result.before === undefined ? { before: detail.before } : {}),
-      // "moved" is about THIS call: an unchanged deal is `ok` and was not moved.
-      moved: detail.dispatches && result.status === "ok",
+      // "moved" is about THIS call: an unchanged deal is `ok` and was not
+      // moved. An outcome the transport could not tell us about is exactly
+      // that - the step edit went out and may have landed - so neither true nor
+      // false is honest and the key is omitted, as `notify_user` omits
+      // `dispatched`. The flip counts below stay: they come from the PLAN and
+      // describe what was sent, which is true either way, and they are the only
+      // recovery information an unknown row carries.
+      ...(result.status === "unknown_outcome"
+        ? {}
+        : { moved: detail.dispatches && result.status === "ok" }),
       stepsChecked: detail.stepsChecked,
       stepsUnchecked: detail.stepsUnchecked,
     };

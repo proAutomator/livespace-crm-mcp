@@ -1363,6 +1363,36 @@ describe("execution", () => {
     expect(result.text).toBe(
       "move_deals_to_stage: attempted 1 of 1 - moved 0, unchanged 0, blocked 0, errors 0, unknown 1, not attempted 0.",
     );
+    // The step edit went out and may have landed - a `moved: false` would be a
+    // claim about a write nobody can speak about. The flip counts stay: they
+    // describe what was SENT, and they are the row's recovery information.
+    expect(Object.keys(resultsOf(result)[0] ?? {})).not.toContain("moved");
+    expect(resultsOf(result)[0]?.["stepsChecked"]).toBe(3);
+    expect(resultsOf(result)[0]?.["stepsUnchecked"]).toBe(0);
+    expectPayload(result);
+  });
+
+  test("an unknown outcome whose re-read also fails claims nothing about the move", async () => {
+    const scenario = fakeWorld({
+      states: { [DEAL_A]: standingAt(0) },
+      records: { [`deal:${DEAL_A}`]: new Error("synthetic read failure") },
+      moveDealSteps: () =>
+        new LivespaceError(
+          "WRITE_OUTCOME_UNKNOWN",
+          "The write request failed mid-flight; Livespace may or may not have applied it.",
+          "Re-read the affected records to verify the outcome before retrying.",
+        ),
+    });
+
+    const result = asRun(
+      await run(
+        scenario,
+        args({ dealIds: [DEAL_A], stageId: "stage-synthetic-2", confirm: true }),
+      ),
+    );
+
+    expect(statusesOf(result)).toEqual(["unknown_outcome"]);
+    expect(Object.keys(resultsOf(result)[0] ?? {})).not.toContain("moved");
     expectPayload(result);
   });
 });
