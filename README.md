@@ -123,7 +123,7 @@ carry recovery hints. Thanks, Adam.
 
 ## Author
 
-Built by [Jakub "Kuba" Masztalski](https://kubamasztalski.pl) (proAutomator) -
+Built by [Kuba Masztalski](https://kubamasztalski.pl) (proAutomator) -
 business process automation and AI implementation for sales teams.
 
 - LinkedIn: [linkedin.com/in/kuba-masztalski](https://www.linkedin.com/in/kuba-masztalski/)
