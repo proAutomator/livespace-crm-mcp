@@ -3,6 +3,8 @@ import { loadServerConfig } from "../../src/config/server-env.js";
 
 /** 38 bytes - the codec refuses anything under 32 (AGENTS.md: synthetic). */
 const REQUEST_STATE_KEY = "synthetic-request-state-key-0123456789";
+/** 33 bytes - authenticated startup refuses anything under 32. */
+const AUTH_TOKEN = "synthetic-bearer-token-0123456789";
 
 describe("loadServerConfig", () => {
   test("defaults: loopback bind, port 3020, no auth, read-write", () => {
@@ -44,13 +46,22 @@ describe("loadServerConfig", () => {
     const config = loadServerConfig({
       MCP_PORT: "4100",
       LIVESPACE_MCP_READ_ONLY: "true",
-      MCP_AUTH_TOKEN: "synthetic-bearer-token",
+      MCP_AUTH_TOKEN: AUTH_TOKEN,
       MCP_REQUEST_STATE_KEY: REQUEST_STATE_KEY,
     });
     expect(config.port).toBe(4100);
     expect(config.readOnly).toBe(true);
-    expect(config.authToken).toBe("synthetic-bearer-token");
+    expect(config.authToken).toBe(AUTH_TOKEN);
     expect(config.requestStateKey).toBe(REQUEST_STATE_KEY);
+  });
+
+  test("an auth token shorter than 32 bytes is refused", () => {
+    expect(() =>
+      loadServerConfig({
+        MCP_AUTH_TOKEN: "synthetic-short-token",
+        MCP_REQUEST_STATE_KEY: REQUEST_STATE_KEY,
+      }),
+    ).toThrow(/MCP_AUTH_TOKEN.*32 bytes/u);
   });
 
   test("fail-closed: non-loopback bind without MCP_AUTH_TOKEN throws", () => {
@@ -63,7 +74,7 @@ describe("loadServerConfig", () => {
     expect(() =>
       loadServerConfig({
         MCP_BIND_HOST: "0.0.0.0",
-        MCP_AUTH_TOKEN: "synthetic-bearer-token",
+        MCP_AUTH_TOKEN: AUTH_TOKEN,
       }),
     ).toThrow(/MCP_ALLOWED_HOSTS/);
   });
@@ -71,7 +82,7 @@ describe("loadServerConfig", () => {
   test("non-loopback bind with token, hosts and a state key is accepted", () => {
     const config = loadServerConfig({
       MCP_BIND_HOST: "0.0.0.0",
-      MCP_AUTH_TOKEN: "synthetic-bearer-token",
+      MCP_AUTH_TOKEN: AUTH_TOKEN,
       MCP_ALLOWED_HOSTS: "mcp.example.com, alt.example.com",
       MCP_REQUEST_STATE_KEY: REQUEST_STATE_KEY,
     });
@@ -86,7 +97,7 @@ describe("loadServerConfig", () => {
 
   test("fail-closed: an authenticated server needs MCP_REQUEST_STATE_KEY", () => {
     expect(() =>
-      loadServerConfig({ MCP_AUTH_TOKEN: "synthetic-bearer-token" }),
+      loadServerConfig({ MCP_AUTH_TOKEN: AUTH_TOKEN }),
     ).toThrow(/MCP_REQUEST_STATE_KEY/);
   });
 
@@ -94,7 +105,7 @@ describe("loadServerConfig", () => {
     expect(() =>
       loadServerConfig({
         MCP_BIND_HOST: "0.0.0.0",
-        MCP_AUTH_TOKEN: "synthetic-bearer-token",
+        MCP_AUTH_TOKEN: AUTH_TOKEN,
         MCP_ALLOWED_HOSTS: "mcp.example.com",
       }),
     ).toThrow(/MCP_REQUEST_STATE_KEY/);

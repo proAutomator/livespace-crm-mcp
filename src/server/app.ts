@@ -23,6 +23,16 @@ function unauthorized(): Response {
   });
 }
 
+function rateLimited(retryAfterSeconds: number): Response {
+  return new Response(JSON.stringify({ error: "rate_limited" }), {
+    status: 429,
+    headers: {
+      "content-type": "application/json",
+      "retry-after": String(retryAfterSeconds),
+    },
+  });
+}
+
 export function buildApp(deps: AppDeps) {
   const handler = createMcpHandler(createServerFactory(deps), {
     legacy: "stateless",
@@ -34,6 +44,14 @@ export function buildApp(deps: AppDeps) {
     burst: deps.config.rateLimitBurst,
     maxConcurrent: deps.config.maxConcurrentRequests,
     maxQueue: deps.config.maxQueuedRequests,
+  });
+  const authFailureLimiter = createRequestLimiter({
+    ratePerMinute: deps.config.rateLimitPerMinute,
+    burst: deps.config.rateLimitBurst,
+    maxConcurrent: deps.config.maxConcurrentRequests,
+    // Authentication failures are answered immediately and never queue. One
+    // fixed principal keeps this pre-authentication bucket constant-cardinality.
+    maxQueue: 0,
   });
 
   const app = new Hono();
@@ -65,6 +83,11 @@ export function buildApp(deps: AppDeps) {
       const header = c.req.header("authorization") ?? "";
       const token = header.startsWith("Bearer ") ? header.slice(7) : "";
       if (token === "" || !(await tokensEqual(token, deps.config.authToken))) {
+        const failureAdmission = await authFailureLimiter.admit("unauthenticated");
+        if (!failureAdmission.admitted) {
+          return rateLimited(failureAdmission.retryAfterSeconds);
+        }
+        failureAdmission.release();
         return unauthorized();
       }
       const principal = await principalFromToken(deps.config.authToken);
@@ -74,13 +97,7 @@ export function buildApp(deps: AppDeps) {
     const principal = authInfo?.clientId ?? "anonymous";
     const admission = await limiter.admit(principal);
     if (!admission.admitted) {
-      return new Response(JSON.stringify({ error: "rate_limited" }), {
-        status: 429,
-        headers: {
-          "content-type": "application/json",
-          "retry-after": String(admission.retryAfterSeconds),
-        },
-      });
+      return rateLimited(admission.retryAfterSeconds);
     }
 
     try {
@@ -100,6 +117,7 @@ export function buildApp(deps: AppDeps) {
               method: request.method,
               headers: request.headers,
               body: read.body,
+              signal: request.signal,
             });
 
       // The slot is held until the response is prepared; for SSE responses the

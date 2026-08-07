@@ -20,6 +20,7 @@ export interface ServerConfig {
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 const LOCAL_HOSTNAMES = ["localhost", "127.0.0.1", "[::1]"];
 
+const MIN_AUTH_TOKEN_BYTES = 32;
 /** The SDK's codec refuses a shorter one, and so does startup. */
 const MIN_REQUEST_STATE_KEY_BYTES = 32;
 
@@ -55,6 +56,15 @@ export function loadServerConfig(
 
   const bindHost = env["MCP_BIND_HOST"]?.trim() || "127.0.0.1";
   const authToken = env["MCP_AUTH_TOKEN"]?.trim() || undefined;
+  if (
+    authToken !== undefined &&
+    new TextEncoder().encode(authToken).byteLength < MIN_AUTH_TOKEN_BYTES
+  ) {
+    throw new Error(
+      `MCP_AUTH_TOKEN must be at least ${MIN_AUTH_TOKEN_BYTES} bytes ` +
+        "and generated from cryptographically random data.",
+    );
+  }
   const readOnly = env["LIVESPACE_MCP_READ_ONLY"]?.trim().toLowerCase() === "true";
   const extraHosts = splitHostList(env["MCP_ALLOWED_HOSTS"]);
   const extraOrigins = splitHostList(env["MCP_ALLOWED_ORIGIN_HOSTNAMES"]);

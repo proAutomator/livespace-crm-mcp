@@ -30,12 +30,18 @@ This document is the threat model and the binding security requirements for
 
 ## 2. Network exposure
 
-- Default bind is `127.0.0.1`. The server MUST refuse to start on a
-  non-loopback bind unless `MCP_AUTH_TOKEN` is set (fail-closed).
+- Default bind is `127.0.0.1`. Every configured `MCP_AUTH_TOKEN` MUST contain
+  at least 32 bytes of cryptographically random material. The server MUST
+  refuse to start on a non-loopback bind unless that token is set
+  (fail-closed).
 - When `MCP_AUTH_TOKEN` is set, every `/mcp` request MUST carry it as a Bearer
   token; comparison uses constant-time equality.
+- Authentication failures MUST pass through one bounded, constant-cardinality
+  rate-limit bucket. They never reach request-body buffering, and exhausting
+  their bucket does not consume the valid principal's allowance.
 - Origin allowlist, deny-by-default, as DNS-rebinding protection.
-- Request body size limits; `x-powered-by` disabled; no directory listings.
+- Request body size limits; a buffered body MUST preserve the original request
+  cancellation signal; `x-powered-by` disabled; no directory listings.
 - TLS is terminated by the platform (Cloudflare Workers) or a reverse proxy -
   the Node/Bun process itself never listens publicly without one.
 - v2 (multi-user) will implement OAuth 2.1 resource-server semantics per MCP
@@ -132,9 +138,11 @@ names). That content is **untrusted data**:
 
 The suite MUST cover at least:
 
-1. startup refuses non-loopback bind without `MCP_AUTH_TOKEN`;
+1. startup refuses non-loopback bind without `MCP_AUTH_TOKEN` and refuses any
+   configured auth token shorter than 32 bytes;
 2. `/mcp` rejects missing/invalid bearer when auth is enabled (401 with
-   correct `WWW-Authenticate`);
+   correct `WWW-Authenticate`), bounds repeated failures, and keeps the valid
+   principal's allowance independent;
 3. read-only mode hides and blocks all write tools;
 4. upstream error bodies and tokens never appear in tool results or logs;
 5. origin guard denies unknown origins;
@@ -143,6 +151,8 @@ The suite MUST cover at least:
 8. `analyze` and list-style calls send an explicit `limit` where the endpoint
    supports it; `Todo/getTodoObjects` uses fixed 50-row pages with bounded page
    counts, and limit-ignoring dictionary endpoints use bounded local caps.
+9. buffered `/mcp` requests preserve client cancellation through the SDK and
+   into tool work.
 
 ### Regression map
 
@@ -151,14 +161,15 @@ the complete gate and MUST also pass before release.
 
 | Requirement | Regression proof |
 |---|---|
-| 1 | `tests/config/server-env.test.ts` - `fail-closed: non-loopback bind without MCP_AUTH_TOKEN throws` |
-| 2 | `tests/server/http.test.ts` - `bearer auth: every rejected form gets 401 with the exact challenge` |
+| 1 | `tests/config/server-env.test.ts` - non-loopback startup and minimum auth-token checks |
+| 2 | `tests/server/http.test.ts` - bearer rejection, failure limiting and valid-principal isolation |
 | 3 | `tests/server/write-registration.test.ts` - `read-only mode lists the six read tools and none of the write tools`; `read-only refuses a direct call to every write tool, fetchers untouched` |
 | 4 | `tests/server/http.test.ts` - `upstream bodies and bearer tokens reach neither results nor stderr`; `tests/livespace/client.test.ts` - envelope and auth-echo redaction; `tests/server/tools/tool-error.test.ts` - fixed generic mapping |
 | 5 | `tests/server/http.test.ts` - `unknown Origin is rejected` and the localhost control |
 | 6 | `tests/livespace/client.test.ts` - `keeps an opaque user id in POST data and out of the request URL`; `tests/livespace/writes.test.ts` - `recordUrl percent-encodes the id it is given` |
 | 7 | `tests/server/modern-wire.test.ts` - `every listed tool carries its exact security annotations`; `tests/server/write-registration.test.ts` - read-only enforcement |
 | 8 | `tests/livespace/metadata.test.ts`, `tests/server/tools/crm-metadata.test.ts`, `tests/livespace/records.test.ts`, `tests/livespace/activity.test.ts`, `tests/livespace/aggregate-windows.test.ts`, `tests/server/tools/search-crm.test.ts`, `tests/server/tools/get-activity.test.ts`, and `tests/server/analyze.test.ts` pin upstream limits, dictionary caps, fixed pages and bounded windows |
+| 9 | `tests/server/http.test.ts` - `buffering a normal MCP body preserves client cancellation` |
 
 ## Trust boundaries (out of scope)
 

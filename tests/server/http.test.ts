@@ -128,6 +128,40 @@ describe("MCP HTTP surface", () => {
     expect(response.status).toBe(200);
   });
 
+  test("failed bearer attempts are rate limited without blocking the valid token", async () => {
+    const config = {
+      ...BASE_CONFIG,
+      authToken: "synthetic-bearer-token",
+      rateLimitPerMinute: 60,
+      rateLimitBurst: 2,
+    };
+    const app = buildApp({ config, version: "0.0.0-test" });
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const rejected = await app.request(
+        mcpRequest(TOOLS_LIST, {
+          authorization: `Bearer synthetic-wrong-token-${attempt}`,
+        }),
+      );
+      expect(rejected.status).toBe(401);
+    }
+
+    const limited = await app.request(
+      mcpRequest(TOOLS_LIST, {
+        authorization: "Bearer synthetic-wrong-token-over-limit",
+      }),
+    );
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toMatch(/^\d+$/u);
+
+    const accepted = await app.request(
+      mcpRequest(TOOLS_LIST, {
+        authorization: "Bearer synthetic-bearer-token",
+      }),
+    );
+    expect(accepted.status).toBe(200);
+  });
+
   test("oversized bodies get 413", async () => {
     const app = buildApp({ config: BASE_CONFIG, version: "0.0.0-test" });
     const response = await app.request(
@@ -167,6 +201,51 @@ describe("MCP HTTP surface", () => {
       }),
     );
     expect(response.status).toBe(413);
+  });
+
+  test("buffering a normal MCP body preserves client cancellation", async () => {
+    const started = Promise.withResolvers<AbortSignal | undefined>();
+    const releasePing = Promise.withResolvers<void>();
+    const app = buildApp({
+      config: BASE_CONFIG,
+      version: "0.0.0-test",
+      livespacePing: async (opts) => {
+        started.resolve(opts?.signal);
+        await releasePing.promise;
+        if (opts?.signal?.aborted) {
+          throw new DOMException("synthetic client disconnected", "AbortError");
+        }
+        return {};
+      },
+    });
+    const controller = new AbortController();
+    const request = new Request("http://127.0.0.1:3020/mcp", {
+      method: "POST",
+      headers: {
+        host: "127.0.0.1:3020",
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 10,
+        method: "tools/call",
+        params: { name: "health", arguments: { checkLivespace: true } },
+      }),
+      signal: controller.signal,
+    });
+
+    const pending = app.request(request);
+    const forwardedSignal = await started.promise;
+    controller.abort("synthetic client disconnected");
+    await Promise.resolve();
+    try {
+      expect(forwardedSignal).toBeInstanceOf(AbortSignal);
+      expect(forwardedSignal?.aborted).toBe(true);
+    } finally {
+      releasePing.resolve();
+      await pending;
+    }
   });
 
   test("GET /health reports status without secrets", async () => {

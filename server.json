@@ -1,0 +1,65 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.proAutomator/livespace-crm-mcp",
+  "title": "Livespace CRM MCP Server",
+  "description": "Unofficial local MCP server for Livespace CRM with read tools and guarded writes.",
+  "version": "0.1.0",
+  "websiteUrl": "https://github.com/proAutomator/livespace-crm-mcp#readme",
+  "repository": {
+    "url": "https://github.com/proAutomator/livespace-crm-mcp",
+    "source": "github",
+    "id": "1324035008"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "livespace-crm-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://127.0.0.1:{MCP_PORT}/mcp"
+      },
+      "environmentVariables": [
+        {
+          "name": "MCP_PORT",
+          "description": "Loopback port used by the local MCP server.",
+          "format": "number",
+          "default": "3020",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "LIVESPACE_SUBDOMAIN",
+          "description": "Bare Livespace workspace subdomain, without protocol or domain suffix.",
+          "format": "string",
+          "isRequired": true,
+          "isSecret": false,
+          "placeholder": "your-workspace"
+        },
+        {
+          "name": "LIVESPACE_API_KEY",
+          "description": "Per-user Livespace API key.",
+          "format": "string",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "LIVESPACE_API_SECRET",
+          "description": "Per-user Livespace API secret.",
+          "format": "string",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "LIVESPACE_MCP_READ_ONLY",
+          "description": "Disable every write tool when set to true.",
+          "format": "boolean",
+          "default": "false",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

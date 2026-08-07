@@ -1,10 +1,41 @@
 {
   "name": "livespace-crm-mcp",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Unofficial local MCP server for Livespace CRM with read tools and guarded writes.",
+  "mcpName": "io.github.proAutomator/livespace-crm-mcp",
   "type": "module",
   "license": "MIT",
+  "bin": {
+    "livespace-crm-mcp": "dist/livespace-crm-mcp"
+  },
+  "files": [
+    "dist/livespace-crm-mcp",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "server.json"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/proAutomator/livespace-crm-mcp.git"
+  },
+  "homepage": "https://github.com/proAutomator/livespace-crm-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/proAutomator/livespace-crm-mcp/issues"
+  },
+  "keywords": [
+    "bun",
+    "crm",
+    "livespace",
+    "mcp",
+    "model-context-protocol"
+  ],
+  "engines": {
+    "bun": ">=1.3.14"
+  },
   "scripts": {
+    "build": "bun run scripts/build-package.ts",
+    "prepack": "bun run build",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:security": "bun test tests/security-contract.test.ts tests/config/env.test.ts tests/config/server-env.test.ts tests/server/auth.test.ts tests/server/http.test.ts tests/livespace/client.test.ts tests/livespace/metadata.test.ts tests/server/tools/crm-metadata.test.ts tests/livespace/records.test.ts tests/livespace/activity.test.ts tests/livespace/aggregate-windows.test.ts tests/livespace/writes.test.ts tests/server/modern-wire.test.ts tests/server/write-registration.test.ts tests/server/write-support.test.ts tests/server/tools/tool-error.test.ts tests/server/tools/search-crm.test.ts tests/server/tools/get-activity.test.ts tests/server/analyze.test.ts tests/server/create-records.test.ts tests/server/update-records.test.ts tests/server/log-activities.test.ts tests/server/move-deals-to-stage.test.ts tests/server/notify-user.test.ts",

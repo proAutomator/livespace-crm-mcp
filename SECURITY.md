@@ -8,7 +8,7 @@ within a few days; please allow reasonable time for a fix before disclosure.
 
 ## Scope
 
-This project is an **unofficial** MCP server that talks to the Livespace CRM
+This project is an unofficial MCP server that talks to the Livespace CRM
 API using credentials supplied by the operator. Vulnerabilities in Livespace
 itself should be reported to Livespace S.A., not here.
 
@@ -20,4 +20,5 @@ branch receives fixes.
 ## Security design
 
 The threat model and the concrete security requirements the implementation
-must satisfy are documented in [docs/security.md](docs/security.md).
+must satisfy are documented in
+[docs/security.md](https://github.com/proAutomator/livespace-crm-mcp/blob/main/docs/security.md).

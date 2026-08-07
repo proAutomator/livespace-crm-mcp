@@ -52,24 +52,61 @@ request as dispatched, never as delivered.
 - A Livespace plan with API access, currently Automation or higher.
 - One Livespace API key and secret from `Account settings -> API -> Users`.
   Every API operation uses that user's permissions.
-- Bun 1.3.14 ([bun.sh](https://bun.sh)). The current server uses `Bun.serve`
-  and has no Node.js or Cloudflare Workers adapter.
+- Bun 1.3.14 or newer ([bun.sh](https://bun.sh)). The current server uses
+  `Bun.serve` and has no Node.js or Cloudflare Workers adapter.
 
 The v1 deployment model is single-user: one Livespace credential pair and, if
-enabled, one MCP bearer token protect the server. There is no OAuth or
+enabled, one MCP bearer token protects the server. There is no OAuth or
 multi-user credential routing.
 
-## Install and run
+## Install and run from npm
 
-```bash
-cp .env.example .env
-bun install
-bun run dev
+The package is distributed through npm's public registry, but Bun is its
+runtime. You do not need Node.js or the npm CLI to run it.
+
+For a first evaluation, create a private working directory outside a Git
+repository. Add a `.env` file there with your own Livespace credentials:
+
+```dotenv
+LIVESPACE_SUBDOMAIN=
+LIVESPACE_API_KEY=
+LIVESPACE_API_SECRET=
+LIVESPACE_MCP_READ_ONLY=true
 ```
 
-Fill `.env` before starting the server. The default endpoint is
-`http://127.0.0.1:3020/mcp`. Call `health` first, then use `crm_metadata` before
-any operation that needs a user, process, stage, group or dictionary ID.
+Fill the three empty values, protect the file, then start the published
+package:
+
+```bash
+chmod 600 .env
+bunx livespace-crm-mcp
+```
+
+The default endpoint is `http://127.0.0.1:3020/mcp`. Keep the process running
+while your MCP client is connected. Start in read-only mode, call `health`,
+then use `crm_metadata` before any operation that needs a user, process, stage,
+group or dictionary ID.
+
+`bunx` downloads the package from npm and caches it locally. To pin the first
+public release, run `bunx livespace-crm-mcp@0.1.0`.
+
+## Connect an MCP client
+
+Configure a client that supports Streamable HTTP with this server URL:
+
+```json
+{
+  "url": "http://127.0.0.1:3020/mcp"
+}
+```
+
+The exact configuration field differs between clients. If you set
+`MCP_AUTH_TOKEN`, also configure the client to send
+`Authorization: Bearer <your-token>`.
+
+This package exposes Streamable HTTP, not stdio. Some MCP clients can connect
+to the local URL but cannot launch `bunx` for you, so start the command in a
+separate terminal. Clients that accept only stdio are not supported yet.
 
 ## Configuration
 
@@ -79,7 +116,7 @@ any operation that needs a user, process, stage, group or dictionary ID.
 | `LIVESPACE_API_KEY` / `LIVESPACE_API_SECRET` | Credentials for one Livespace user. |
 | `MCP_PORT` | Server port. Default: `3020`. |
 | `MCP_BIND_HOST` | Bind address. Default: `127.0.0.1`. |
-| `MCP_AUTH_TOKEN` | Bearer token for MCP requests. Required on a non-loopback bind. |
+| `MCP_AUTH_TOKEN` | Random bearer token of at least 32 bytes. Required on a non-loopback bind. |
 | `LIVESPACE_MCP_READ_ONLY` | Set to `true` to remove and block all write tools. |
 | `MCP_REQUEST_STATE_KEY` | Secret of at least 32 bytes used to sign write confirmations. Required when authentication is enabled or the bind is not loopback. |
 | `MCP_ALLOWED_HOSTS` | Host-header allowlist for DNS-rebinding protection. Required on a non-loopback bind. |
@@ -87,10 +124,13 @@ any operation that needs a user, process, stage, group or dictionary ID.
 | `MCP_RATE_LIMIT_PER_MINUTE` / `MCP_RATE_LIMIT_BURST` | Per-principal request rate. Defaults: 120 per minute and burst 30. |
 | `MCP_MAX_CONCURRENT_REQUESTS` / `MCP_MAX_QUEUED_REQUESTS` | Admission limits. Defaults: 8 in flight and 16 queued. |
 
-The server refuses a non-loopback bind unless `MCP_AUTH_TOKEN` and
-`MCP_ALLOWED_HOSTS` are set. Once `MCP_AUTH_TOKEN` is configured, every `/mcp`
-request needs that Bearer token, including on loopback. Host and Origin checks
-run before the MCP handler.
+The server refuses a non-loopback bind unless `MCP_AUTH_TOKEN`,
+`MCP_ALLOWED_HOSTS` and `MCP_REQUEST_STATE_KEY` are set. Once
+`MCP_AUTH_TOKEN` is configured, every `/mcp` request needs that Bearer token,
+including on loopback. Host and Origin checks run before the MCP handler.
+
+Generate independent values for `MCP_AUTH_TOKEN` and `MCP_REQUEST_STATE_KEY`
+by running `openssl rand -hex 32` twice. Do not reuse a Livespace credential.
 
 The Bun process does not terminate TLS. Put a TLS-capable reverse proxy in
 front of every network-exposed deployment. The server reads credentials from
@@ -167,6 +207,18 @@ notification.
 
 ## Development
 
+To work from source instead of the published package:
+
+```bash
+git clone https://github.com/proAutomator/livespace-crm-mcp.git
+cd livespace-crm-mcp
+bun install
+cp .env.example .env
+bun run dev
+```
+
+The repository commands are:
+
 ```bash
 bun test                 # complete offline suite
 bun run test:security    # focused security contract from docs/security.md
@@ -179,8 +231,9 @@ bun run dev
 Use only a test Livespace account, never a production CRM.
 
 The binding threat model and regression map are in
-[docs/security.md](docs/security.md). Report vulnerabilities privately as
-described in [SECURITY.md](SECURITY.md).
+[docs/security.md](https://github.com/proAutomator/livespace-crm-mcp/blob/main/docs/security.md).
+Report vulnerabilities privately as described in
+[SECURITY.md](https://github.com/proAutomator/livespace-crm-mcp/blob/main/SECURITY.md).
 
 ## Disclaimer
 
