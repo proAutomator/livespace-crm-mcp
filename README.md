@@ -138,11 +138,24 @@ notification.
 ## v1 limits
 
 - No delete or merge operations.
-- No tag or custom-field writes.
-- Tasks created here cannot be linked to records.
+- No tag or custom-field writes in v1. Livespace documents tag changes through
+  `tag_add` and `tag_remove`, and custom fields through `dataset`. Tag writes
+  still need a sandbox probe using those exact keys. Custom-field writes
+  cannot be verified until the sandbox has fields covering the supported
+  types, including answer ids for select fields.
+- Tasks created here cannot be linked to records. Livespace's
+  [`Todo/addTodo` documentation](https://api-docs.livespace.io/#fa921958-129d-480d-b613-6439e88fd516)
+  describes links through `todo.objects`, but our sandbox probe returned
+  success and echoed the submitted link while a fresh read returned
+  `objects: []`. The exact raw probe payload was not retained, so the result
+  is inconclusive. The server omits `objects` from task writes until a
+  controlled probe confirms that the link persists. Existing links returned
+  by Livespace are still exposed as `linkedRecords`.
 - Logged notes and calls cannot be edited or removed.
 - Deal updates cover name and status; stage changes use
-  `move_deals_to_stage`. Deal budget writes are not supported.
+  `move_deals_to_stage`. `create_records` can set budget lines when it creates
+  a deal, but `update_records` does not edit an existing budget because the
+  append-versus-replace behavior has not been verified.
 - `stage_conversion` is a point-in-time estimate because Livespace exposes no
   stage history.
 - Reads and analyses use bounded windows. Inspect truncation fields before
