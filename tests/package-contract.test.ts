@@ -337,6 +337,12 @@ describe("public npm package contract", () => {
     expect(readme).toContain("LIVESPACE_API_KEY");
     expect(readme).toContain("LIVESPACE_API_SECRET");
     expect(readme).toContain("Streamable HTTP");
+    expect(readme).toContain(
+      "https://www.npmjs.com/package/livespace-crm-mcp/v/0.1.0",
+    );
+    expect(readme).toContain(
+      "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.proAutomator%2Flivespace-crm-mcp/versions/0.1.0",
+    );
   });
 
   test(

@@ -5,6 +5,11 @@ Unofficial [MCP](https://modelcontextprotocol.io) server for
 instead of mirroring the raw API and targets the stateless Streamable HTTP
 transport in MCP spec 2026-07-28.
 
+Version 0.1.0 is available on
+[npm](https://www.npmjs.com/package/livespace-crm-mcp/v/0.1.0), in the
+[official MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.proAutomator%2Flivespace-crm-mcp/versions/0.1.0),
+and as a [GitHub Release](https://github.com/proAutomator/livespace-crm-mcp/releases/tag/v0.1.0).
+
 The v1 implementation is complete in this repository. It has six read tools
 and five write tools, a global read-only switch, bounded API access, sanitized
 errors and an elicitation-first confirmation flow. Use a test Livespace account

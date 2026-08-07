@@ -29,15 +29,13 @@ supported; a Bun stdio adapter remains a possible follow-up. Node is optional.
 
 ## Evidence collected on 2026-08-07
 
-- GitHub repository `proAutomator/livespace-crm-mcp` is private. Its stable
-  repository id is `1324035008`; serialize it as the JSON string
-  `"1324035008"`. Description, homepage and topics are empty.
+- GitHub repository `proAutomator/livespace-crm-mcp` has stable repository id
+  `1324035008`; serialize it as the JSON string `"1324035008"`.
 - GitHub owner `proAutomator` is a User, so the proposed Registry name is
   `io.github.proAutomator/livespace-crm-mcp`.
-- npm returned 404 for `livespace-crm-mcp`; the name appears unclaimed but is
-  not reserved until publication.
-- The Registry returned no entry for the proposed name; it is likewise not
-  reserved until publication.
+- Before publication, npm returned 404 for `livespace-crm-mcp` and the
+  Registry returned no entry for the proposed name. Both names were secured by
+  the completed `0.1.0` publication described in the execution notes.
 - `package.json` now defines `livespace-crm-mcp@0.1.0`, the Registry ownership
   marker, one Bun bin and an exact six-file package allowlist.
 - Two independent history reviews covered 101 reachable commits and five
@@ -213,16 +211,28 @@ Kuba explicitly authorizes changing the repository from private to public.
 After the flip, verify anonymous clone, README, license, security contact,
 history and GitHub security settings before publishing another artifact.
 
+**Completed:** Kuba authorized the recommended M10 sequence. The repository
+was made public and verified without authentication before npm publication.
+
 ### Approval gate 3: GitHub metadata and security settings
 
 Kuba separately authorizes changing description, homepage, topics, branch
 protection, secret scanning, push protection and any GitHub Environment. Gate 2
 does not imply this authority.
 
+**Completed in scope:** description, homepage, topics, secret scanning, push
+protection and vulnerability alerts were applied. Main branch protection is
+applied only after the final documentation push and its CI run, so the release
+commit remains the reproducible source for the published artifact. No GitHub
+Environment was needed.
+
 ### Approval gate 4: Tag and GitHub Release
 
 Kuba explicitly authorizes the version tag, push and GitHub Release. A tag is
 not required by the Registry protocol but provides source provenance.
+
+**Completed:** annotated tag `v0.1.0` points to release commit `b409ac7`, and
+the corresponding GitHub Release is public.
 
 ### Approval gate 5: npm authentication and publication
 
@@ -232,6 +242,11 @@ or OTP in the repository, shell history, logs or plan. Verify the exact package
 version, archive contents, ownership marker and clean installation from the
 public registry before continuing.
 
+**Completed:** npm authenticated as `proautomator` with 2FA. The exact audited
+archive was published with public access, downloaded again from npm, compared
+byte for byte and installed in a fresh temporary project. No token or OTP was
+read, printed or persisted.
+
 ### Approval gate 6: Registry authentication
 
 Kuba explicitly authorizes GitHub OAuth or, if automated publication is later
@@ -239,11 +254,19 @@ chosen and a fresh Actions check is green, GitHub OIDC. A later workflow should
 use only `contents: read` and `id-token: write` and a manually reviewed
 production environment.
 
+**Completed:** the one-time release used GitHub OAuth through
+`mcp-publisher`. No automated publication workflow or production environment
+was added.
+
 ### Approval gate 7: Immutable Registry publication
 
 Kuba explicitly authorizes `mcp-publisher publish`. Recheck the current schema,
 publisher release and official terms first. After publication, query the exact
 name and version, then test the installation data a downstream client receives.
+
+**Completed:** `io.github.proAutomator/livespace-crm-mcp@0.1.0` is active and
+latest in the official Registry, and its package metadata resolves to the
+published npm version.
 
 ### Task 5: Livespace heads-up
 
@@ -301,20 +324,36 @@ name and version, then test the installation data a downstream client receives.
 - npm authentication is active as `proautomator`. No token or OTP was read,
   printed or written to the repository.
 
-### Publication status
+### Public release - 2026-08-07
 
-The package and documentation are ready for the external release sequence.
-GitHub visibility, public npm publication, tag and GitHub Release, and MCP
-Registry publication are recorded below as they happen. The Livespace message
-remains outside the authorized scope until Kuba reviews its recipient, timing
-and wording.
+- M9 commit `593abae` and M10 release commit `b409ac7` were pushed to `main`.
+  Both commits use `proAutomator <kuba@proautomator.pl>` as author and
+  committer, with no Codex attribution. The M10 CI run passed its `test`,
+  `gitleaks` and `conformance` jobs:
+  [Actions run 31161210675](https://github.com/proAutomator/livespace-crm-mcp/actions/runs/31161210675).
+- The [GitHub repository](https://github.com/proAutomator/livespace-crm-mcp)
+  is public. An unauthenticated API check confirmed public visibility, the MIT
+  license and `main` as the default branch. Description, homepage and topics
+  were set. Secret scanning, push protection and vulnerability alerts are on.
+- Annotated tag `v0.1.0` points to `b409ac7`. The
+  [GitHub Release](https://github.com/proAutomator/livespace-crm-mcp/releases/tag/v0.1.0)
+  is public.
+- The exact audited archive was published as
+  [livespace-crm-mcp@0.1.0 on npm](https://www.npmjs.com/package/livespace-crm-mcp/v/0.1.0).
+  Its SHA-256 is
+  `d16b5a24c060d8faf4b795a0f2b9a0dea8d96d4083ca53bbd013f64263541f68`
+  and its npm integrity is
+  `sha512-i8QTjzUcWA0pHHY7wiNJBYcabtURhrOSRxB9ohVAsr2WjZV1lHd5Z6x24CT2vdB0jZ7Tmnu38LngFpc2PAlMjw==`.
+  The archive downloaded from npm was byte-identical to the audited local
+  archive. A fresh public install and `bunx` loopback smoke passed.
+- The exact
+  [official Registry version](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.proAutomator%2Flivespace-crm-mcp/versions/0.1.0)
+  is active and latest. Its package entry resolves to the published npm
+  version and its transport remains loopback-only.
+- The final README status update links npm, the Registry and GitHub Release.
+  Main branch protection is applied after this documentation commit passes CI.
+- No Livespace message was sent. Task 5 remains an optional follow-up that
+  requires Kuba to review the recipient, timing and wording.
 
-Task 0 completed after Kuba explicitly requested the M9 commit. M9 was committed
-as `593abae` with his configured Git identity, rebased onto `origin/main`
-`0b74675`, and left unpushed. The 887-test security suite, 1102-test full suite,
-typecheck and diff-check passed again after rebase. The pre-commit audit,
-sandbox smoke and leak scans remain green evidence for the same M9 content.
-
-No M10 package metadata, manifest, GitHub visibility, tag, release, npm
-publication, Registry authentication/publication or Livespace message was
-created in this turn.
+The M10 release done gate is satisfied. The optional Livespace heads-up is not
+part of the software publication gate and remains deliberately open.
