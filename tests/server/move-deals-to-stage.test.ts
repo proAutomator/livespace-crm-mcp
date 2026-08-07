@@ -754,6 +754,11 @@ describe("the plan phase", () => {
       "RATE_LIMITED",
       "RATE_LIMITED",
     ]);
+    // A halt is not a per-deal verdict: "blocked" in this tool means "change
+    // the request", and the recovery here is the opposite - wait and re-send.
+    expect(result.text).toBe(
+      "move_deals_to_stage preview: 2 deal(s) - 0 forward, 0 backward, 0 unchanged, 0 blocked, 2 halted. 0 step(s) to mark done, 0 to un-mark. Re-call with confirm: true to execute.",
+    );
     expect(result.isError).toBe(false);
     expectPayload(result);
   });
@@ -802,7 +807,7 @@ describe("the confirmation flow", () => {
     );
 
     expect(result.text).toBe(
-      "move_deals_to_stage preview: 3 deal(s) - 1 forward, 1 backward, 0 unchanged, 1 blocked. 5 step(s) to mark done, 2 to un-mark. Re-call with confirm: true to execute.",
+      "move_deals_to_stage preview: 3 deal(s) - 1 forward, 1 backward, 0 unchanged, 1 blocked, 0 halted. 5 step(s) to mark done, 2 to un-mark. Re-call with confirm: true to execute.",
     );
     expect(result.structured["requiresConfirmation"]).toBe(true);
     expect(result.structured["results"]).toBeUndefined();
@@ -910,7 +915,7 @@ describe("the confirmation flow", () => {
 
     expect(result.text).toBe(
       [
-        "move_deals_to_stage preview: 1 deal(s) - 1 forward, 0 backward, 0 unchanged, 0 blocked. 5 step(s) to mark done, 0 to un-mark. Re-call with confirm: true to execute.",
+        "move_deals_to_stage preview: 1 deal(s) - 1 forward, 0 backward, 0 unchanged, 0 blocked, 0 halted. 5 step(s) to mark done, 0 to un-mark. Re-call with confirm: true to execute.",
         "Confirmation was declined; nothing was written.",
       ].join("\n"),
     );
@@ -977,7 +982,7 @@ describe("the confirmation flow", () => {
     expect(result.structured["requiresConfirmation"]).toBe(true);
     expect(result.text).toBe(
       [
-        "move_deals_to_stage preview: 1 deal(s) - 1 forward, 0 backward, 0 unchanged, 0 blocked. 4 step(s) to mark done, 0 to un-mark. Re-call with confirm: true to execute.",
+        "move_deals_to_stage preview: 1 deal(s) - 1 forward, 0 backward, 0 unchanged, 0 blocked, 0 halted. 4 step(s) to mark done, 0 to un-mark. Re-call with confirm: true to execute.",
         "Records changed since the preview; review and confirm again.",
       ].join("\n"),
     );
@@ -1050,7 +1055,7 @@ describe("execution", () => {
       verification: "verified",
     });
     expect(result.text).toBe(
-      "move_deals_to_stage: attempted 1 of 1 - moved 1, unchanged 0, blocked 0, errors 0, unknown 0, not attempted 0.",
+      "move_deals_to_stage: attempted 1 of 1 - moved 1, unchanged 0, blocked 0, halted 0, errors 0, unknown 0, not attempted 0.",
     );
     expectPayload(result);
   });
@@ -1123,7 +1128,7 @@ describe("execution", () => {
       },
     });
     expect(result.text).toBe(
-      "move_deals_to_stage: attempted 1 of 1 - moved 0, unchanged 1, blocked 0, errors 0, unknown 0, not attempted 0.",
+      "move_deals_to_stage: attempted 1 of 1 - moved 0, unchanged 1, blocked 0, halted 0, errors 0, unknown 0, not attempted 0.",
     );
     expect(result.isError).toBe(false);
     expectPayload(result);
@@ -1174,7 +1179,7 @@ describe("execution", () => {
       hint: "Add the deal id to allowBackwardDealIds to un-mark the steps above the target stage.",
     });
     expect(result.text).toBe(
-      "move_deals_to_stage: attempted 2 of 3 - moved 2, unchanged 0, blocked 1, errors 0, unknown 0, not attempted 0.",
+      "move_deals_to_stage: attempted 2 of 3 - moved 2, unchanged 0, blocked 1, halted 0, errors 0, unknown 0, not attempted 0.",
     );
     expectPayload(result);
   });
@@ -1249,13 +1254,120 @@ describe("execution", () => {
     expect(statusesOf(result)).toEqual(["ok", "error", "error"]);
     expect(resultsOf(result)[2]?.["error"]).toEqual(VALIDATION_420);
     expect(result.text).toBe(
-      "move_deals_to_stage: attempted 2 of 3 - moved 1, unchanged 0, blocked 1, errors 1, unknown 0, not attempted 0.",
+      "move_deals_to_stage: attempted 2 of 3 - moved 1, unchanged 0, blocked 1, halted 0, errors 1, unknown 0, not attempted 0.",
     );
     // The envelope a 420 arrives in carries upstream text; the client maps the
     // RESULT CODE and nothing else (docs/security.md par. 6).
     const wire = `${result.text}\n${JSON.stringify(result.structured)}`;
     expect(envelope.error).toContain(ENVELOPE_MARKER);
     expect(wire).not.toContain(ENVELOPE_MARKER);
+    expectPayload(result);
+  });
+
+  /**
+   * "Blocked" is this tool's word for a per-deal verdict a caller fixes by
+   * changing the request; a halt is the upstream telling the batch to stop, and
+   * its recovery is the opposite - wait and re-send smaller. They are counted
+   * apart so the text never reads a rate limit as intentional gating.
+   */
+  test("the executed line counts a plan halt apart from a blocked deal", async () => {
+    const scenario = fakeWorld({
+      states: {
+        [DEAL_A]: standingAt(0),
+        [DEAL_B]: standingAt(3),
+        [DEAL_C]: RATE_LIMITED,
+      },
+      records: { [`deal:${DEAL_A}`]: landedOn(DEAL_A, 2) },
+    });
+
+    const result = asRun(
+      await run(
+        scenario,
+        args({
+          dealIds: [DEAL_A, DEAL_B, DEAL_C],
+          stageId: "stage-synthetic-2",
+          confirm: true,
+        }),
+      ),
+    );
+
+    expect(statusesOf(result)).toEqual(["ok", "error", "error"]);
+    expect((resultsOf(result)[1]?.["error"] as ToolError).code).toBe("BLOCKED");
+    expect((resultsOf(result)[2]?.["error"] as ToolError).code).toBe("RATE_LIMITED");
+    expect(result.text).toBe(
+      "move_deals_to_stage: attempted 1 of 3 - moved 1, unchanged 0, blocked 1, halted 1, errors 0, unknown 0, not attempted 0.",
+    );
+    // One deal moved, so the call is not an outright failure - which is exactly
+    // why the halt has to be visible in the text: nothing else says it.
+    expect(result.isError).toBe(false);
+    expectPayload(result);
+  });
+
+  test("a batch the upstream rate-limited reports the halt, not zero errors", async () => {
+    const scenario = fakeWorld({
+      states: {
+        [DEAL_A]: RATE_LIMITED,
+        [DEAL_B]: standingAt(0),
+        [DEAL_C]: standingAt(0),
+      },
+    });
+
+    const result = asRun(
+      await run(
+        scenario,
+        args({
+          dealIds: [DEAL_A, DEAL_B, DEAL_C],
+          stageId: "stage-synthetic-2",
+          confirm: true,
+        }),
+      ),
+    );
+
+    expect(scenario.count("readStepState")).toBe(1);
+    expect(scenario.count("moveDealSteps")).toBe(0);
+    expect(result.text).toBe(
+      "move_deals_to_stage: attempted 0 of 3 - moved 0, unchanged 0, blocked 0, halted 3, errors 0, unknown 0, not attempted 0.",
+    );
+    expect(result.isError).toBe(true);
+    expectPayload(result);
+  });
+
+  test("a plan that ran out of time reports the halt, not a blocked deal", async () => {
+    const scenario = fakeWorld({
+      states: { [DEAL_A]: standingAt(0), [DEAL_B]: standingAt(0) },
+    });
+
+    const result = asRun(
+      await budgetSpentAfterFirstItem(() =>
+        run(
+          scenario,
+          args({ dealIds: [DEAL_A, DEAL_B], stageId: "stage-synthetic-2", confirm: true }),
+        ),
+      ),
+    );
+
+    expect(statusesOf(result)).toEqual(["not_attempted", "error"]);
+    expect(resultsOf(result)[1]?.["error"]).toEqual(PLAN_BUDGET_EXPIRED);
+    expect(result.text).toBe(
+      "move_deals_to_stage: attempted 0 of 2 - moved 0, unchanged 0, blocked 0, halted 1, errors 0, unknown 0, not attempted 1.",
+    );
+    expectPayload(result);
+  });
+
+  test("a deal that does not answer stays blocked, not halted", async () => {
+    const scenario = fakeWorld({ states: { [DEAL_A]: null } });
+
+    const result = asRun(
+      await run(
+        scenario,
+        args({ dealIds: [DEAL_A], stageId: "stage-synthetic-2", confirm: true }),
+      ),
+    );
+
+    expect(resultsOf(result)[0]?.["error"]).toEqual(DEAL_NOT_FOUND);
+    expect(result.text).toBe(
+      "move_deals_to_stage: attempted 0 of 1 - moved 0, unchanged 0, blocked 1, halted 0, errors 0, unknown 0, not attempted 0.",
+    );
     expectPayload(result);
   });
 
@@ -1274,7 +1386,7 @@ describe("execution", () => {
 
     expect(result.isError).toBe(true);
     expect(result.text).toBe(
-      "move_deals_to_stage: attempted 1 of 1 - moved 0, unchanged 0, blocked 0, errors 1, unknown 0, not attempted 0.",
+      "move_deals_to_stage: attempted 1 of 1 - moved 0, unchanged 0, blocked 0, halted 0, errors 1, unknown 0, not attempted 0.",
     );
   });
 
@@ -1303,7 +1415,7 @@ describe("execution", () => {
     expect(scenario.count("moveDealSteps")).toBe(2);
     expect(statusesOf(result)).toEqual(["ok", "error", "not_attempted"]);
     expect(result.text).toBe(
-      "move_deals_to_stage: attempted 2 of 3 - moved 1, unchanged 0, blocked 0, errors 1, unknown 0, not attempted 1.",
+      "move_deals_to_stage: attempted 2 of 3 - moved 1, unchanged 0, blocked 0, halted 0, errors 1, unknown 0, not attempted 1.",
     );
     expect(result.structured["counts"]).toEqual({
       ok: 1,
@@ -1361,7 +1473,7 @@ describe("execution", () => {
 
     expect(statusesOf(result)).toEqual(["unknown_outcome"]);
     expect(result.text).toBe(
-      "move_deals_to_stage: attempted 1 of 1 - moved 0, unchanged 0, blocked 0, errors 0, unknown 1, not attempted 0.",
+      "move_deals_to_stage: attempted 1 of 1 - moved 0, unchanged 0, blocked 0, halted 0, errors 0, unknown 1, not attempted 0.",
     );
     // The step edit went out and may have landed - a `moved: false` would be a
     // claim about a write nobody can speak about. The flip counts stay: they

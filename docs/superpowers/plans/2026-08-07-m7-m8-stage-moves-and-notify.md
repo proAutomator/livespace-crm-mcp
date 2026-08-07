@@ -119,12 +119,18 @@
 - **Approval/preview templates (fixed, counts only)**: elicitation
   `Move N deal(s) to a pipeline stage: F forward, B backward, U unchanged. C step(s) will be marked done, X step(s) un-marked. Approve?`;
   preview line
-  `move_deals_to_stage preview: N deal(s) - F forward, B backward, U unchanged, K blocked. C step(s) to mark done, X to un-mark. Re-call with confirm: true to execute.`;
+  `move_deals_to_stage preview: N deal(s) - F forward, B backward, U unchanged, K blocked, H halted. C step(s) to mark done, X to un-mark. Re-call with confirm: true to execute.`;
   execute line
-  `move_deals_to_stage: attempted A of N - moved M, unchanged U, blocked K, errors E, unknown W, not attempted P.`
-  Blocked counts derive from PLAN indices (executePlan reports blocked
-  items as errors - the tool subtracts them from `errors` and
-  `attempted`).
+  `move_deals_to_stage: attempted A of N - moved M, unchanged U, blocked K, halted H, errors E, unknown W, not attempted P.`
+  Blocked and halted counts derive from PLAN indices (executePlan
+  reports both as errors - the tool subtracts both from `errors` and
+  `attempted`). They are SEPARATE terms: `blocked` is a per-deal verdict
+  (wrong process, closed, backward without the flag, empty target,
+  state conflict, NOT_FOUND) whose recovery is "change the request";
+  `halted` is the batch stopping (RATE_LIMITED read, PLAN_BUDGET_EXPIRED)
+  and the whole tail after it, whose recovery is the opposite - wait and
+  re-send smaller. Folding one into the other made an upstream rate limit
+  read as intentional gating, with `errors 0` next to `isError: true`.
 - **notify_user flow**: recipient validated against the cached users
   section (miss -> NOT_FOUND + crm_metadata hint + the staleness caveat
   in the description); record (when given) fetched via getRecord (null ->
@@ -242,6 +248,9 @@ stepsToUncheck) on the structured plan root. Execute: move items as
 RecordWriteItems (kind deal, `sent: {stageId}`, perform = moveDealSteps)
 + NoWriteItems for unchanged; tool merges per-index
 `{before, after, stepsChecked, stepsUnchecked, moved}` into result rows
+(`moved` is OMITTED on an `unknown_outcome` row - the step edit went out
+and may have landed, so neither true nor false is honest; the flip counts
+stay, they describe what was sent)
 after executePlan; blocked counts derived from plan indices (subtracted
 from errors/attempted in the text). Templates exactly as the design
 decision.
@@ -341,3 +350,50 @@ structured only.
   sandbox UI bell to confirm the smoke notification actually rendered
   (the id-space assumption is unverifiable by API - evidence 6).
 - Execution notes appended; push (standing goal).
+
+---
+
+## Execution notes
+
+Written after the adversarial review of the M7+M8 diff. Three findings
+survived a skeptic pass and were fixed on top of the milestone commits.
+
+1. **The notification send budget was check-then-act** (major). The
+   pre-flight `checkBudget` sat five awaits away from `noteDispatch`
+   (`hashArgs`, the users dictionary read, the record read, a second
+   `hashArgs`, `executePlan`), so overlapping calls all read the same
+   un-booked ledger and all dispatched - reproduced at 8 bell entries to
+   one recipient in one instant, with the tool answering "dispatched 1 of
+   1" every time. On a client that cannot elicit, `confirm: true`
+   executes with no human round, so this budget is the only backstop, and
+   a model emitting parallel tool calls walked straight past it. The
+   decisive check and the booking now sit in ONE synchronous block at the
+   top of the item's `perform`, with no await between them. The early
+   check stays as the cheap pre-filter (a test pins that a refusal costs
+   zero upstream reads). The late refusal is thrown as a real
+   `LivespaceError`: `toToolError` preserves `{code, message, hint}` only
+   for that class, and a plain object would collapse to UPSTREAM_ERROR
+   and lose the budget wording. It therefore surfaces as a result ROW
+   (`status: "error"`, `dispatched: false`, RATE_LIMITED), not as the
+   early `failed()` shape - both validate against the output schema.
+   Known consequence, accepted: a slot is spent even if the single item
+   comes back `not_attempted`, which matches the module's stance that a
+   call whose outcome we never learn still spent a notification.
+
+2. **`moved: false` on an unknown outcome** (minor). `mergeDetails`
+   claimed a write did not land when nobody can know - the step edit was
+   dispatched and may have applied. The key is now omitted on
+   `unknown_outcome` rows, exactly as `notify_user` omits `dispatched`.
+   `stepsChecked`/`stepsUnchecked` deliberately STAY: they come from the
+   plan, they describe what was sent (true either way), and they are the
+   row's only recovery information.
+
+3. **A plan halt was counted as a blocked deal** (minor). A RATE_LIMITED
+   read or an expired plan budget blocked the tail of the batch, and the
+   executed line subtracted those items from `errors` and `attempted` -
+   so a fully rate-limited batch read `errors 0` next to `isError: true`,
+   in a vocabulary whose recovery hints all say "change the request".
+   Halted indices are now tracked in `PlannedBatch` and counted in their
+   own term, in the executed line AND in the preview line (the terms
+   still add up to the batch). NOT_FOUND stays `blocked`: a deal that
+   does not answer is a per-deal verdict, not a halt.

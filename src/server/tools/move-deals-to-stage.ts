@@ -475,6 +475,15 @@ interface PlannedBatch {
   executable: ExecutableItem[];
   details: Map<number, MoveDetail>;
   aggregates: Aggregates;
+  /**
+   * Indices blocked because the BATCH stopped, not because of anything about
+   * the deal itself: the read the upstream rate-limited, everything after it,
+   * and everything the plan budget never reached. A per-deal verdict - wrong
+   * process, closed deal, backward without the flag, a deal that does not
+   * answer - is never in here. The two are counted apart because their
+   * recoveries are opposite: fix the request, or wait and re-send smaller.
+   */
+  halted: Set<number>;
 }
 
 /**
@@ -488,7 +497,8 @@ interface PlannedBatch {
  *
  * They are upstream calls like any other, so they answer to the call's budget
  * and to a rate-limited upstream: once either says stop, the remaining deals
- * are blocked with that reason and no further read is issued.
+ * carry that reason and no further read is issued. Those deals are recorded as
+ * HALTED, not blocked - the counts keep the two apart.
  */
 async function buildPlan(
   deps: MoveDealsToStageDeps,
@@ -502,6 +512,7 @@ async function buildPlan(
   const items: WriteItemPlan[] = [];
   const executable: ExecutableItem[] = [];
   const details = new Map<number, MoveDetail>();
+  const halted = new Set<number>();
   const aggregates: Aggregates = {
     forward: 0,
     backward: 0,
@@ -537,6 +548,8 @@ async function buildPlan(
       if (Date.now() >= deadlineAt) halt = PLAN_BUDGET_EXPIRED;
     }
     if (halt !== undefined) {
+      // Nothing about THIS deal stopped it: the batch did.
+      halted.add(index);
       block(halt);
       continue;
     }
@@ -548,8 +561,12 @@ async function buildPlan(
       // A deal we could not read is a deal we will not edit steps on.
       const reason = toEntry(error, signal);
       // The upstream said stop: this deal is blocked and so is every one after
-      // it - none of them is read at all.
-      if (reason.code === "RATE_LIMITED") halt = reason;
+      // it - none of them is read at all. The deal that took the refusal is
+      // halted too; it is not the deal's fault either.
+      if (reason.code === "RATE_LIMITED") {
+        halt = reason;
+        halted.add(index);
+      }
       block(reason);
       continue;
     }
@@ -615,7 +632,7 @@ async function buildPlan(
       stepsUnchecked: diff.stepsUnchecked,
     });
   }
-  return { items, executable, details, aggregates };
+  return { items, executable, details, aggregates, halted };
 }
 
 interface PlanCounts {
@@ -624,17 +641,26 @@ interface PlanCounts {
   backward: number;
   unchanged: number;
   blocked: number;
+  halted: number;
   stepsToCheck: number;
   stepsToUncheck: number;
 }
 
+/**
+ * `blocked` counts per-deal verdicts only. A deal the batch never got to is
+ * counted as `halted` instead - the two terms still add up to the plan, and
+ * neither is read as the other.
+ */
 function planCounts(batch: PlannedBatch): PlanCounts {
   return {
     total: batch.items.length,
     forward: batch.aggregates.forward,
     backward: batch.aggregates.backward,
     unchanged: batch.aggregates.unchangedCount,
-    blocked: batch.items.filter((item) => item.status === "blocked").length,
+    blocked: batch.items.filter(
+      (item) => item.status === "blocked" && !batch.halted.has(item.index),
+    ).length,
+    halted: batch.halted.size,
     stepsToCheck: batch.aggregates.stepsToCheck,
     stepsToUncheck: batch.aggregates.stepsToUncheck,
   };
@@ -645,7 +671,7 @@ function previewLine(counts: PlanCounts): string {
   return (
     `${MOVE_DEALS_TO_STAGE_TOOL} preview: ${counts.total} deal(s) - ` +
     `${counts.forward} forward, ${counts.backward} backward, ` +
-    `${counts.unchanged} unchanged, ${counts.blocked} blocked. ` +
+    `${counts.unchanged} unchanged, ${counts.blocked} blocked, ${counts.halted} halted. ` +
     `${counts.stepsToCheck} step(s) to mark done, ${counts.stepsToUncheck} to un-mark. ` +
     `Re-call with confirm: true to execute.`
   );
@@ -731,25 +757,32 @@ function mergeDetails(
 }
 
 /**
- * The executed line. Blocked deals are reported by the executor as errors -
- * they carry the reason they could not run - so they are subtracted from both
- * `errors` and `attempted`: nothing was ever dispatched for them.
+ * The executed line. The executor reports blocked and halted items alike as
+ * errors - they carry the reason they could not run - so both are subtracted
+ * from `attempted` and from `errors`: nothing was ever dispatched for them.
+ *
+ * They get their own terms rather than one shared bucket. "Blocked" is a
+ * verdict about a deal and reads "change the request"; a halt is the upstream
+ * or the clock stopping the batch and reads "wait and re-send smaller". Folding
+ * a halt into `blocked` made a rate limit look like intentional gating, and
+ * left the line saying `errors 0` next to `isError: true`.
  */
 function executedText(
   rows: readonly MoveResultRow[],
   planned: number,
   blocked: number,
+  halted: number,
 ): string {
   const counts = countResults(rows);
-  const attempted = counts.ok + counts.error + counts.unknownOutcome - blocked;
+  const attempted = counts.ok + counts.error + counts.unknownOutcome - blocked - halted;
   const moved = rows.filter((row) => row.moved === true).length;
   const unchanged = rows.filter(
     (row) => row.status === "ok" && row.moved === false,
   ).length;
   return (
     `${MOVE_DEALS_TO_STAGE_TOOL}: attempted ${attempted} of ${planned} - ` +
-    `moved ${moved}, unchanged ${unchanged}, blocked ${blocked}, ` +
-    `errors ${counts.error - blocked}, unknown ${counts.unknownOutcome}, ` +
+    `moved ${moved}, unchanged ${unchanged}, blocked ${blocked}, halted ${halted}, ` +
+    `errors ${counts.error - blocked - halted}, unknown ${counts.unknownOutcome}, ` +
     `not attempted ${counts.notAttempted}.`
   );
 }
@@ -832,8 +865,9 @@ export async function runMoveDealsToStage(
     }),
     batch.details,
   );
+  const executed = planCounts(batch);
   return {
-    text: executedText(results, batch.items.length, planCounts(batch).blocked),
+    text: executedText(results, batch.items.length, executed.blocked, executed.halted),
     structured: { results, counts: countResults(results), errors: [] },
     isError: isBatchError(results),
   };
