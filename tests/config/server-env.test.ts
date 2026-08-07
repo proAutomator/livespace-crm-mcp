@@ -19,6 +19,7 @@ describe("loadServerConfig", () => {
       rateLimitBurst: 30,
       maxConcurrentRequests: 8,
       maxQueuedRequests: 16,
+      requestIngressTimeoutMs: 10_000,
     });
     expect(config.authToken).toBeUndefined();
   });
@@ -40,6 +41,17 @@ describe("loadServerConfig", () => {
     expect(() => loadServerConfig({ MCP_MAX_CONCURRENT_REQUESTS: "-1" })).toThrow(
       /MCP_MAX_CONCURRENT_REQUESTS/,
     );
+  });
+
+  test("request ingress timeout parses and stays within the hard maximum", () => {
+    const config = loadServerConfig({ MCP_REQUEST_INGRESS_TIMEOUT_MS: "25000" });
+    expect(config.requestIngressTimeoutMs).toBe(25_000);
+    expect(() =>
+      loadServerConfig({ MCP_REQUEST_INGRESS_TIMEOUT_MS: "0" }),
+    ).toThrow(/MCP_REQUEST_INGRESS_TIMEOUT_MS/);
+    expect(() =>
+      loadServerConfig({ MCP_REQUEST_INGRESS_TIMEOUT_MS: "60001" }),
+    ).toThrow(/MCP_REQUEST_INGRESS_TIMEOUT_MS/);
   });
 
   test("parses port, read-only flag, and auth token", () => {

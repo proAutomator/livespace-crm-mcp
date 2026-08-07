@@ -21,6 +21,7 @@ const CONFIG: ServerConfig = {
   rateLimitBurst: 1000,
   maxConcurrentRequests: 16,
   maxQueuedRequests: 32,
+  requestIngressTimeoutMs: 10_000,
 };
 
 async function jsonFile(path: string): Promise<any> {

@@ -111,7 +111,9 @@ The exact configuration field differs between clients. If you set
 
 This package exposes Streamable HTTP, not stdio. Some MCP clients can connect
 to the local URL but cannot launch `bunx` for you, so start the command in a
-separate terminal. Clients that accept only stdio are not supported yet.
+separate terminal. Clients that accept only stdio are not supported yet. Each
+HTTP request must contain one JSON-RPC message; top-level batch arrays are
+rejected before dispatch.
 
 ## Configuration
 
@@ -128,6 +130,7 @@ separate terminal. Clients that accept only stdio are not supported yet.
 | `MCP_ALLOWED_ORIGIN_HOSTNAMES` | Optional additional browser-origin hostnames. On a non-loopback bind it defaults to `MCP_ALLOWED_HOSTS`. |
 | `MCP_RATE_LIMIT_PER_MINUTE` / `MCP_RATE_LIMIT_BURST` | Per-principal request rate. Defaults: 120 per minute and burst 30. |
 | `MCP_MAX_CONCURRENT_REQUESTS` / `MCP_MAX_QUEUED_REQUESTS` | Admission limits. Defaults: 8 in flight and 16 queued. |
+| `MCP_REQUEST_INGRESS_TIMEOUT_MS` | Absolute limit for admission queueing plus body upload, not tool execution. Default: 10000; maximum: 60000. |
 
 The server refuses a non-loopback bind unless `MCP_AUTH_TOKEN`,
 `MCP_ALLOWED_HOSTS` and `MCP_REQUEST_STATE_KEY` are set. Once

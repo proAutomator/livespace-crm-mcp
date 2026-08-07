@@ -20,6 +20,7 @@ const BASE_CONFIG: ServerConfig = {
   rateLimitBurst: 1000,
   maxConcurrentRequests: 16,
   maxQueuedRequests: 32,
+  requestIngressTimeoutMs: 10_000,
   // 44 ASCII bytes, invented: it keeps the write codec off its per-process
   // random fallback so nothing here depends on a startup warning.
   requestStateKey: "synthetic-request-state-key-0123456789-abcd",

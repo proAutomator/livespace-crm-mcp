@@ -40,8 +40,14 @@ This document is the threat model and the binding security requirements for
   rate-limit bucket. They never reach request-body buffering, and exhausting
   their bucket does not consume the valid principal's allowance.
 - Origin allowlist, deny-by-default, as DNS-rebinding protection.
+- Each HTTP request MUST contain one top-level JSON-RPC message. Batch arrays
+  MUST be rejected before MCP dispatch so one admission cannot fan out into
+  unbounded tool work.
 - Request body size limits; a buffered body MUST preserve the original request
-  cancellation signal; `x-powered-by` disabled; no directory listings.
+  cancellation signal; `x-powered-by` disabled; no directory listings. The
+  admission queue and body upload MUST share one absolute deadline, defaulting
+  to 10 seconds and capped at 60 seconds. Timed-out or disconnected waiters
+  MUST leave the queue immediately.
 - TLS is terminated by the platform (Cloudflare Workers) or a reverse proxy -
   the Node/Bun process itself never listens publicly without one.
 - v2 (multi-user) will implement OAuth 2.1 resource-server semantics per MCP
@@ -153,6 +159,11 @@ The suite MUST cover at least:
    counts, and limit-ignoring dictionary endpoints use bounded local caps.
 9. buffered `/mcp` requests preserve client cancellation through the SDK and
    into tool work.
+10. top-level JSON-RPC batch arrays are rejected before any tool or upstream
+    work while single-message legacy and modern requests remain supported.
+11. one absolute ingress deadline covers admission queueing and body upload;
+    stalled bodies receive 408, body readers are cancelled, and aborted queue
+    waiters release capacity immediately.
 
 ### Regression map
 
@@ -170,6 +181,8 @@ the complete gate and MUST also pass before release.
 | 7 | `tests/server/modern-wire.test.ts` - `every listed tool carries its exact security annotations`; `tests/server/write-registration.test.ts` - read-only enforcement |
 | 8 | `tests/livespace/metadata.test.ts`, `tests/server/tools/crm-metadata.test.ts`, `tests/livespace/records.test.ts`, `tests/livespace/activity.test.ts`, `tests/livespace/aggregate-windows.test.ts`, `tests/server/tools/search-crm.test.ts`, `tests/server/tools/get-activity.test.ts`, and `tests/server/analyze.test.ts` pin upstream limits, dictionary caps, fixed pages and bounded windows |
 | 9 | `tests/server/http.test.ts` - `buffering a normal MCP body preserves client cancellation` |
+| 10 | `tests/server/http.test.ts` - `rejects a JSON-RPC batch before any tool work` plus the existing legacy and modern single-message controls |
+| 11 | `tests/config/server-env.test.ts` - bounded ingress configuration; `tests/server/http.test.ts` - stalled-body 408 and slot handoff; `tests/server/body-limit.test.ts` - reader cancellation; `tests/server/limits.test.ts` - aborted queue removal |
 
 ## Trust boundaries (out of scope)
 

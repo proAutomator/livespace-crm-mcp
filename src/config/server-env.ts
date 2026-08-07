@@ -9,6 +9,8 @@ export interface ServerConfig {
   rateLimitBurst: number;
   maxConcurrentRequests: number;
   maxQueuedRequests: number;
+  /** Absolute budget shared by admission queueing and request-body upload. */
+  requestIngressTimeoutMs: number;
   /**
    * HMAC secret for the write-confirmation `requestState`. Absent only in
    * loopback development, where the codec falls back to a per-process random
@@ -23,6 +25,7 @@ const LOCAL_HOSTNAMES = ["localhost", "127.0.0.1", "[::1]"];
 const MIN_AUTH_TOKEN_BYTES = 32;
 /** The SDK's codec refuses a shorter one, and so does startup. */
 const MIN_REQUEST_STATE_KEY_BYTES = 32;
+const MAX_REQUEST_INGRESS_TIMEOUT_MS = 60_000;
 
 function positiveInt(
   env: Record<string, string | undefined>,
@@ -115,6 +118,17 @@ export function loadServerConfig(
     : extraOrigins.length > 0
       ? extraOrigins
       : extraHosts;
+  const requestIngressTimeoutMs = positiveInt(
+    env,
+    "MCP_REQUEST_INGRESS_TIMEOUT_MS",
+    10_000,
+  );
+  if (requestIngressTimeoutMs > MAX_REQUEST_INGRESS_TIMEOUT_MS) {
+    throw new Error(
+      "MCP_REQUEST_INGRESS_TIMEOUT_MS must not exceed " +
+        `${MAX_REQUEST_INGRESS_TIMEOUT_MS} milliseconds.`,
+    );
+  }
 
   return {
     port,
@@ -127,6 +141,7 @@ export function loadServerConfig(
     rateLimitBurst: positiveInt(env, "MCP_RATE_LIMIT_BURST", 30),
     maxConcurrentRequests: positiveInt(env, "MCP_MAX_CONCURRENT_REQUESTS", 8),
     maxQueuedRequests: positiveInt(env, "MCP_MAX_QUEUED_REQUESTS", 16),
+    requestIngressTimeoutMs,
     ...(requestStateKey === undefined ? {} : { requestStateKey }),
   };
 }

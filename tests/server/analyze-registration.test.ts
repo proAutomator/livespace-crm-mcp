@@ -20,6 +20,7 @@ const BASE_CONFIG: ServerConfig = {
   rateLimitBurst: 1000,
   maxConcurrentRequests: 16,
   maxQueuedRequests: 32,
+  requestIngressTimeoutMs: 10_000,
 };
 
 const PROTOCOL = "2026-07-28";

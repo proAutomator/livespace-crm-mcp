@@ -13,6 +13,7 @@ const BASE_CONFIG: ServerConfig = {
   rateLimitBurst: 1000,
   maxConcurrentRequests: 16,
   maxQueuedRequests: 32,
+  requestIngressTimeoutMs: 10_000,
 };
 
 function mcpRequest(
@@ -180,6 +181,41 @@ describe("MCP HTTP surface", () => {
     expect(limited.headers.get("retry-after")).toMatch(/^\d+$/);
   });
 
+  test("rejects a JSON-RPC batch before any tool work", async () => {
+    let calls = 0;
+    const app = buildApp({
+      config: {
+        ...BASE_CONFIG,
+        rateLimitPerMinute: 60,
+        rateLimitBurst: 1,
+        maxConcurrentRequests: 1,
+      },
+      version: "0.0.0-test",
+      livespacePing: async () => {
+        calls += 1;
+        return {};
+      },
+    });
+    const batch = Array.from({ length: 20 }, (_, index) => ({
+      jsonrpc: "2.0",
+      id: index + 1,
+      method: "tools/call",
+      params: { name: "health", arguments: { checkLivespace: true } },
+    }));
+
+    const response = await app.request(mcpRequest(batch));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      jsonrpc: "2.0",
+      error: {
+        code: -32600,
+        message: "Bad Request: JSON-RPC batches are not supported by this endpoint",
+      },
+      id: null,
+    });
+    expect(calls).toBe(0);
+  });
+
   test("chunked body over the cap gets 413 even without Content-Length", async () => {
     const app = buildApp({ config: BASE_CONFIG, version: "0.0.0-test" });
     const big = new Uint8Array(2 * 1024 * 1024).fill(120);
@@ -201,6 +237,55 @@ describe("MCP HTTP surface", () => {
       }),
     );
     expect(response.status).toBe(413);
+  });
+
+  test("an absolute ingress deadline bounds a stalled body and releases its slot", async () => {
+    const config = {
+      ...BASE_CONFIG,
+      maxConcurrentRequests: 1,
+      maxQueuedRequests: 1,
+      requestIngressTimeoutMs: 100,
+    };
+    const app = buildApp({ config, version: "0.0.0-test" });
+    let source: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        source = controller;
+        controller.enqueue(new TextEncoder().encode("{"));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const stalled = new Request("http://127.0.0.1:3020/mcp", {
+      method: "POST",
+      headers: {
+        host: "127.0.0.1:3020",
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body,
+    });
+
+    const stalledResponse = app.request(stalled);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const queuedResponse = app.request(mcpRequest(TOOLS_LIST));
+    const settled = Promise.all([stalledResponse, queuedResponse]);
+    const responses = await Promise.race([
+      settled,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 500)),
+    ]);
+
+    if (responses === null) {
+      source?.close();
+      await settled;
+    }
+    expect(responses).not.toBeNull();
+    expect(responses?.[0]?.status).toBe(408);
+    expect(await responses?.[0]?.json()).toEqual({ error: "request_timeout" });
+    expect(responses?.[1]?.status).toBe(200);
+    expect(cancelled).toBe(true);
   });
 
   test("buffering a normal MCP body preserves client cancellation", async () => {

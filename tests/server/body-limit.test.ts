@@ -52,4 +52,41 @@ describe("readBodyWithCap", () => {
     const result = await readBodyWithCap(request, CAP);
     expect(result).toEqual({ kind: "ok", body: null });
   });
+
+  test("an abort cancels a stalled body read", async () => {
+    let source: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let cancelledWith: unknown;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        source = controller;
+        controller.enqueue(new TextEncoder().encode("{"));
+      },
+      cancel(reason) {
+        cancelledWith = reason;
+      },
+    });
+    const request = new Request("http://localhost/mcp", {
+      method: "POST",
+      body,
+    });
+    const controller = new AbortController();
+    const reason = new DOMException("synthetic ingress timeout", "TimeoutError");
+    const pending = readBodyWithCap(request, CAP, controller.signal);
+
+    controller.abort(reason);
+    const outcome = await Promise.race([
+      pending.then(
+        () => "resolved" as const,
+        (error: unknown) => error,
+      ),
+      new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 100)),
+    ]);
+
+    if (outcome === "hung") {
+      source?.close();
+      await pending;
+    }
+    expect(outcome).toBe(reason);
+    expect(cancelledWith).toBe(reason);
+  });
 });

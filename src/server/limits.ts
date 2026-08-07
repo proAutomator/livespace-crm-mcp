@@ -15,28 +15,55 @@ interface Bucket {
   updatedAt: number;
 }
 
+interface Waiter {
+  resolve: (admission: Admission) => void;
+  reject: (reason?: unknown) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return (
+    signal.reason ?? new DOMException("The request was aborted.", "AbortError")
+  );
+}
+
 // The MCP spec makes rate limiting of tool invocations a server MUST
 // (spec 2026-07-28, Tools, Security Considerations). This limiter protects
 // the server itself; the Livespace throttle protects the upstream API.
 // Principal cardinality is tiny (one shared bearer or "anonymous"), so the
 // bucket map cannot grow unbounded.
 export function createRequestLimiter(opts: RequestLimiterOptions): {
-  admit(principal: string): Promise<Admission>;
+  admit(principal: string, signal?: AbortSignal): Promise<Admission>;
 } {
   const now = opts.now ?? (() => Date.now());
   const tokensPerMs = opts.ratePerMinute / 60_000;
   const buckets = new Map<string, Bucket>();
   let active = 0;
-  const queue: Array<(admission: Admission) => void> = [];
+  const queue: Waiter[] = [];
+
+  function cleanup(waiter: Waiter): void {
+    if (waiter.signal !== undefined && waiter.onAbort !== undefined) {
+      waiter.signal.removeEventListener("abort", waiter.onAbort);
+    }
+  }
 
   function release(): void {
-    const next = queue.shift();
-    if (next) {
+    for (;;) {
+      const next = queue.shift();
+      if (next === undefined) {
+        active -= 1;
+        return;
+      }
+      cleanup(next);
+      if (next.signal?.aborted) {
+        next.reject(abortReason(next.signal));
+        continue;
+      }
       // Hand the freed slot directly to the next waiter; `active` is unchanged.
-      next({ admitted: true, release });
+      next.resolve({ admitted: true, release });
       return;
     }
-    active -= 1;
   }
 
   function takeToken(
@@ -56,7 +83,8 @@ export function createRequestLimiter(opts: RequestLimiterOptions): {
     return { ok: false, retryAfterSeconds: Math.max(1, Math.ceil(waitMs / 1000)) };
   }
 
-  async function admit(principal: string): Promise<Admission> {
+  async function admit(principal: string, signal?: AbortSignal): Promise<Admission> {
+    if (signal?.aborted) throw abortReason(signal);
     const token = takeToken(principal);
     if (!token.ok) {
       return { admitted: false, retryAfterSeconds: token.retryAfterSeconds };
@@ -68,7 +96,26 @@ export function createRequestLimiter(opts: RequestLimiterOptions): {
     if (queue.length >= opts.maxQueue) {
       return { admitted: false, retryAfterSeconds: 1 };
     }
-    return new Promise<Admission>((resolve) => queue.push(resolve));
+    return new Promise<Admission>((resolve, reject) => {
+      const waiter: Waiter = {
+        resolve,
+        reject,
+        ...(signal === undefined ? {} : { signal }),
+      };
+      if (signal !== undefined) {
+        waiter.onAbort = () => {
+          const index = queue.indexOf(waiter);
+          if (index === -1) return;
+          queue.splice(index, 1);
+          cleanup(waiter);
+          reject(abortReason(signal));
+        };
+      }
+      queue.push(waiter);
+      if (signal !== undefined && waiter.onAbort !== undefined) {
+        signal.addEventListener("abort", waiter.onAbort, { once: true });
+      }
+    });
   }
 
   return { admit };

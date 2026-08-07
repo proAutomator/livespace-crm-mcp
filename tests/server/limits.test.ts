@@ -99,4 +99,42 @@ describe("createRequestLimiter", () => {
     expect(overflow.admitted).toBe(false);
     if (!overflow.admitted) expect(overflow.retryAfterSeconds).toBe(1);
   });
+
+  test("an aborted waiter leaves the bounded queue immediately", async () => {
+    const clock = fixedClock();
+    const limiter = createRequestLimiter({
+      ratePerMinute: 6000,
+      burst: 100,
+      maxConcurrent: 1,
+      maxQueue: 1,
+      now: clock.now,
+    });
+
+    const holder = await limiter.admit("p");
+    expect(holder.admitted).toBe(true);
+    const controller = new AbortController();
+    const reason = new DOMException("synthetic client disconnected", "AbortError");
+    const queued = limiter.admit("p", controller.signal);
+    controller.abort(reason);
+    const outcome = await Promise.race([
+      queued.then(
+        () => "resolved" as const,
+        (error: unknown) => error,
+      ),
+      new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 100)),
+    ]);
+
+    if (outcome === "hung") {
+      if (holder.admitted) holder.release();
+      const stale = await queued;
+      if (stale.admitted) stale.release();
+    }
+    expect(outcome).toBe(reason);
+
+    const replacement = limiter.admit("p");
+    if (holder.admitted) holder.release();
+    const next = await replacement;
+    expect(next.admitted).toBe(true);
+    if (next.admitted) next.release();
+  });
 });
