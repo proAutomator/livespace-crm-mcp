@@ -213,9 +213,16 @@ function ctx(options: CtxOptions = {}): unknown {
 function run(
   world: World,
   args: LogActivitiesArgs,
-  opts: { signal?: AbortSignal; ctx?: unknown } = {},
+  opts: {
+    signal?: AbortSignal;
+    ctx?: unknown;
+    allowUnboundWriteConfirmation?: boolean;
+  } = {},
 ): Promise<LogActivitiesResult> {
-  return runLogActivities(world.deps, args, opts);
+  return runLogActivities(world.deps, args, {
+    allowUnboundWriteConfirmation: true,
+    ...opts,
+  });
 }
 
 function asRun(result: LogActivitiesResult): ToolRunResult {
@@ -531,6 +538,7 @@ describe("routing and mapping", () => {
         calls: [callArg()],
         confirm: true,
       }),
+      { allowUnboundWriteConfirmation: true },
     );
 
     expect(dispatched.map((entry) => entry.key)).toEqual([

@@ -133,7 +133,11 @@ export function createServerFactory(deps: AppDeps): () => McpServer {
           "server-side aggregation, errors with recovery hints.",
       },
       {
-        instructions: buildInstructions({ readOnly: deps.config.readOnly }),
+        instructions: buildInstructions({
+          readOnly: deps.config.readOnly,
+          allowUnboundWriteConfirmation:
+            deps.config.allowUnboundWriteConfirmation,
+        }),
         cacheHints: {
           "server/discover": { ttlMs: 60_000, cacheScope: "private" },
           "tools/list": { ttlMs: 60_000, cacheScope: "private" },
@@ -215,7 +219,12 @@ export function createServerFactory(deps: AppDeps): () => McpServer {
         ctx: unknown,
       ): Promise<CallToolResult | InputRequiredResult> => {
         const signal = requestSignal(ctx);
-        const result = await run(args, { ...(signal === undefined ? {} : { signal }), ctx });
+        const result = await run(args, {
+          ...(signal === undefined ? {} : { signal }),
+          ctx,
+          allowUnboundWriteConfirmation:
+            deps.config.allowUnboundWriteConfirmation,
+        });
         if (isInputRequiredResult(result)) return result;
         return {
           content: [{ type: "text" as const, text: result.text }],

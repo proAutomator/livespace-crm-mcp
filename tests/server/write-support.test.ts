@@ -214,12 +214,29 @@ describe("decideConfirm", () => {
     expect(mode(decision)).toBe("input-required");
   });
 
-  test("without elicitation the confirm argument is the execute trigger", () => {
+  test("without elicitation confirm is refused by default", () => {
     const decision = decideConfirm({
       tool: "create_records",
       argsHash: "hash-synthetic-a",
       confirm: true,
       clientSupportsElicitation: false,
+      allowUnboundWriteConfirmation: false,
+    });
+    expect(decision).toEqual({
+      code: "BAD_PARAMS",
+      message: "This client cannot bind confirmation to a human approval.",
+      hint:
+        "Use a client with form elicitation, or let the operator explicitly enable the unsafe compatibility mode.",
+    });
+  });
+
+  test("the explicit compatibility opt-in preserves unbound confirmation", () => {
+    const decision = decideConfirm({
+      tool: "create_records",
+      argsHash: "hash-synthetic-a",
+      confirm: true,
+      clientSupportsElicitation: false,
+      allowUnboundWriteConfirmation: true,
     });
     expect(mode(decision)).toBe("execute");
   });

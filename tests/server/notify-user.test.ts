@@ -279,9 +279,16 @@ function dealCall(overrides: Record<string, unknown> = {}): NotifyUserArgs {
 function run(
   world: World,
   call: NotifyUserArgs,
-  opts: { signal?: AbortSignal; ctx?: unknown } = {},
+  opts: {
+    signal?: AbortSignal;
+    ctx?: unknown;
+    allowUnboundWriteConfirmation?: boolean;
+  } = {},
 ): Promise<NotifyUserResult> {
-  return runNotifyUser(world.deps, call, opts);
+  return runNotifyUser(world.deps, call, {
+    allowUnboundWriteConfirmation: true,
+    ...opts,
+  });
 }
 
 function asRun(result: NotifyUserResult): ToolRunResult {

@@ -644,6 +644,7 @@ export async function runNotifyUser(
     state,
     elicitedConfirm: accepted?.confirm,
     clientSupportsElicitation: clientSupportsElicitation(opts.ctx),
+    allowUnboundWriteConfirmation: opts.allowUnboundWriteConfirmation,
   });
   // A refused confirmation costs nothing upstream: it is decided before the
   // dictionary is even read.

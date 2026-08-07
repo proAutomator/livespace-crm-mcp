@@ -39,5 +39,7 @@ const me = await client.call<{ name?: string; login?: string }>(
   "Default",
   "User_getInfo",
 );
-console.log(`connected as: ${me.name ?? "?"} (${me.login ?? "?"})`);
+console.log(
+  `identity: ${me.name !== undefined || me.login !== undefined ? "OK" : "missing"}`,
+);
 console.log("smoke: OK");

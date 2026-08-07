@@ -218,6 +218,8 @@ export interface ConfirmOptions {
   state?: WriteState | undefined;
   elicitedConfirm?: boolean | undefined;
   clientSupportsElicitation: boolean;
+  /** Explicit operator opt-in for the compatibility path without signed state. */
+  allowUnboundWriteConfirmation?: boolean | undefined;
 }
 
 export type ConfirmDecision = { mode: ConfirmMode } | ToolError;
@@ -274,7 +276,14 @@ export function decideConfirm(opts: ConfirmOptions): ConfirmDecision {
   }
 
   if (opts.clientSupportsElicitation) return { mode: "input-required" };
-  if (opts.confirm === true) return { mode: "execute" };
+  if (opts.confirm === true) {
+    if (opts.allowUnboundWriteConfirmation === true) return { mode: "execute" };
+    return confirmRefused(
+      "This client cannot bind confirmation to a human approval.",
+      "Use a client with form elicitation, or let the operator explicitly " +
+        "enable the unsafe compatibility mode.",
+    );
+  }
   return { mode: "preview" };
 }
 

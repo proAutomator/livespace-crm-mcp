@@ -28,6 +28,7 @@ const BASE_CONFIG: ServerConfig = {
   port: 3020,
   bindHost: "127.0.0.1",
   readOnly: false,
+  allowUnboundWriteConfirmation: false,
   allowedHostnames: ["localhost", "127.0.0.1", "[::1]"],
   allowedOriginHostnames: ["localhost", "127.0.0.1", "[::1]"],
   rateLimitPerMinute: 6000,
@@ -35,6 +36,7 @@ const BASE_CONFIG: ServerConfig = {
   maxConcurrentRequests: 16,
   maxQueuedRequests: 32,
   requestIngressTimeoutMs: 10_000,
+  requestExecutionTimeoutMs: 90_000,
   requestStateKey: REQUEST_STATE_KEY,
 };
 
@@ -336,6 +338,30 @@ describe("write tool registration", () => {
     expect(structured.plan[0].status).toBe("create");
     expect(structured.results).toBeUndefined();
     expect(calls).toEqual([]);
+  });
+
+  test("a non-elicitation client cannot self-confirm by default", async () => {
+    const calls: WriteCall[] = [];
+    const payload = await jsonFromResponse(
+      await app({ writes: fakeWrites(calls) }).request(
+        createCall({ id: 201, args: { ...PERSON_ARGS, confirm: true } }),
+      ),
+    );
+    expect(payload.result.isError).toBe(true);
+    expect(payload.result.structuredContent.errors[0].code).toBe("BAD_PARAMS");
+    expect(calls).toEqual([]);
+  });
+
+  test("the operator compatibility flag enables the unbound path", async () => {
+    const calls: WriteCall[] = [];
+    const config = { ...BASE_CONFIG, allowUnboundWriteConfirmation: true };
+    const payload = await jsonFromResponse(
+      await app({ writes: fakeWrites(calls) }, config).request(
+        createCall({ id: 202, args: { ...PERSON_ARGS, confirm: true } }),
+      ),
+    );
+    expect(payload.result.isError).toBeUndefined();
+    expect(calls.filter((call) => call.method === "createPerson")).toHaveLength(1);
   });
 
   test("an elicitation-capable client gets an input_required result with signed state", async () => {

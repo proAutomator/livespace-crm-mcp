@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { ServerConfig } from "../src/config/server-env.js";
 import { buildApp } from "../src/server/app.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 const PACKAGE_NAME = "livespace-crm-mcp";
 const MCP_NAME = "io.github.proAutomator/livespace-crm-mcp";
 const SCHEMA_URL =
@@ -15,6 +15,7 @@ const CONFIG: ServerConfig = {
   port: 3020,
   bindHost: "127.0.0.1",
   readOnly: true,
+  allowUnboundWriteConfirmation: false,
   allowedHostnames: ["localhost", "127.0.0.1", "[::1]"],
   allowedOriginHostnames: ["localhost", "127.0.0.1", "[::1]"],
   rateLimitPerMinute: 6000,
@@ -22,6 +23,7 @@ const CONFIG: ServerConfig = {
   maxConcurrentRequests: 16,
   maxQueuedRequests: 32,
   requestIngressTimeoutMs: 10_000,
+  requestExecutionTimeoutMs: 90_000,
 };
 
 async function jsonFile(path: string): Promise<any> {
@@ -191,6 +193,12 @@ describe("public release metadata", () => {
     expect(entry.transport).toEqual({
       type: "streamable-http",
       url: "http://127.0.0.1:{MCP_PORT}/mcp",
+      headers: [
+        {
+          name: "Authorization",
+          value: "Bearer {MCP_AUTH_TOKEN}",
+        },
+      ],
     });
     expect(entry.transport.url.replace("{MCP_PORT}", "41230")).toBe(
       "http://127.0.0.1:41230/mcp",
@@ -204,7 +212,9 @@ describe("public release metadata", () => {
       "LIVESPACE_SUBDOMAIN",
       "LIVESPACE_API_KEY",
       "LIVESPACE_API_SECRET",
-      "LIVESPACE_MCP_READ_ONLY",
+      "MCP_AUTH_TOKEN",
+      "LIVESPACE_MCP_ENABLE_WRITES",
+      "MCP_REQUEST_STATE_KEY",
     ]);
     expect(inputs.MCP_PORT.default).toBe("3020");
     expect(inputs.LIVESPACE_SUBDOMAIN).toMatchObject({
@@ -219,13 +229,20 @@ describe("public release metadata", () => {
       isRequired: true,
       isSecret: true,
     });
-    expect(inputs.LIVESPACE_MCP_READ_ONLY).toMatchObject({
+    expect(inputs.MCP_AUTH_TOKEN).toMatchObject({
+      isRequired: true,
+      isSecret: true,
+    });
+    expect(inputs.LIVESPACE_MCP_ENABLE_WRITES).toMatchObject({
       format: "boolean",
       default: "false",
       isRequired: false,
     });
+    expect(inputs.MCP_REQUEST_STATE_KEY).toMatchObject({
+      isRequired: false,
+      isSecret: true,
+    });
     expect(inputs.MCP_BIND_HOST).toBeUndefined();
-    expect(inputs.MCP_AUTH_TOKEN).toBeUndefined();
   });
 
   test("uses the stable public repository identity and a concise description", async () => {

@@ -13,6 +13,7 @@ const BASE_CONFIG: ServerConfig = {
   port: 3020,
   bindHost: "127.0.0.1",
   readOnly: false,
+  allowUnboundWriteConfirmation: false,
   allowedHostnames: ["localhost", "127.0.0.1", "[::1]"],
   allowedOriginHostnames: ["localhost", "127.0.0.1", "[::1]"],
   // Generous limits so ordinary tests never trip the limiter.
@@ -21,6 +22,7 @@ const BASE_CONFIG: ServerConfig = {
   maxConcurrentRequests: 16,
   maxQueuedRequests: 32,
   requestIngressTimeoutMs: 10_000,
+  requestExecutionTimeoutMs: 90_000,
   // 44 ASCII bytes, invented: it keeps the write codec off its per-process
   // random fallback so nothing here depends on a startup warning.
   requestStateKey: "synthetic-request-state-key-0123456789-abcd",

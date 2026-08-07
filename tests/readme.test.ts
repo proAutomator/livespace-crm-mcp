@@ -56,8 +56,8 @@ describe("README v1 contract", () => {
   test("describes elicitation, fallback and write outcomes without overclaiming", async () => {
     const prose = (await readme()).replace(/\s+/gu, " ");
     expect(prose).toContain("elicitation-first");
-    expect(prose).toContain("confirm: true executes immediately");
-    expect(prose).toContain("Preview first");
+    expect(prose).toContain("disabled by default on clients without form elicitation");
+    expect(prose).toContain("MCP_ALLOW_UNBOUND_WRITE_CONFIRMATION");
     expect(prose).toContain("requestState");
     expect(prose).toContain("recordsChanged");
     expect(prose).toContain(
@@ -68,6 +68,17 @@ describe("README v1 contract", () => {
     expect(prose).toContain("not_attempted");
     expect(prose).toContain("dispatched, never as delivered");
     expect(prose).not.toContain("write may have landed but its follow-up read failed");
+  });
+
+  test("documents safe write startup, least privilege, privacy and incident response", async () => {
+    const prose = (await readme()).replace(/\s+/gu, " ");
+    expect(prose).toContain("LIVESPACE_MCP_ENABLE_WRITES");
+    expect(prose).toContain("dedicated Livespace API user");
+    expect(prose).toContain("untrusted data");
+    expect(prose).toContain("retained by the MCP host");
+    expect(prose).toContain("Incident response");
+    expect(prose).toContain("revoke the Livespace API key");
+    expect(prose).toContain("do not log MCP request or response bodies");
   });
 
   test("names the v1 product limits", async () => {

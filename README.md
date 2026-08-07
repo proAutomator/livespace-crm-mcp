@@ -5,15 +5,15 @@ Unofficial [MCP](https://modelcontextprotocol.io) server for
 instead of mirroring the raw API and targets the stateless Streamable HTTP
 transport in MCP spec 2026-07-28.
 
-Version 0.1.0 is available on
-[npm](https://www.npmjs.com/package/livespace-crm-mcp/v/0.1.0), in the
-[official MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.proAutomator%2Flivespace-crm-mcp/versions/0.1.0),
-and as a [GitHub Release](https://github.com/proAutomator/livespace-crm-mcp/releases/tag/v0.1.0).
+Version 0.1.1 is available on
+[npm](https://www.npmjs.com/package/livespace-crm-mcp/v/0.1.1), in the
+[official MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.proAutomator%2Flivespace-crm-mcp/versions/0.1.1),
+and as a [GitHub Release](https://github.com/proAutomator/livespace-crm-mcp/releases/tag/v0.1.1).
 
 The v1 implementation is complete in this repository. It has six read tools
-and five write tools, a global read-only switch, bounded API access, sanitized
-errors and an elicitation-first confirmation flow. Use a test Livespace account
-while evaluating it.
+and five optional write tools, read-only defaults, bounded API access,
+sanitized errors and an elicitation-first confirmation flow. Use a test
+Livespace account while evaluating it.
 
 ## Why this shape?
 
@@ -56,7 +56,8 @@ request as dispatched, never as delivered.
 
 - A Livespace plan with API access, currently Automation or higher.
 - One Livespace API key and secret from `Account settings -> API -> Users`.
-  Every API operation uses that user's permissions.
+  Use a dedicated Livespace API user with only the permissions this MCP needs.
+  Every API operation inherits that user's permissions.
 - Bun 1.3.14 or newer ([bun.sh](https://bun.sh)). The current server uses
   `Bun.serve` and has no Node.js or Cloudflare Workers adapter.
 
@@ -76,7 +77,6 @@ repository. Add a `.env` file there with your own Livespace credentials:
 LIVESPACE_SUBDOMAIN=
 LIVESPACE_API_KEY=
 LIVESPACE_API_SECRET=
-LIVESPACE_MCP_READ_ONLY=true
 ```
 
 Fill the three empty values, protect the file, then start the published
@@ -92,8 +92,8 @@ while your MCP client is connected. Start in read-only mode, call `health`,
 then use `crm_metadata` before any operation that needs a user, process, stage,
 group or dictionary ID.
 
-`bunx` downloads the package from npm and caches it locally. To pin the first
-public release, run `bunx livespace-crm-mcp@0.1.0`.
+`bunx` downloads the package from npm and caches it locally. To pin this
+security release, run `bunx livespace-crm-mcp@0.1.1`.
 
 ## Connect an MCP client
 
@@ -105,9 +105,9 @@ Configure a client that supports Streamable HTTP with this server URL:
 }
 ```
 
-The exact configuration field differs between clients. If you set
-`MCP_AUTH_TOKEN`, also configure the client to send
-`Authorization: Bearer <your-token>`.
+The exact configuration field differs between clients. Set `MCP_AUTH_TOKEN`
+and configure the client to send `Authorization: Bearer <your-token>`, even on
+loopback. Authentication is mandatory when write tools are enabled.
 
 This package exposes Streamable HTTP, not stdio. Some MCP clients can connect
 to the local URL but cannot launch `bunx` for you, so start the command in a
@@ -123,19 +123,23 @@ rejected before dispatch.
 | `LIVESPACE_API_KEY` / `LIVESPACE_API_SECRET` | Credentials for one Livespace user. |
 | `MCP_PORT` | Server port. Default: `3020`. |
 | `MCP_BIND_HOST` | Bind address. Default: `127.0.0.1`. |
-| `MCP_AUTH_TOKEN` | Random bearer token of at least 32 bytes. Required on a non-loopback bind. |
-| `LIVESPACE_MCP_READ_ONLY` | Set to `true` to remove and block all write tools. |
-| `MCP_REQUEST_STATE_KEY` | Secret of at least 32 bytes used to sign write confirmations. Required when authentication is enabled or the bind is not loopback. |
+| `MCP_AUTH_TOKEN` | Random bearer token of at least 32 bytes. Required for writes and on a non-loopback bind; recommended for every server. |
+| `LIVESPACE_MCP_ENABLE_WRITES` | Set to `true` to expose write tools. Default: `false`. |
+| `LIVESPACE_MCP_READ_ONLY` | Emergency kill-switch. `true` removes and blocks write tools even when enabled above. |
+| `MCP_REQUEST_STATE_KEY` | Independent random secret of at least 32 bytes used to sign write confirmations. Required when writes are enabled. |
+| `MCP_ALLOW_UNBOUND_WRITE_CONFIRMATION` | Unsafe compatibility mode for clients without form elicitation. Default: `false`. |
 | `MCP_ALLOWED_HOSTS` | Host-header allowlist for DNS-rebinding protection. Required on a non-loopback bind. |
 | `MCP_ALLOWED_ORIGIN_HOSTNAMES` | Optional additional browser-origin hostnames. On a non-loopback bind it defaults to `MCP_ALLOWED_HOSTS`. |
 | `MCP_RATE_LIMIT_PER_MINUTE` / `MCP_RATE_LIMIT_BURST` | Per-principal request rate. Defaults: 120 per minute and burst 30. |
 | `MCP_MAX_CONCURRENT_REQUESTS` / `MCP_MAX_QUEUED_REQUESTS` | Admission limits. Defaults: 8 in flight and 16 queued. |
 | `MCP_REQUEST_INGRESS_TIMEOUT_MS` | Absolute limit for admission queueing plus body upload, not tool execution. Default: 10000; maximum: 60000. |
+| `MCP_REQUEST_EXECUTION_TIMEOUT_MS` | Absolute limit for tool execution after upload. Default: 90000; maximum: 300000. |
 
-The server refuses a non-loopback bind unless `MCP_AUTH_TOKEN`,
-`MCP_ALLOWED_HOSTS` and `MCP_REQUEST_STATE_KEY` are set. Once
-`MCP_AUTH_TOKEN` is configured, every `/mcp` request needs that Bearer token,
-including on loopback. Host and Origin checks run before the MCP handler.
+The server refuses a non-loopback bind unless `MCP_AUTH_TOKEN` and
+`MCP_ALLOWED_HOSTS` are set. It also refuses to enable writes without both
+`MCP_AUTH_TOKEN` and `MCP_REQUEST_STATE_KEY`. Once `MCP_AUTH_TOKEN` is
+configured, every `/mcp` request needs that Bearer token, including on
+loopback. Host and Origin checks run before the MCP handler.
 
 Generate independent values for `MCP_AUTH_TOKEN` and `MCP_REQUEST_STATE_KEY`
 by running `openssl rand -hex 32` twice. Do not reuse a Livespace credential.
@@ -160,10 +164,10 @@ The normal flow is elicitation-first:
 4. If the relevant records changed before approval, the tool returns
    `recordsChanged: true`, writes nothing and presents a fresh plan.
 
-Clients without elicitation use a less protected compatibility path:
-`confirm: true executes immediately`. Preview first, obtain explicit human
-approval, then repeat the same business arguments with `confirm: true`. This
-path does not have the signed-state guarantees above.
+Write execution is disabled by default on clients without form elicitation.
+Those clients can preview, but `confirm: true` is refused. An operator can set
+`MCP_ALLOW_UNBOUND_WRITE_CONFIRMATION=true` for compatibility. In that mode,
+`confirm: true` executes without signed proof that a human saw the preview.
 
 Results distinguish these cases:
 
@@ -182,6 +186,40 @@ Results distinguish these cases:
 Notification success is reported as dispatched, never as delivered. If
 delivery matters, confirm it by another channel instead of sending a duplicate
 notification.
+
+## Security and privacy
+
+CRM names, notes, imported e-mails, task text and wall entries are untrusted
+data. The server never evaluates them as instructions, but the MCP host and
+model can still be influenced by their contents. Keep writes disabled unless
+the client provides a human confirmation flow. Fetch only the records and
+detail level needed for the task.
+
+Tool responses can be retained by the MCP host, model provider or local client
+logs. Choose a host whose storage, training and retention policy fits the CRM
+data you process. This server stores no CRM records on disk and sends no
+telemetry, but it cannot control what the host does after receiving a result.
+
+Use a dedicated Livespace API user rather than an administrator's key. Give it
+the smallest useful record and write permissions. Evaluate the MCP against a
+separate test account before connecting it to business data.
+
+For a reverse proxy, terminate TLS, disable caching and do not log MCP request
+or response bodies. The server sets `Cache-Control: no-store` and
+`Vary: Authorization`, but proxy policy must preserve those protections.
+
+## Incident response
+
+If a Livespace key, bearer token or confirmation key may be compromised:
+
+1. Stop the MCP server.
+2. Immediately revoke the Livespace API key and issue a replacement for the
+   dedicated API user.
+3. Generate new, independent `MCP_AUTH_TOKEN` and `MCP_REQUEST_STATE_KEY`
+   values.
+4. Restart the server and update the MCP client's Bearer header.
+5. Review Livespace's record and activity history for unexpected writes. Do
+   not retry any operation that previously returned `unknown_outcome`.
 
 ## v1 limits
 

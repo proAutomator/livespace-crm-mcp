@@ -6,6 +6,7 @@ const BASE_CONFIG: ServerConfig = {
   port: 3020,
   bindHost: "127.0.0.1",
   readOnly: false,
+  allowUnboundWriteConfirmation: false,
   allowedHostnames: ["localhost", "127.0.0.1", "[::1]"],
   allowedOriginHostnames: ["localhost", "127.0.0.1", "[::1]"],
   // Generous limits so ordinary tests never trip the limiter.
@@ -14,6 +15,7 @@ const BASE_CONFIG: ServerConfig = {
   maxConcurrentRequests: 16,
   maxQueuedRequests: 32,
   requestIngressTimeoutMs: 10_000,
+  requestExecutionTimeoutMs: 90_000,
 };
 
 function mcpRequest(
@@ -70,6 +72,13 @@ describe("MCP HTTP surface", () => {
     expect(tools.map((t: any) => t.name)).toContain("health");
     const health = tools.find((t: any) => t.name === "health");
     expect(health.annotations.readOnlyHint).toBe(true);
+  });
+
+  test("MCP responses cannot be cached and vary by authorization", async () => {
+    const app = buildApp({ config: BASE_CONFIG, version: "0.0.0-test" });
+    const response = await app.request(mcpRequest(TOOLS_LIST));
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("vary")).toContain("Authorization");
   });
 
   test("tools/call health returns dual-channel result", async () => {
@@ -333,6 +342,145 @@ describe("MCP HTTP surface", () => {
     }
   });
 
+  test("the execution deadline aborts tool work after body upload", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const startedAt = Date.now();
+    const app = buildApp({
+      config: { ...BASE_CONFIG, requestExecutionTimeoutMs: 50 },
+      version: "0.0.0-test",
+      livespacePing: async (opts) => {
+        observedSignal = opts?.signal;
+        await Promise.race([
+          new Promise<void>((resolve) =>
+            opts?.signal?.addEventListener("abort", () => resolve(), { once: true }),
+          ),
+          Bun.sleep(250),
+        ]);
+        if (opts?.signal?.aborted) {
+          throw new DOMException("synthetic execution deadline", "TimeoutError");
+        }
+        return {};
+      },
+    });
+
+    const response = await app.request(
+      mcpRequest({
+        jsonrpc: "2.0",
+        id: 11,
+        method: "tools/call",
+        params: { name: "health", arguments: { checkLivespace: true } },
+      }),
+    );
+    await response.text();
+    expect(observedSignal?.aborted).toBe(true);
+    expect(observedSignal?.reason).toBeDefined();
+    expect(Date.now() - startedAt).toBeLessThan(200);
+  });
+
+  test("cancelling response consumption aborts the forwarded tool signal", async () => {
+    const started = Promise.withResolvers<AbortSignal | undefined>();
+    const app = buildApp({
+      config: BASE_CONFIG,
+      version: "0.0.0-test",
+      livespacePing: async (opts) => {
+        started.resolve(opts?.signal);
+        await new Promise<void>((resolve) =>
+          opts?.signal?.addEventListener("abort", () => resolve(), { once: true }),
+        );
+        throw new DOMException("synthetic response cancelled", "AbortError");
+      },
+    });
+    const response = await app.request(
+      mcpRequest({
+        jsonrpc: "2.0",
+        id: 12,
+        method: "tools/call",
+        params: { name: "health", arguments: { checkLivespace: true } },
+      }),
+    );
+    const signal = await started.promise;
+    await response.body?.cancel("synthetic response cancelled");
+    expect(signal?.aborted).toBe(true);
+  });
+
+  test("a streamed tool response keeps its admission slot until completion", async () => {
+    const started = Promise.withResolvers<AbortSignal | undefined>();
+    const config = {
+      ...BASE_CONFIG,
+      maxConcurrentRequests: 1,
+      maxQueuedRequests: 1,
+      requestExecutionTimeoutMs: 1_000,
+    };
+    const app = buildApp({
+      config,
+      version: "0.0.0-test",
+      livespacePing: async (opts) => {
+        started.resolve(opts?.signal);
+        await new Promise<void>((resolve) =>
+          opts?.signal?.addEventListener("abort", () => resolve(), { once: true }),
+        );
+        throw new DOMException("synthetic response cancelled", "AbortError");
+      },
+    });
+    const first = await app.request(
+      mcpRequest({
+        jsonrpc: "2.0",
+        id: 13,
+        method: "tools/call",
+        params: { name: "health", arguments: { checkLivespace: true } },
+      }),
+    );
+    await started.promise;
+
+    const queued = Promise.resolve(app.request(mcpRequest(TOOLS_LIST)));
+    const early = await Promise.race([
+      queued.then(() => "resolved" as const),
+      Bun.sleep(25).then(() => "waiting" as const),
+    ]);
+    expect(early).toBe("waiting");
+
+    await first.body?.cancel("synthetic response cancelled");
+    expect((await queued).status).toBe(200);
+  });
+
+  test("an execution deadline releases a streamed response slot", async () => {
+    const started = Promise.withResolvers<void>();
+    const config = {
+      ...BASE_CONFIG,
+      maxConcurrentRequests: 1,
+      maxQueuedRequests: 1,
+      requestExecutionTimeoutMs: 50,
+    };
+    const app = buildApp({
+      config,
+      version: "0.0.0-test",
+      livespacePing: async (opts) => {
+        started.resolve();
+        await new Promise<void>((resolve) =>
+          opts?.signal?.addEventListener("abort", () => resolve(), { once: true }),
+        );
+        throw new DOMException("synthetic execution deadline", "TimeoutError");
+      },
+    });
+    const first = await app.request(
+      mcpRequest({
+        jsonrpc: "2.0",
+        id: 14,
+        method: "tools/call",
+        params: { name: "health", arguments: { checkLivespace: true } },
+      }),
+    );
+    await started.promise;
+
+    const queued = Promise.resolve(app.request(mcpRequest(TOOLS_LIST)));
+    const second = await Promise.race([
+      queued,
+      Bun.sleep(300).then(() => undefined),
+    ]);
+    expect(second?.status).toBe(200);
+    await first.body?.cancel("synthetic cleanup");
+  });
+
   test("GET /health reports status without secrets", async () => {
     const config = { ...BASE_CONFIG, authToken: "synthetic-bearer-token" };
     const app = buildApp({ config, version: "0.0.0-test" });
@@ -343,8 +491,7 @@ describe("MCP HTTP surface", () => {
     );
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.status).toBe("ok");
-    expect(JSON.stringify(body)).not.toContain("synthetic-bearer-token");
+    expect(body).toEqual({ status: "ok" });
   });
 
   test("upstream bodies and bearer tokens reach neither results nor stderr", async () => {

@@ -14,6 +14,7 @@ const BASE_CONFIG: ServerConfig = {
   port: 3020,
   bindHost: "127.0.0.1",
   readOnly: false,
+  allowUnboundWriteConfirmation: false,
   allowedHostnames: ["localhost", "127.0.0.1", "[::1]"],
   allowedOriginHostnames: ["localhost", "127.0.0.1", "[::1]"],
   rateLimitPerMinute: 6000,
@@ -21,6 +22,7 @@ const BASE_CONFIG: ServerConfig = {
   maxConcurrentRequests: 16,
   maxQueuedRequests: 32,
   requestIngressTimeoutMs: 10_000,
+  requestExecutionTimeoutMs: 90_000,
 };
 
 const PROTOCOL = "2026-07-28";

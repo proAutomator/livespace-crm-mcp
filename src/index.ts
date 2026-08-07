@@ -28,9 +28,9 @@ const app = buildApp({
   dealSteps: createDealStepReader(client),
   // Every notification deep link is built from this.
   subdomain: livespaceConfig.subdomain,
-  // The kill-switch is honoured before anything can write: in read-only mode
-  // the write fetchers are not built at all, so the five write tools have
-  // nothing to register with (docs/security.md par. 5).
+  // Read-only is the default. The explicit write opt-in and emergency
+  // kill-switch are resolved before anything can write: in read-only mode the
+  // write fetchers are not built at all (docs/security.md par. 5).
   ...(serverConfig.readOnly ? {} : { writes: createWriteFetchers(client) }),
   livespacePing: (opts) =>
     client.call<{ name?: string; login?: string }>(

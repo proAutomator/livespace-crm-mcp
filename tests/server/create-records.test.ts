@@ -216,9 +216,16 @@ function ctx(options: CtxOptions = {}): unknown {
 function run(
   world: World,
   args: CreateRecordsArgs,
-  opts: { signal?: AbortSignal; ctx?: unknown } = {},
+  opts: {
+    signal?: AbortSignal;
+    ctx?: unknown;
+    allowUnboundWriteConfirmation?: boolean;
+  } = {},
 ): Promise<CreateRecordsResult> {
-  return runCreateRecords(world.deps, args, opts);
+  return runCreateRecords(world.deps, args, {
+    allowUnboundWriteConfirmation: true,
+    ...opts,
+  });
 }
 
 function asRun(result: CreateRecordsResult): ToolRunResult {

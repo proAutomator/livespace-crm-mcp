@@ -631,6 +631,7 @@ export async function runLogActivities(
     state,
     elicitedConfirm: readElicitedConfirm(opts.ctx),
     clientSupportsElicitation: clientSupportsElicitation(opts.ctx),
+    allowUnboundWriteConfirmation: opts.allowUnboundWriteConfirmation,
   });
   // A refused confirmation costs nothing upstream: it is decided before the
   // first write.

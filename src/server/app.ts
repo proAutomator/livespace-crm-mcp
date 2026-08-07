@@ -10,20 +10,21 @@ import { principalFromToken, tokensEqual } from "./auth.js";
 import { readBodyWithCap } from "./body-limit.js";
 import { createRequestLimiter } from "./limits.js";
 import { createServerFactory, type AppDeps } from "./mcp.js";
-import { PROTOCOL_VERSION } from "./tools/health.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
-interface IngressDeadline {
+interface RequestDeadline {
   signal: AbortSignal;
   didTimeout: () => boolean;
+  abort: (reason: unknown) => void;
   dispose: () => void;
 }
 
-function createIngressDeadline(
+function createRequestDeadline(
   clientSignal: AbortSignal,
   timeoutMs: number,
-): IngressDeadline {
+  timeoutMessage: string,
+): RequestDeadline {
   const controller = new AbortController();
   let timedOut = false;
   const onClientAbort = () => {
@@ -36,14 +37,13 @@ function createIngressDeadline(
   else clientSignal.addEventListener("abort", onClientAbort, { once: true });
   const timer = setTimeout(() => {
     timedOut = true;
-    controller.abort(
-      new DOMException("Request ingress deadline exceeded.", "TimeoutError"),
-    );
+    controller.abort(new DOMException(timeoutMessage, "TimeoutError"));
   }, timeoutMs);
   let disposed = false;
   return {
     signal: controller.signal,
     didTimeout: () => timedOut,
+    abort: (reason) => controller.abort(reason),
     dispose: () => {
       if (disposed) return;
       disposed = true;
@@ -53,9 +53,82 @@ function createIngressDeadline(
   };
 }
 
+function createIngressDeadline(
+  clientSignal: AbortSignal,
+  timeoutMs: number,
+): RequestDeadline {
+  return createRequestDeadline(
+    clientSignal,
+    timeoutMs,
+    "Request ingress deadline exceeded.",
+  );
+}
+
+function keepDeadlineThroughResponse(
+  response: Response,
+  deadline: RequestDeadline,
+  releaseAdmission: () => void,
+): Response {
+  if (response.body === null) {
+    deadline.dispose();
+    releaseAdmission();
+    return response;
+  }
+
+  const reader = response.body.getReader();
+  let finished = false;
+  const finish = (): void => {
+    if (finished) return;
+    finished = true;
+    deadline.signal.removeEventListener("abort", finish);
+    deadline.dispose();
+    releaseAdmission();
+  };
+  deadline.signal.addEventListener("abort", finish, { once: true });
+  if (deadline.signal.aborted) finish();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          finish();
+          controller.close();
+          return;
+        }
+        controller.enqueue(chunk.value);
+      } catch (error) {
+        finish();
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      deadline.abort(
+        reason ?? new DOMException("Response consumption was cancelled.", "AbortError"),
+      );
+      try {
+        await reader.cancel(reason);
+      } finally {
+        finish();
+      }
+    },
+  });
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 function requestTimedOut(): Response {
   return new Response(JSON.stringify({ error: "request_timeout" }), {
     status: 408,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function executionTimedOut(): Response {
+  return new Response(JSON.stringify({ error: "execution_timeout" }), {
+    status: 504,
     headers: { "content-type": "application/json" },
   });
 }
@@ -136,15 +209,17 @@ export function buildApp(deps: AppDeps) {
     await next();
   });
 
-  app.get("/health", (c) =>
-    c.json({
-      status: "ok",
-      version: deps.version,
-      protocol: PROTOCOL_VERSION,
-      readOnly: deps.config.readOnly,
-      authEnabled: deps.config.authToken !== undefined,
-    }),
-  );
+  app.use("/mcp", async (c, next) => {
+    await next();
+    c.res.headers.set("cache-control", "no-store");
+    const vary = c.res.headers.get("vary");
+    if (vary === null) c.res.headers.set("vary", "Authorization");
+    else if (!vary.toLowerCase().split(/\s*,\s*/u).includes("authorization")) {
+      c.res.headers.set("vary", `${vary}, Authorization`);
+    }
+  });
+
+  app.get("/health", (c) => c.json({ status: "ok" }));
 
   app.all("/mcp", async (c) => {
     const request = c.req.raw;
@@ -171,6 +246,7 @@ export function buildApp(deps: AppDeps) {
       deps.config.requestIngressTimeoutMs,
     );
     let admission: Awaited<ReturnType<typeof limiter.admit>> | undefined;
+    let execution: RequestDeadline | undefined;
 
     try {
       admission = await limiter.admit(principal, ingress.signal);
@@ -208,20 +284,23 @@ export function buildApp(deps: AppDeps) {
       }
       if (bodyParsed && Array.isArray(parsedBody)) return rejectJsonRpcBatch();
 
+      execution = createRequestDeadline(
+        request.signal,
+        deps.config.requestExecutionTimeoutMs,
+        "Request execution deadline exceeded.",
+      );
+
       const forwarded =
         read.body === null
-          ? request
+          ? new Request(request, { signal: execution.signal })
           : new Request(request.url, {
               method: request.method,
               headers: request.headers,
               body: read.body,
-              signal: request.signal,
+              signal: execution.signal,
             });
 
-      // The slot is held until the response is prepared; for SSE responses the
-      // stream may outlive it, which is an accepted simplification - response
-      // preparation is the expensive part here.
-      return await handler.fetch(
+      const response = await handler.fetch(
         forwarded,
         authInfo === undefined && !bodyParsed
           ? undefined
@@ -230,13 +309,31 @@ export function buildApp(deps: AppDeps) {
               ...(bodyParsed ? { parsedBody } : {}),
             },
       );
+      const activeExecution = execution;
+      const activeAdmission = admission;
+      let admissionReleased = false;
+      const releaseAdmission = (): void => {
+        if (admissionReleased) return;
+        admissionReleased = true;
+        if (activeAdmission?.admitted) activeAdmission.release();
+      };
+      const wrapped = keepDeadlineThroughResponse(
+        response,
+        activeExecution,
+        releaseAdmission,
+      );
+      execution = undefined;
+      admission = undefined;
+      return wrapped;
     } catch (error) {
       cancelUnreadBody(request, error);
       if (ingress.didTimeout()) return requestTimedOut();
+      if (execution?.didTimeout()) return executionTimedOut();
       if (request.signal.aborted) return clientClosedRequest();
       throw error;
     } finally {
       ingress.dispose();
+      execution?.dispose();
       if (admission?.admitted) admission.release();
     }
   });

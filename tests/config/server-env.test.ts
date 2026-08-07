@@ -7,12 +7,13 @@ const REQUEST_STATE_KEY = "synthetic-request-state-key-0123456789";
 const AUTH_TOKEN = "synthetic-bearer-token-0123456789";
 
 describe("loadServerConfig", () => {
-  test("defaults: loopback bind, port 3020, no auth, read-write", () => {
+  test("defaults: loopback bind, port 3020, no auth, read-only", () => {
     const config = loadServerConfig({});
     expect(config).toEqual({
       port: 3020,
       bindHost: "127.0.0.1",
-      readOnly: false,
+      readOnly: true,
+      allowUnboundWriteConfirmation: false,
       allowedHostnames: ["localhost", "127.0.0.1", "[::1]"],
       allowedOriginHostnames: ["localhost", "127.0.0.1", "[::1]"],
       rateLimitPerMinute: 120,
@@ -20,6 +21,7 @@ describe("loadServerConfig", () => {
       maxConcurrentRequests: 8,
       maxQueuedRequests: 16,
       requestIngressTimeoutMs: 10_000,
+      requestExecutionTimeoutMs: 90_000,
     });
     expect(config.authToken).toBeUndefined();
   });
@@ -54,6 +56,17 @@ describe("loadServerConfig", () => {
     ).toThrow(/MCP_REQUEST_INGRESS_TIMEOUT_MS/);
   });
 
+  test("request execution timeout parses and stays within the hard maximum", () => {
+    const config = loadServerConfig({ MCP_REQUEST_EXECUTION_TIMEOUT_MS: "120000" });
+    expect(config.requestExecutionTimeoutMs).toBe(120_000);
+    expect(() =>
+      loadServerConfig({ MCP_REQUEST_EXECUTION_TIMEOUT_MS: "0" }),
+    ).toThrow(/MCP_REQUEST_EXECUTION_TIMEOUT_MS/);
+    expect(() =>
+      loadServerConfig({ MCP_REQUEST_EXECUTION_TIMEOUT_MS: "300001" }),
+    ).toThrow(/MCP_REQUEST_EXECUTION_TIMEOUT_MS/);
+  });
+
   test("parses port, read-only flag, and auth token", () => {
     const config = loadServerConfig({
       MCP_PORT: "4100",
@@ -65,6 +78,44 @@ describe("loadServerConfig", () => {
     expect(config.readOnly).toBe(true);
     expect(config.authToken).toBe(AUTH_TOKEN);
     expect(config.requestStateKey).toBe(REQUEST_STATE_KEY);
+  });
+
+  test("writes need an explicit opt-in plus authentication", () => {
+    expect(() =>
+      loadServerConfig({ LIVESPACE_MCP_ENABLE_WRITES: "true" }),
+    ).toThrow(/MCP_AUTH_TOKEN/);
+
+    const config = loadServerConfig({
+      LIVESPACE_MCP_ENABLE_WRITES: "true",
+      MCP_AUTH_TOKEN: AUTH_TOKEN,
+      MCP_REQUEST_STATE_KEY: REQUEST_STATE_KEY,
+    });
+    expect(config.readOnly).toBe(false);
+  });
+
+  test("the read-only kill switch wins over a write opt-in", () => {
+    const config = loadServerConfig({
+      LIVESPACE_MCP_ENABLE_WRITES: "true",
+      LIVESPACE_MCP_READ_ONLY: "true",
+    });
+    expect(config.readOnly).toBe(true);
+  });
+
+  test("security booleans are strict and unbound confirmation defaults off", () => {
+    expect(() =>
+      loadServerConfig({ LIVESPACE_MCP_ENABLE_WRITES: "yes" }),
+    ).toThrow(/LIVESPACE_MCP_ENABLE_WRITES/);
+    expect(() =>
+      loadServerConfig({ LIVESPACE_MCP_READ_ONLY: "1" }),
+    ).toThrow(/LIVESPACE_MCP_READ_ONLY/);
+    expect(() =>
+      loadServerConfig({ MCP_ALLOW_UNBOUND_WRITE_CONFIRMATION: "on" }),
+    ).toThrow(/MCP_ALLOW_UNBOUND_WRITE_CONFIRMATION/);
+
+    const config = loadServerConfig({
+      MCP_ALLOW_UNBOUND_WRITE_CONFIRMATION: "true",
+    });
+    expect(config.allowUnboundWriteConfirmation).toBe(true);
   });
 
   test("an auth token shorter than 32 bytes is refused", () => {
@@ -107,23 +158,22 @@ describe("loadServerConfig", () => {
     ).toThrow(/MCP_REQUEST_STATE_KEY/);
   });
 
-  test("fail-closed: an authenticated server needs MCP_REQUEST_STATE_KEY", () => {
-    expect(() =>
-      loadServerConfig({ MCP_AUTH_TOKEN: AUTH_TOKEN }),
-    ).toThrow(/MCP_REQUEST_STATE_KEY/);
+  test("an authenticated read-only server does not need write state", () => {
+    const config = loadServerConfig({ MCP_AUTH_TOKEN: AUTH_TOKEN });
+    expect(config.readOnly).toBe(true);
+    expect(config.requestStateKey).toBeUndefined();
   });
 
-  test("fail-closed: a non-loopback bind needs MCP_REQUEST_STATE_KEY", () => {
+  test("fail-closed: write-enabled startup needs MCP_REQUEST_STATE_KEY", () => {
     expect(() =>
       loadServerConfig({
-        MCP_BIND_HOST: "0.0.0.0",
+        LIVESPACE_MCP_ENABLE_WRITES: "true",
         MCP_AUTH_TOKEN: AUTH_TOKEN,
-        MCP_ALLOWED_HOSTS: "mcp.example.com",
       }),
     ).toThrow(/MCP_REQUEST_STATE_KEY/);
   });
 
-  test("loopback development without a key boots on the process-local fallback", () => {
+  test("loopback read-only development does not build write state", () => {
     const config = loadServerConfig({});
     expect(config.requestStateKey).toBeUndefined();
   });

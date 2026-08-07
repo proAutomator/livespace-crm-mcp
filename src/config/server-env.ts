@@ -3,6 +3,8 @@ export interface ServerConfig {
   bindHost: string;
   authToken?: string;
   readOnly: boolean;
+  /** Explicit escape hatch for clients that cannot perform form elicitation. */
+  allowUnboundWriteConfirmation: boolean;
   allowedHostnames: string[];
   allowedOriginHostnames: string[];
   rateLimitPerMinute: number;
@@ -11,10 +13,11 @@ export interface ServerConfig {
   maxQueuedRequests: number;
   /** Absolute budget shared by admission queueing and request-body upload. */
   requestIngressTimeoutMs: number;
+  /** Absolute budget for MCP tool execution after the request body is read. */
+  requestExecutionTimeoutMs: number;
   /**
-   * HMAC secret for the write-confirmation `requestState`. Absent only in
-   * loopback development, where the codec falls back to a per-process random
-   * key (see `buildWriteCodec`).
+   * HMAC secret for the write-confirmation `requestState`. Required whenever
+   * write tools are enabled; normally absent from read-only processes.
    */
   requestStateKey?: string;
 }
@@ -26,6 +29,7 @@ const MIN_AUTH_TOKEN_BYTES = 32;
 /** The SDK's codec refuses a shorter one, and so does startup. */
 const MIN_REQUEST_STATE_KEY_BYTES = 32;
 const MAX_REQUEST_INGRESS_TIMEOUT_MS = 60_000;
+const MAX_REQUEST_EXECUTION_TIMEOUT_MS = 300_000;
 
 function positiveInt(
   env: Record<string, string | undefined>,
@@ -48,6 +52,18 @@ function splitHostList(value: string | undefined): string[] {
     .filter((host) => host !== "");
 }
 
+function booleanFlag(
+  env: Record<string, string | undefined>,
+  name: string,
+  fallback: boolean,
+): boolean {
+  const raw = env[name]?.trim().toLowerCase();
+  if (raw === undefined || raw === "") return fallback;
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  throw new Error(`${name} must be either true or false.`);
+}
+
 export function loadServerConfig(
   env: Record<string, string | undefined>,
 ): ServerConfig {
@@ -68,11 +84,32 @@ export function loadServerConfig(
         "and generated from cryptographically random data.",
     );
   }
-  const readOnly = env["LIVESPACE_MCP_READ_ONLY"]?.trim().toLowerCase() === "true";
+  const writesRequested = booleanFlag(
+    env,
+    "LIVESPACE_MCP_ENABLE_WRITES",
+    false,
+  );
+  const readOnlyKillSwitch = booleanFlag(
+    env,
+    "LIVESPACE_MCP_READ_ONLY",
+    false,
+  );
+  const readOnly = !writesRequested || readOnlyKillSwitch;
+  const allowUnboundWriteConfirmation = booleanFlag(
+    env,
+    "MCP_ALLOW_UNBOUND_WRITE_CONFIRMATION",
+    false,
+  );
   const extraHosts = splitHostList(env["MCP_ALLOWED_HOSTS"]);
   const extraOrigins = splitHostList(env["MCP_ALLOWED_ORIGIN_HOSTNAMES"]);
 
   const loopback = LOOPBACK_HOSTS.has(bindHost);
+  if (!readOnly && authToken === undefined) {
+    throw new Error(
+      "LIVESPACE_MCP_ENABLE_WRITES=true requires MCP_AUTH_TOKEN, including " +
+        "on loopback. Refusing to expose unauthenticated write tools.",
+    );
+  }
   if (!loopback) {
     // Fail closed (docs/security.md par. 2): a public bind without auth or
     // an explicit host allowlist must never boot.
@@ -100,14 +137,12 @@ export function loadServerConfig(
         "(the HMAC key that signs write confirmations).",
     );
   }
-  if (requestStateKey === undefined && (authToken !== undefined || !loopback)) {
+  if (requestStateKey === undefined && !readOnly) {
     // Fail closed (docs/security.md par. 5): a write confirmation is only
-    // single-use and unforgeable while one stable key signs it. The random
-    // per-process fallback is a loopback development convenience and nothing
-    // more - it dies with the process and never spans two of them.
+    // single-use and unforgeable while one stable key signs it.
     throw new Error(
-      "MCP_REQUEST_STATE_KEY is required once the server is authenticated or " +
-        "bound off loopback. Set a random secret of at least " +
+      "MCP_REQUEST_STATE_KEY is required when writes are enabled. Set a " +
+        "random secret of at least " +
         `${MIN_REQUEST_STATE_KEY_BYTES} bytes; it signs write confirmations.`,
     );
   }
@@ -129,12 +164,24 @@ export function loadServerConfig(
         `${MAX_REQUEST_INGRESS_TIMEOUT_MS} milliseconds.`,
     );
   }
+  const requestExecutionTimeoutMs = positiveInt(
+    env,
+    "MCP_REQUEST_EXECUTION_TIMEOUT_MS",
+    90_000,
+  );
+  if (requestExecutionTimeoutMs > MAX_REQUEST_EXECUTION_TIMEOUT_MS) {
+    throw new Error(
+      "MCP_REQUEST_EXECUTION_TIMEOUT_MS must not exceed " +
+        `${MAX_REQUEST_EXECUTION_TIMEOUT_MS} milliseconds.`,
+    );
+  }
 
   return {
     port,
     bindHost,
     ...(authToken === undefined ? {} : { authToken }),
     readOnly,
+    allowUnboundWriteConfirmation,
     allowedHostnames,
     allowedOriginHostnames,
     rateLimitPerMinute: positiveInt(env, "MCP_RATE_LIMIT_PER_MINUTE", 120),
@@ -142,6 +189,7 @@ export function loadServerConfig(
     maxConcurrentRequests: positiveInt(env, "MCP_MAX_CONCURRENT_REQUESTS", 8),
     maxQueuedRequests: positiveInt(env, "MCP_MAX_QUEUED_REQUESTS", 16),
     requestIngressTimeoutMs,
+    requestExecutionTimeoutMs,
     ...(requestStateKey === undefined ? {} : { requestStateKey }),
   };
 }

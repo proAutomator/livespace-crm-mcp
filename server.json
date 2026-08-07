@@ -3,7 +3,7 @@
   "name": "io.github.proAutomator/livespace-crm-mcp",
   "title": "Livespace CRM MCP Server",
   "description": "Unofficial local MCP server for Livespace CRM with read tools and guarded writes.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "websiteUrl": "https://github.com/proAutomator/livespace-crm-mcp#readme",
   "repository": {
     "url": "https://github.com/proAutomator/livespace-crm-mcp",
@@ -15,10 +15,16 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "livespace-crm-mcp",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "transport": {
         "type": "streamable-http",
-        "url": "http://127.0.0.1:{MCP_PORT}/mcp"
+        "url": "http://127.0.0.1:{MCP_PORT}/mcp",
+        "headers": [
+          {
+            "name": "Authorization",
+            "value": "Bearer {MCP_AUTH_TOKEN}"
+          }
+        ]
       },
       "environmentVariables": [
         {
@@ -52,12 +58,26 @@
           "isSecret": true
         },
         {
-          "name": "LIVESPACE_MCP_READ_ONLY",
-          "description": "Disable every write tool when set to true.",
+          "name": "MCP_AUTH_TOKEN",
+          "description": "Random bearer token of at least 32 bytes, also sent by the client.",
+          "format": "string",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "LIVESPACE_MCP_ENABLE_WRITES",
+          "description": "Expose write tools. Keep false unless writes are deliberately required.",
           "format": "boolean",
           "default": "false",
           "isRequired": false,
           "isSecret": false
+        },
+        {
+          "name": "MCP_REQUEST_STATE_KEY",
+          "description": "Random HMAC key of at least 32 bytes. Required when writes are enabled.",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": true
         }
       ]
     }

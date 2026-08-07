@@ -9,7 +9,9 @@ This document is the threat model and the binding security requirements for
    at startup instead of degrading silently.
 2. **Least privilege by construction.** The server holds exactly one credential
    (a per-user Livespace API key) and inherits that user's permissions - nothing
-   more exists to leak.
+   more exists to leak. Operators SHOULD use a dedicated API user with the
+   smallest useful read and write permissions, never an administrator key by
+   default.
 3. **Secrets are radioactive.** API keys, secrets, tokens and session material
    MUST never appear in: the repository, git history, logs, error messages,
    tool responses, or anything else the model or a client can read.
@@ -36,6 +38,8 @@ This document is the threat model and the binding security requirements for
   (fail-closed).
 - When `MCP_AUTH_TOKEN` is set, every `/mcp` request MUST carry it as a Bearer
   token; comparison uses constant-time equality.
+- Write tools MUST NOT be enabled without `MCP_AUTH_TOKEN`, including on
+  loopback. Read-only remains the startup default.
 - Authentication failures MUST pass through one bounded, constant-cardinality
   rate-limit bucket. They never reach request-body buffering, and exhausting
   their bucket does not consume the valid principal's allowance.
@@ -48,6 +52,15 @@ This document is the threat model and the binding security requirements for
   admission queue and body upload MUST share one absolute deadline, defaulting
   to 10 seconds and capped at 60 seconds. Timed-out or disconnected waiters
   MUST leave the queue immediately.
+- Tool execution after body upload MUST receive a separate absolute deadline,
+  defaulting to 90 seconds and capped at 300 seconds. The deadline signal MUST
+  remain live until the response body finishes, including streamed responses.
+  The admission slot MUST remain held for the same lifetime, then release on
+  completion, cancellation or deadline. A timed-out write keeps the existing
+  unknown-outcome semantics and MUST NOT be presented as safely retryable.
+- `/mcp` responses MUST send `Cache-Control: no-store` and vary by
+  `Authorization`. The unauthenticated `/health` liveness endpoint exposes
+  status only.
 - TLS is terminated by the platform (Cloudflare Workers) or a reverse proxy -
   the Node/Bun process itself never listens publicly without one.
 - v2 (multi-user) will implement OAuth 2.1 resource-server semantics per MCP
@@ -81,13 +94,24 @@ names). That content is **untrusted data**:
 - Write operations act only on explicit, schema-validated tool arguments.
 - Structured output schemas keep data in typed fields instead of free text
   where possible.
+- These controls do not stop a host or model from being influenced by data it
+  receives. Operators MUST choose a host whose storage and retention policy is
+  appropriate for CRM data and SHOULD keep write sessions separate from broad
+  exploratory reads.
 
 ## 5. Write safety
 
 - v1 ships **no delete and no merge operations at all** - the worst mistakes
   are impossible, not just guarded.
-- `LIVESPACE_MCP_READ_ONLY=true` disables every write tool (they are not even
-  listed) - a global kill-switch for cautious operators.
+- Write tools are absent by default. `LIVESPACE_MCP_ENABLE_WRITES=true` is the
+  explicit opt-in, while `LIVESPACE_MCP_READ_ONLY=true` remains a global
+  kill-switch and wins over that opt-in.
+- On clients with form elicitation, execution requires the signed, single-use
+  confirmation state bound to the principal, tool, arguments and preview.
+  Clients without form elicitation can preview but MUST NOT execute through
+  `confirm: true` by default. The operator-only
+  `MCP_ALLOW_UNBOUND_WRITE_CONFIRMATION=true` escape hatch may restore that
+  compatibility path, and documentation MUST label it unsafe.
 - Batch writes support `dryRun` previews; destructive ambiguity resolves to
   "do nothing and explain".
 - After a write with a read-back the server re-reads the affected record and
@@ -124,6 +148,9 @@ names). That content is **untrusted data**:
 - No dependencies with install scripts; CI runs a dependency audit
   (`bun audit`) and a checksum-pinned secret scanner (gitleaks) on every
   push; GitHub Actions are pinned to commit SHAs.
+- npm releases MUST run from the protected `npm-release` GitHub environment
+  through npm trusted publishing. The workflow has only `contents: read` and
+  `id-token: write`; public releases publish a provenance attestation.
 
 ## 8. Data handling
 
@@ -131,6 +158,9 @@ names). That content is **untrusted data**:
   data with TTL. Nothing is written to disk.
 - No telemetry, no analytics, no outbound traffic except
   `https://<subdomain>.livespace.io`.
+- Once a result reaches an MCP host, its persistence, model-provider retention
+  and training policy are outside this process. User documentation MUST state
+  that boundary plainly.
 
 ## 9. Repository hygiene
 
@@ -164,6 +194,13 @@ The suite MUST cover at least:
 11. one absolute ingress deadline covers admission queueing and body upload;
     stalled bodies receive 408, body readers are cancelled, and aborted queue
     waiters release capacity immediately.
+12. startup defaults to read-only, write opt-in requires authentication and a
+    stable request-state key, and the read-only kill-switch takes precedence;
+13. a non-elicitation client cannot execute with `confirm: true` unless the
+    operator explicitly enables the unsafe compatibility flag;
+14. the post-upload execution deadline aborts real tool work and remains live
+    through streamed response consumption;
+15. `/mcp` responses are non-cacheable and `/health` exposes status only.
 
 ### Regression map
 
@@ -183,6 +220,10 @@ the complete gate and MUST also pass before release.
 | 9 | `tests/server/http.test.ts` - `buffering a normal MCP body preserves client cancellation` |
 | 10 | `tests/server/http.test.ts` - `rejects a JSON-RPC batch before any tool work` plus the existing legacy and modern single-message controls |
 | 11 | `tests/config/server-env.test.ts` - bounded ingress configuration; `tests/server/http.test.ts` - stalled-body 408 and slot handoff; `tests/server/body-limit.test.ts` - reader cancellation; `tests/server/limits.test.ts` - aborted queue removal |
+| 12 | `tests/config/server-env.test.ts` - safe defaults, write authentication, state key and kill-switch precedence |
+| 13 | `tests/server/write-support.test.ts` and write-tool wire tests - refusal by default and explicit compatibility control |
+| 14 | `tests/config/server-env.test.ts` and `tests/server/http.test.ts` - bounded execution setting, live abort signal and streamed-response admission lifetime |
+| 15 | `tests/server/http.test.ts` - `no-store`, `Vary: Authorization` and minimal liveness response |
 
 ## Trust boundaries (out of scope)
 

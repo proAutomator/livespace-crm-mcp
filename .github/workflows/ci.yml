@@ -60,4 +60,4 @@ jobs:
           echo "server did not become healthy" >&2
           exit 1
       - name: MCP conformance suite (baseline for unimplemented features)
-        run: npx --yes @modelcontextprotocol/conformance@0.1.16 server --url http://127.0.0.1:3020/mcp --expected-failures ./conformance-baseline.yml
+        run: bunx --no-install conformance server --url http://127.0.0.1:3020/mcp --expected-failures ./conformance-baseline.yml

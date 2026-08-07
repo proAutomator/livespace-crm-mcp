@@ -29,6 +29,8 @@ const ALL_TOOLS = [
 ] as const;
 const READ_TOOLS = ALL_TOOLS.slice(0, 6);
 const PROTOCOL = "2026-07-28";
+const PACKAGE_AUTH_TOKEN = "synthetic-package-bearer-token-0123456789";
+const PACKAGE_STATE_KEY = "synthetic-package-state-key-0123456789";
 
 let scratch = "";
 let project = "";
@@ -107,6 +109,7 @@ async function modernCall(
       host: `127.0.0.1:${port}`,
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
+      authorization: `Bearer ${PACKAGE_AUTH_TOKEN}`,
       "mcp-protocol-version": PROTOCOL,
       "mcp-method": method,
     },
@@ -125,6 +128,7 @@ async function initializeVersion(port: number): Promise<string | undefined> {
       host: `127.0.0.1:${port}`,
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
+      authorization: `Bearer ${PACKAGE_AUTH_TOKEN}`,
     },
     body: JSON.stringify({
       jsonrpc: "2.0",
@@ -159,7 +163,9 @@ function packagedEnvironment(port: number, readOnly: boolean): Record<string, st
     LIVESPACE_SUBDOMAIN: "synthetic-workspace",
     LIVESPACE_API_KEY: "synthetic-key-package-test",
     LIVESPACE_API_SECRET: "synthetic-secret-package-test",
-    LIVESPACE_MCP_READ_ONLY: String(readOnly),
+    MCP_AUTH_TOKEN: PACKAGE_AUTH_TOKEN,
+    MCP_REQUEST_STATE_KEY: PACKAGE_STATE_KEY,
+    LIVESPACE_MCP_ENABLE_WRITES: String(!readOnly),
   };
 }
 
@@ -173,8 +179,8 @@ async function assertPackagedServer(readOnly: boolean): Promise<void> {
   });
   try {
     const health = await waitForHealth(port, child);
-    expect(await health.json()).toMatchObject({ status: "ok", version: "0.1.0" });
-    expect(await initializeVersion(port)).toBe("0.1.0");
+    expect(await health.json()).toEqual({ status: "ok" });
+    expect(await initializeVersion(port)).toBe("0.1.1");
     const listed = await modernCall(port, "tools/list", 2);
     expect(listed.result?.tools?.map((tool: any) => tool.name)).toEqual(
       readOnly ? READ_TOOLS : ALL_TOOLS,
@@ -264,6 +270,7 @@ describe("public npm package contract", () => {
       zod: "4.4.3",
     });
     expect(packageJson.devDependencies).toEqual({
+      "@modelcontextprotocol/conformance": "0.1.16",
       "@types/bun": "1.3.14",
       typescript: "7.0.2",
     });
@@ -316,6 +323,8 @@ describe("public npm package contract", () => {
     expect(secrets.map((input: any) => input.name)).toEqual([
       "LIVESPACE_API_KEY",
       "LIVESPACE_API_SECRET",
+      "MCP_AUTH_TOKEN",
+      "MCP_REQUEST_STATE_KEY",
     ]);
     for (const input of secrets) {
       expect(input.value).toBeUndefined();
@@ -338,10 +347,10 @@ describe("public npm package contract", () => {
     expect(readme).toContain("LIVESPACE_API_SECRET");
     expect(readme).toContain("Streamable HTTP");
     expect(readme).toContain(
-      "https://www.npmjs.com/package/livespace-crm-mcp/v/0.1.0",
+      "https://www.npmjs.com/package/livespace-crm-mcp/v/0.1.1",
     );
     expect(readme).toContain(
-      "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.proAutomator%2Flivespace-crm-mcp/versions/0.1.0",
+      "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.proAutomator%2Flivespace-crm-mcp/versions/0.1.1",
     );
   });
 

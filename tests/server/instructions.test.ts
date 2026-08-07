@@ -107,7 +107,7 @@ describe("buildInstructions", () => {
     expect(text).not.toContain("Write tools arrive in a later milestone.");
   });
 
-  test("states the real elicitation-first and direct-fallback contract", () => {
+  test("states the safe elicitation and compatibility contract", () => {
     const text = buildInstructions({ readOnly: false }).replace(/\s+/gu, " ");
     expect(text).not.toContain("never write on the first call");
     expect(text).toContain(
@@ -115,9 +115,20 @@ describe("buildInstructions", () => {
     );
     expect(text).toContain("confirm: true cannot bypass that prompt");
     expect(text).toContain(
-      "On a client without elicitation, confirm: true executes immediately",
+      "Clients without form elicitation can preview, but confirm: true is refused",
     );
-    expect(text).toContain("Preview first, review the plan");
+    const compatibility = buildInstructions({
+      readOnly: false,
+      allowUnboundWriteConfirmation: true,
+    }).replace(/\s+/gu, " ");
+    expect(compatibility).toContain("UNSAFE COMPATIBILITY MODE is ON");
+    expect(compatibility).toContain("confirm: true can execute after a preview");
+  });
+
+  test("warns that the MCP host can retain CRM data", () => {
+    expect(buildInstructions({ readOnly: false })).toContain(
+      "The MCP host may retain this data",
+    );
   });
 
   test("explains signed-state changes and uncertain write outcomes", () => {

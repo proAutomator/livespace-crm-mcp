@@ -276,6 +276,8 @@ export interface WriteToolOptions {
   signal?: AbortSignal;
   /** The SDK request context: client capabilities, responses, request state. */
   ctx?: unknown;
+  /** Process-level operator opt-in for clients without signed elicitation. */
+  allowUnboundWriteConfirmation?: boolean;
 }
 
 export const createRecordsToolConfig = {
@@ -993,6 +995,7 @@ export async function runCreateRecords(
     state,
     elicitedConfirm: readElicitedConfirm(opts.ctx),
     clientSupportsElicitation: clientSupportsElicitation(opts.ctx),
+    allowUnboundWriteConfirmation: opts.allowUnboundWriteConfirmation,
   });
   // A refused confirmation costs nothing upstream: it is decided before the
   // first lookup.

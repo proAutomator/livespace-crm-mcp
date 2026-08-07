@@ -301,9 +301,16 @@ function args(value: Record<string, unknown>): MoveDealsToStageArgs {
 function run(
   world: World,
   call: MoveDealsToStageArgs,
-  opts: { signal?: AbortSignal; ctx?: unknown } = {},
+  opts: {
+    signal?: AbortSignal;
+    ctx?: unknown;
+    allowUnboundWriteConfirmation?: boolean;
+  } = {},
 ): Promise<MoveDealsToStageResult> {
-  return runMoveDealsToStage(world.deps, call, opts);
+  return runMoveDealsToStage(world.deps, call, {
+    allowUnboundWriteConfirmation: true,
+    ...opts,
+  });
 }
 
 function asRun(result: MoveDealsToStageResult): ToolRunResult {
