@@ -6,7 +6,11 @@ import {
   type ServerContext,
 } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
-import { cancelledError } from "../../livespace/errors.js";
+import {
+  cancelledError,
+  LivespaceError,
+  type LivespaceErrorCode,
+} from "../../livespace/errors.js";
 import type { UserInfo } from "../../livespace/metadata.js";
 import type { RecordFetchers } from "../../livespace/records.js";
 import {
@@ -61,8 +65,11 @@ import {
  *    to what was planned. The accepted text is what travels upstream, bounded
  *    exactly as the argument is; anything outside the bound is a decline.
  * 4. **A notification is a nudge, not a channel.** The module-scope budget - 5
- *    per 10 minutes, 1 per recipient per minute - is refused before any
- *    dictionary read, so a model in a loop costs the CRM nothing.
+ *    per 10 minutes, 1 per recipient per minute - is checked before any
+ *    dictionary read, so a model in a loop costs the CRM nothing, and checked
+ *    again together with the booking, synchronously, right before the dispatch:
+ *    calls that overlap are ordinary, and a check-then-act guard bounds nothing
+ *    across an await.
  *
  * The text channel and the approval line carry counts and fixed wording only:
  * the message body is model- or CRM-authored text, and it belongs in the form
@@ -304,19 +311,29 @@ function prune(now: number): void {
   dispatches.push(...kept);
 }
 
-const BUDGET_SPENT: ToolError = {
+/**
+ * A refusal the executor can also throw, so its code is the transport's own
+ * union: `toToolError` preserves `{code, message, hint}` for a `LivespaceError`
+ * and collapses everything else into a generic UPSTREAM_ERROR, which would lose
+ * this wording exactly where the human needs it.
+ */
+interface BudgetRefusal extends ToolError {
+  code: LivespaceErrorCode;
+}
+
+const BUDGET_SPENT: BudgetRefusal = {
   code: "RATE_LIMITED",
   message: `This server sends at most ${WINDOW_CAP} notifications per 10 minutes, and that budget is spent.`,
   hint: "Nothing was sent. Wait for the window to pass, or tell the person another way.",
 };
 
-const RECIPIENT_COOLDOWN: ToolError = {
+const RECIPIENT_COOLDOWN: BudgetRefusal = {
   code: "RATE_LIMITED",
   message: "This recipient was notified less than a minute ago.",
   hint: "Nothing was sent. Wait a minute before notifying the same person again.",
 };
 
-function checkBudget(userId: string, now: number): ToolError | null {
+function checkBudget(userId: string, now: number): BudgetRefusal | null {
   prune(now);
   if (dispatches.length >= WINDOW_CAP) return BUDGET_SPENT;
   const recent = dispatches.some(
@@ -690,9 +707,16 @@ export async function runNotifyUser(
     status: "action",
     advisory: NOTIFICATION_UNVERIFIABLE,
     perform: async (callOpts: WriteCallOptions) => {
-      // Booked before the dispatch: a call whose outcome we never learn still
-      // spent a notification, and the budget has to assume it did.
-      noteDispatch(args.userId, Date.now());
+      // Checked and booked in one synchronous step, with no await between the
+      // two: the early refusal above is a cheap pre-filter that costs the CRM
+      // nothing, but every await between it and the dispatch is a window a
+      // concurrent call walks through, and only this block holds the bound.
+      // Booked BEFORE the dispatch on purpose: a call whose outcome we never
+      // learn still spent a notification, and the budget has to assume it did.
+      const at = Date.now();
+      const late = checkBudget(args.userId, at);
+      if (late !== null) throw new LivespaceError(late.code, late.message, late.hint);
+      noteDispatch(args.userId, at);
       await deps.writes.sendNotification(
         { userId: args.userId, text: body, url: executed.url },
         callOpts,

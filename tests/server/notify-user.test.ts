@@ -50,6 +50,8 @@ const USER_C = "user-synthetic-203";
 const USER_D = "user-synthetic-204";
 const USER_E = "user-synthetic-205";
 const USER_F = "user-synthetic-206";
+const USER_G = "user-synthetic-207";
+const USER_H = "user-synthetic-208";
 
 const DEAL_ID = "deal-synthetic-401";
 const PERSON_ID = "person-synthetic-001";
@@ -57,7 +59,16 @@ const COMPANY_ID = "company-synthetic-101";
 
 const BODY = `Synthetic notification body mentioning ${NAME_MARKER}`;
 
-const USERS: UserInfo[] = [USER_A, USER_B, USER_C, USER_D, USER_E, USER_F].map(
+const USERS: UserInfo[] = [
+  USER_A,
+  USER_B,
+  USER_C,
+  USER_D,
+  USER_E,
+  USER_F,
+  USER_G,
+  USER_H,
+].map(
   (id, index) => ({
     id,
     name: `Synthetic User ${index}`,
@@ -623,6 +634,57 @@ describe("the send budget", () => {
       expect(preview.isError).toBe(false);
     }
     expect(world.count("sendNotification")).toBe(0);
+  });
+
+  /**
+   * The budget is only worth the wording on the tool description if it also
+   * holds for calls that overlap - a model emitting parallel tool calls in one
+   * turn is ordinary behaviour, and every await between the check and the
+   * booking is a window such a call walks through. The clock is NOT advanced
+   * between these calls: they all happen in the same fake instant.
+   */
+  test("parallel calls to one recipient cannot outrun the cooldown", async () => {
+    const world = fakeWorld();
+    const answers = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        confirmed(world, args({ userId: USER_A, text: BODY })),
+      ),
+    );
+    expect(world.count("sendNotification")).toBe(1);
+    const rows = answers.map((answer) => rowOf(asRun(answer)));
+    expect(rows.filter((row) => row["dispatched"] === true).length).toBe(1);
+    const refused = rows.filter((row) => row["status"] === "error");
+    expect(refused.length).toBe(7);
+    for (const row of refused) {
+      const error = row["error"] as ToolError;
+      expect(error.code).toBe("RATE_LIMITED");
+      expect(error.message).toBe("This recipient was notified less than a minute ago.");
+      expect(row["dispatched"]).toBe(false);
+    }
+    for (const answer of answers) expectPayload(asRun(answer));
+  });
+
+  test("parallel calls to distinct recipients cannot outrun the window cap", async () => {
+    const world = fakeWorld();
+    const answers = await Promise.all(
+      [USER_A, USER_B, USER_C, USER_D, USER_E, USER_F, USER_G, USER_H].map((userId) =>
+        confirmed(world, args({ userId, text: BODY })),
+      ),
+    );
+    expect(world.count("sendNotification")).toBe(5);
+    const rows = answers.map((answer) => rowOf(asRun(answer)));
+    expect(rows.filter((row) => row["dispatched"] === true).length).toBe(5);
+    const refused = rows.filter((row) => row["status"] === "error");
+    expect(refused.length).toBe(3);
+    for (const row of refused) {
+      const error = row["error"] as ToolError;
+      expect(error.code).toBe("RATE_LIMITED");
+      expect(error.message).toBe(
+        "This server sends at most 5 notifications per 10 minutes, and that budget is spent.",
+      );
+      expect(row["dispatched"]).toBe(false);
+    }
+    for (const answer of answers) expectPayload(asRun(answer));
   });
 });
 
