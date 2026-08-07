@@ -397,3 +397,31 @@ survived a skeptic pass and were fixed on top of the milestone commits.
    own term, in the executed line AND in the preview line (the terms
    still add up to the batch). NOT_FOUND stays `blocked`: a deal that
    does not answer is a per-deal verdict, not a halt.
+
+### Done-gate verdict (2026-08-07, live smoke on the sandbox - ALL PASS)
+
+Suite 1078 -> 1085 after the fix pass; final gates green (typecheck,
+audit). Orchestration: 2 M7 + 3 M8 probe rounds, 3-lens panel (33
+findings, plan rewritten to rev. 2), 3 sequential implementers
+(931 -> 1078 tests), 12-agent adversarial verification (9 findings ->
+5 confirmed / 4 refuted), 1 fix agent (3 commits: atomic check-and-book
+on the notification budget - skeptics reproduced 8-10 PARALLEL dispatches
+walking past the check-then-act ledger; no moved-claim on unknown
+outcomes; plan halts reported as `halted`, never laundered into
+`blocked`).
+
+Live smoke: move UP verified upstream ("Nawiązany kontakt", 10 checks,
+0 unchecks); re-run -> unchanged/moved false; backward without the
+per-deal flag -> BLOCKED, with it -> "Próba kontaktu" with 1 uncheck;
+MIXED map pinned live (a deal whose only check sat in stage 3 moved down
+to an empty stage 1: ONE editDeal carrying exactly one 0 and one 1,
+verification "verified", upstream confirmed); closed deal blocked;
+notify_user: bogus recipient NOT_FOUND before dispatch, dryRun
+dispatches nothing, real send dispatched with the record deep link and
+the honest NOTIFICATION_UNVERIFIABLE advisory in the text channel,
+immediate second send refused RATE_LIMITED by the per-recipient
+cooldown; all text channels counts-only; ledger cleanup verified.
+
+Pending HUMAN check (recorded in the working folder's NOTIFY): Kuba
+glances at the sandbox UI bell for the SYNTHETIC M78 notification - the
+recipient-id space is unverifiable by API.
