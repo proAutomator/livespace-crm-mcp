@@ -713,7 +713,7 @@ describe("the confirmation flow", () => {
     });
     expect(result.text).toBe(
       `notify_user preview: 1 notification for 1 recipient - ${BODY.length} character(s), ` +
-        `linked to a record. Re-call with confirm: true to execute.`,
+        `linked to a record. Use a client with form elicitation for approval. Without it, confirm: true is refused unless the operator enabled unsafe compatibility mode.`,
     );
     expect(world.count("sendNotification")).toBe(0);
     expectPayload(result);

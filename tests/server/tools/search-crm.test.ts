@@ -106,6 +106,52 @@ const cancelled = () =>
   );
 
 describe("runSearchCrm phrase mode", () => {
+  test("empty phrase results suggest word prefixes without echoing the query", async () => {
+    const { fetchers, calls } = fakeFetchers();
+    const result = await runSearchCrm(fetchers, {
+      kinds: ["persons"], phrase: "synthetic-untrusted-query",
+    });
+    const hint = resultsOf(result)["persons"]?.["hint"] as string;
+    expect(hint).toContain("word prefix");
+    expect(hint).toContain("search_crm");
+    expect(result.text).toContain(hint);
+    expect(result.text).not.toContain("synthetic-untrusted-query");
+    expect(result.isError).toBe(false);
+    expect(calls).toHaveLength(1);
+    expect(searchCrmToolConfig.outputSchema.safeParse(result.structured).success).toBe(true);
+  });
+
+  test("empty filtered results help resolve IDs without silently changing filters", async () => {
+    const { fetchers, calls } = fakeFetchers();
+    const result = await runSearchCrm(fetchers, {
+      kinds: ["deals"], filters: { processId: "synthetic-process", status: "won" },
+    });
+    expect(resultsOf(result)["deals"]?.["hint"]).toContain("crm_metadata");
+    expect(resultsOf(result)["deals"]?.["hint"]).toContain("user's request");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.opts["status"]).toBe("won");
+  });
+
+  test("an empty page with a cursor recommends continuing before changing filters", async () => {
+    const { fetchers } = fakeFetchers({ listDeals: page([], { rawCount: 20, hasMore: true }) });
+    const result = await runSearchCrm(fetchers, { kinds: ["deals"], filters: {} });
+    const envelope = resultsOf(result)["deals"];
+    expect(envelope?.["nextCursor"]).toBeDefined();
+    expect(envelope?.["hint"]).toContain("nextCursor");
+    expect(envelope?.["hint"]).not.toContain("broaden");
+  });
+
+  test("nonempty results and upstream failures do not receive empty-result hints", async () => {
+    const { fetchers } = fakeFetchers({ searchPhrase: (opts: Record<string, unknown>) => {
+      if (opts["kind"] === "company") throw permissionDenied();
+      return { hits: [hit("synthetic-person", "Synthetic Person")], rawCount: 1 };
+    } });
+    const result = await runSearchCrm(fetchers, { kinds: ["persons", "companies"], phrase: "synthetic" });
+    expect(resultsOf(result)["persons"]?.["hint"]).toBeUndefined();
+    expect(resultsOf(result)["companies"]).toBeUndefined();
+    expect(errorsOf(result)[0]?.["code"]).toBe("PERMISSION_DENIED");
+  });
+
   test("fans out over every kind and isolates a per-kind failure", async () => {
     const { fetchers, calls } = fakeFetchers({
       searchPhrase: (opts: Record<string, unknown>) => {

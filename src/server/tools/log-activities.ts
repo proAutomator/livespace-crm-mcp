@@ -34,6 +34,9 @@ import {
   VERIFICATION_UNAVAILABLE,
   withCancelAudit,
   WRITE_BUDGET_MS,
+  WRITE_CONFIRMATION_DESCRIPTION,
+  WRITE_CONFIRM_PARAMETER_DESCRIPTION,
+  WRITE_PREVIEW_HINT,
   type ActivityWriteItem,
   type ItemResult,
   type WriteItemPlan,
@@ -129,7 +132,7 @@ const inputSchema = z.strictObject({
   confirm: z
     .boolean()
     .optional()
-    .describe("Execute the previewed plan on clients that cannot prompt a human."),
+    .describe(WRITE_CONFIRM_PARAMETER_DESCRIPTION),
 });
 
 // One static summary shape with optional keys per kind - never a union. A union
@@ -232,11 +235,8 @@ export interface LogActivitiesDeps {
 export const logActivitiesToolConfig = {
   title: "Log CRM Activities",
   description: `Log notes on a person, company or deal and phone calls on a person - at most
-15 items per call across both arrays. Nothing is written until a human
-approves: a plain call answers with a plan (so does dryRun), clients that can
-prompt get a confirmation prompt, and clients that cannot execute the
-previewed plan by re-calling with confirm: true. Notes are PUBLIC - Livespace
-ignores every visibility parameter, so anyone who can see the record can read
+15 items per call across both arrays. ${WRITE_CONFIRMATION_DESCRIPTION}
+Notes are PUBLIC - Livespace ignores every visibility parameter, so anyone who can see the record can read
 them; never log anything that should stay private. A call takes the number,
 the direction (incoming or outgoing), an optional note and an optional date
 ("YYYY-MM-DD HH:MM:SS") - send that date, it is what the call is verified by.
@@ -468,7 +468,7 @@ function previewLine(counts: PlanCounts): string {
   return (
     `${LOG_ACTIVITIES_TOOL} preview: ${counts.total} item(s) ` +
     `(${counts.notes} notes, ${counts.calls} calls). ` +
-    `Re-call with confirm: true to execute.`
+    `${WRITE_PREVIEW_HINT}`
   );
 }
 

@@ -91,6 +91,9 @@ Quick start:
   never guess them.
 - Ask "analyze" for multi-record numbers instead of paging raw records
   yourself.${writeQuickStart}
+- Empty search_crm and get_activity pages carry a hint. Follow nextCursor
+  before concluding there are no matches. Change filters only within the
+  user's request; an empty page is not proof that the whole CRM is empty.
 
 Read tools:
 - "health" checks this server and, only with checkLivespace: true, the API.

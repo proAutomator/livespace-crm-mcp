@@ -634,7 +634,7 @@ describe("the confirmation flow", () => {
     );
 
     expect(result.text).toBe(
-      "log_activities preview: 3 item(s) (2 notes, 1 calls). Re-call with confirm: true to execute.",
+      "log_activities preview: 3 item(s) (2 notes, 1 calls). Use a client with form elicitation for approval. Without it, confirm: true is refused unless the operator enabled unsafe compatibility mode.",
     );
     expect(result.structured["requiresConfirmation"]).toBe(true);
     expect(result.structured["results"]).toBeUndefined();
@@ -718,7 +718,7 @@ describe("the confirmation flow", () => {
 
     expect(result.text).toBe(
       [
-        "log_activities preview: 1 item(s) (1 notes, 0 calls). Re-call with confirm: true to execute.",
+        "log_activities preview: 1 item(s) (1 notes, 0 calls). Use a client with form elicitation for approval. Without it, confirm: true is refused unless the operator enabled unsafe compatibility mode.",
         "Confirmation was declined; nothing was written.",
       ].join("\n"),
     );
@@ -789,7 +789,7 @@ describe("the confirmation flow", () => {
     expect(scenario.count("addNote")).toBe(0);
     expect(result.text).toBe(
       [
-        "log_activities preview: 1 item(s) (1 notes, 0 calls). Re-call with confirm: true to execute.",
+        "log_activities preview: 1 item(s) (1 notes, 0 calls). Use a client with form elicitation for approval. Without it, confirm: true is refused unless the operator enabled unsafe compatibility mode.",
         "Records changed since the preview; review and confirm again.",
       ].join("\n"),
     );

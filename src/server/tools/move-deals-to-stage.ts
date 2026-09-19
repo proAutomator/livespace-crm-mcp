@@ -37,6 +37,9 @@ import {
   PLAN_BUDGET_EXPIRED,
   WRITE_BATCH_CAP,
   WRITE_BUDGET_MS,
+  WRITE_CONFIRMATION_DESCRIPTION,
+  WRITE_CONFIRM_PARAMETER_DESCRIPTION,
+  WRITE_PREVIEW_HINT,
   type ExecutableItem,
   type ItemResult,
   type WriteItemPlan,
@@ -111,7 +114,7 @@ const inputSchema = z.strictObject({
   confirm: z
     .boolean()
     .optional()
-    .describe("Execute the previewed plan on clients that cannot prompt a human."),
+    .describe(WRITE_CONFIRM_PARAMETER_DESCRIPTION),
 });
 
 /** Step id -> 1 (mark done) or 0 (un-mark). Never both for one step. */
@@ -223,11 +226,9 @@ export const moveDealsToStageToolConfig = {
 stage. Livespace has no "set stage" call: a deal stands where its furthest
 checked process step stands, so this tool checks and unchecks steps, which
 means a forward move marks intermediate steps as completed and a backward move
-un-marks them - the checkboxes stop being evidence of work done. Nothing is
-written until a human approves: a plain call answers with a plan (so does
-dryRun), clients that can prompt get a confirmation prompt, and clients that
-cannot execute the previewed plan by re-calling with confirm: true. Each deal
-is read first and its own steps decide the minimal set of flips, so a deal
+un-marks them - the checkboxes stop being evidence of work done.
+${WRITE_CONFIRMATION_DESCRIPTION}
+Each deal is read first and its own steps decide the minimal set of flips, so a deal
 already standing on the target stage is reported unchanged and nothing is sent
 for it. A backward move happens only for deals listed in allowBackwardDealIds,
 and every id listed there must also be in dealIds. A deal that is not open,
@@ -673,7 +674,7 @@ function previewLine(counts: PlanCounts): string {
     `${counts.forward} forward, ${counts.backward} backward, ` +
     `${counts.unchanged} unchanged, ${counts.blocked} blocked, ${counts.halted} halted. ` +
     `${counts.stepsToCheck} step(s) to mark done, ${counts.stepsToUncheck} to un-mark. ` +
-    `Re-call with confirm: true to execute.`
+    `${WRITE_PREVIEW_HINT}`
   );
 }
 

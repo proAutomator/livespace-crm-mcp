@@ -132,6 +132,7 @@ const envelopeOf = <T extends z.ZodType>(item: T) =>
     hasMore: z.boolean(),
     nextCursor: z.string().optional(),
     sortWindowTruncated: z.boolean().optional(),
+    hint: z.string().optional().describe("Suggested next step when this page returns no records."),
   });
 
 export const searchCrmToolConfig = {
@@ -239,6 +240,7 @@ interface KindEnvelope {
   hasMore: boolean;
   nextCursor?: string;
   sortWindowTruncated?: boolean;
+  hint?: string;
 }
 
 interface KindError extends ToolError {
@@ -470,6 +472,24 @@ async function filterEnvelope(
 
 // Counts and fixed wording only - CRM-authored strings stay in the structured
 // channel (docs/security.md par. 4).
+function emptySearchHint(args: SearchCrmArgs, envelope: KindEnvelope): string {
+  if (envelope.nextCursor !== undefined) {
+    return "This page returned no records. Call search_crm with nextCursor as cursor " +
+      "and the same kind, phrase and filters before concluding there are no matches.";
+  }
+  if (envelope.hasMore || envelope.sortWindowTruncated) {
+    return "This empty window is incomplete. Narrow search_crm within the user's request; " +
+      "do not conclude that the CRM has no matching records.";
+  }
+  if (args.phrase !== undefined) {
+    return "No hits returned. Call search_crm with a word prefix of at least two characters " +
+      "and check the requested kinds; matching is by word prefix, not arbitrary substring.";
+  }
+  return "No records returned on this page. Check process/stage IDs and owner logins with " +
+    "crm_metadata, then adjust search_crm filters only if consistent with the user's request. " +
+    "Deal filter mode defaults to open status.";
+}
+
 function kindLine(outcome: KindOutcome): string {
   if ("error" in outcome) {
     return `${outcome.kind}: ERROR ${outcome.error.code} - ${outcome.error.hint}`;
@@ -477,7 +497,8 @@ function kindLine(outcome: KindOutcome): string {
   const envelope = outcome.envelope;
   const more = envelope.hasMore ? " (more)" : "";
   const window = envelope.sortWindowTruncated ? " (sort window truncated)" : "";
-  return `${outcome.kind}: ${envelope.returned} of ${envelope.count}${more}${window}`;
+  const hint = envelope.hint === undefined ? "" : `\n${envelope.hint}`;
+  return `${outcome.kind}: ${envelope.returned} of ${envelope.count}${more}${window}${hint}`;
 }
 
 export async function runSearchCrm(
@@ -529,6 +550,7 @@ export async function runSearchCrm(
                 offset,
                 opts.signal,
               );
+        if (envelope.returned === 0) envelope.hint = emptySearchHint(args, envelope);
         return { kind: argKind, envelope };
       } catch (error) {
         // Only the signal STATE is reliable: an abort surfaces as a

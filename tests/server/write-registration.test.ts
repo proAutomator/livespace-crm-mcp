@@ -249,6 +249,21 @@ function createCall(options: {
 
 const ELICITATION_CAPABLE = { elicitation: {} };
 
+test("all write descriptions teach the default safe confirmation flow", async () => {
+  const tools = await listTools(app({ writes: fakeWrites() }));
+  for (const name of WRITE_TOOLS) {
+    const tool = tools.find((tool) => tool.name === name);
+    const description = tool?.description;
+    expect(description).toContain("dryRun: true");
+    expect(description).toContain("form elicitation");
+    expect(description).toContain("refused by default");
+    expect(description).toContain("unsafe compatibility");
+    expect(description).not.toContain("clients that cannot execute the previewed plan");
+    expect(tool.inputSchema.properties.confirm.description).toContain("unsafe compatibility");
+    expect(tool.inputSchema.properties.confirm.description).toContain("refused by default");
+  }
+});
+
 describe("write tool registration", () => {
   test("all eleven tools are listed in registration order", async () => {
     const tools = await listTools(app({ writes: fakeWrites() }));

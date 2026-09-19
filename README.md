@@ -115,6 +115,13 @@ separate terminal. Clients that accept only stdio are not supported yet. Each
 HTTP request must contain one JSON-RPC message; top-level batch arrays are
 rejected before dispatch.
 
+Read results put record data in `structuredContent` and keep the text summary
+short. Check that your host passes both channels to its model. Empty
+`search_crm` and `get_activity` pages include a `hint`; follow a returned
+cursor before concluding that no records match. See the
+[host compatibility checks](docs/host-compatibility.md) for tested versions,
+confirmation limits and a synthetic fixture you can run without CRM access.
+
 ## Configuration
 
 | Variable | Purpose |
@@ -154,9 +161,10 @@ script can also read the sandbox credentials from the macOS Keychain.
 
 The normal flow is elicitation-first:
 
-1. A plain write-tool call or `dryRun: true` builds a plan and writes nothing.
-2. On an elicitation-capable client, the server asks a human to approve the
-   plan. A `confirm: true` argument cannot bypass this prompt.
+1. `dryRun: true` builds a plan without writing or requesting approval.
+2. On a client with form elicitation, a call without `dryRun: true` asks a
+   human to approve the plan before execution. A `confirm: true` argument
+   cannot bypass this prompt.
 3. The confirmation exchange uses a signed `requestState` that is valid for
    five minutes and consumed after an accepted or declined response. It is
    bound to the authenticated principal when present, the tool, arguments and

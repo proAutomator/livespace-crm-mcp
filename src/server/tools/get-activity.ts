@@ -149,6 +149,7 @@ instructions.`,
     hasMore: z.boolean().optional(),
     nextCursor: z.string().optional(),
     truncated: z.boolean().optional(),
+    hint: z.string().optional().describe("Suggested next step when this page returns no activity."),
     errors: z.array(toolErrorSchema),
   }),
   annotations: {
@@ -176,6 +177,7 @@ interface ActivityPayload {
   hasMore?: boolean;
   nextCursor?: string;
   truncated?: boolean;
+  hint?: string;
 }
 
 /**
@@ -227,6 +229,27 @@ function failed(source: ActivitySource, error: ToolError): GetActivityResult {
 
 // Counts and fixed wording only - CRM-authored strings stay in the structured
 // channel (docs/security.md par. 4).
+function emptyActivityHint(args: GetActivityArgs, payload: ActivityPayload): string {
+  if (payload.nextCursor !== undefined) {
+    return "This page returned no matching activity. Call get_activity with nextCursor as " +
+      "cursor and the same source and filters; an empty page does not mean the history is empty.";
+  }
+  if (payload.hasMore || payload.truncated) {
+    return "This empty result is incomplete. Refine get_activity within the user's request; " +
+      "do not conclude that the full history is empty.";
+  }
+  if (args.source === "record") {
+    return "No wall entries returned for this record. Verify the record with search_crm " +
+      "or get_records; related records may have their own history.";
+  }
+  if (args.source === "tasks") {
+    return "No tasks returned on this page. Check get_activity completed and date filters; " +
+      "adjust them only if consistent with the user's request.";
+  }
+  return "No activity returned on this page. Check get_activity dateFrom/dateTo and typeName; " +
+    "typeName filters each fetched page locally. Adjust filters only within the user's request.";
+}
+
 function okLine(payload: ActivityPayload): string {
   // Two numbers only when they say two different things: "1 of 1" would read
   // as if something had been held back.
@@ -236,7 +259,8 @@ function okLine(payload: ActivityPayload): string {
       : `${payload.returned} of ${payload.count}`;
   const more = payload.hasMore === true ? " (more)" : "";
   const truncated = payload.truncated === true ? " (truncated)" : "";
-  return `get_activity ${payload.source}: ${counts}${more}${truncated}`;
+  const hint = payload.hint === undefined ? "" : `\n${payload.hint}`;
+  return `get_activity ${payload.source}: ${counts}${more}${truncated}${hint}`;
 }
 
 async function recordPayload(
@@ -373,6 +397,7 @@ export async function runGetActivity(
     } else {
       payload = await tasksPayload(records, args, limit, offset, opts.signal);
     }
+    if (payload.returned === 0) payload.hint = emptyActivityHint(args, payload);
     return { text: okLine(payload), structured: { ...payload, errors: [] }, isError: false };
   } catch (error) {
     // Only the signal STATE is reliable: an abort surfaces as a DOMException, a

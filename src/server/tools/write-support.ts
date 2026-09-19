@@ -71,6 +71,22 @@ export const CONFIRMATION_TTL_SECONDS = 300;
 /** The `inputRequests` key every write tool elicits its confirmation under. */
 export const CONFIRM_INPUT_KEY = "confirm";
 
+// Keep discovery and previews aligned with decideConfirm's safe default.
+export const WRITE_CONFIRMATION_DESCRIPTION = `dryRun: true previews without writing or asking for approval.
+On clients with form elicitation, a non-dry-run call requests human approval;
+confirm: true cannot bypass it. Other clients can preview, but execution with
+confirm: true is refused by default. Only an operator-enabled unsafe compatibility
+mode permits execution without signed human approval; see server instructions.`;
+
+export const WRITE_CONFIRM_PARAMETER_DESCRIPTION =
+  "True is refused by default without form elicitation; only operator-enabled " +
+  "unsafe compatibility mode permits unbound execution. With form elicitation, " +
+  "human approval is still required.";
+
+export const WRITE_PREVIEW_HINT =
+  "Use a client with form elicitation for approval. Without it, confirm: true " +
+  "is refused unless the operator enabled unsafe compatibility mode.";
+
 function hex(bytes: Uint8Array): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -244,7 +260,7 @@ export function decideConfirm(opts: ConfirmOptions): ConfirmDecision {
   if (opts.dryRun === true && opts.confirm === true) {
     return confirmRefused(
       "dryRun and confirm cannot be combined.",
-      "Send dryRun: true for a preview, or confirm: true to execute - not both.",
+      "Send dryRun: true without confirm for a preview. For approval, omit both on a client with form elicitation.",
     );
   }
   if (opts.dryRun === true) return { mode: "preview" };
