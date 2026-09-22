@@ -40,6 +40,9 @@ import {
   PLAN_BUDGET_EXPIRED,
   WRITE_BATCH_CAP,
   WRITE_BUDGET_MS,
+  WRITE_CONFIRMATION_DESCRIPTION,
+  WRITE_CONFIRM_PARAMETER_DESCRIPTION,
+  WRITE_PREVIEW_HINT,
   type ExecutableItem,
   type ItemResult,
   type WriteItemPlan,
@@ -159,7 +162,7 @@ const inputSchema = z.strictObject({
   confirm: z
     .boolean()
     .optional()
-    .describe("Execute the previewed plan on clients that cannot prompt a human."),
+    .describe(WRITE_CONFIRM_PARAMETER_DESCRIPTION),
 });
 
 // One static shape with optional keys per kind - never a union. A union of
@@ -269,11 +272,9 @@ export const updateRecordsToolConfig = {
   title: "Update CRM Records",
   description: `Update persons, companies, deals or tasks by id - at most 10 items per call
 across all four arrays. Edits merge upstream, so a field you do not send is
-left alone, and an item that names no field at all is refused. Nothing is
-written until a human approves: a plain call answers with a plan (so does
-dryRun), clients that can prompt get a confirmation prompt, and clients that
-cannot execute the previewed plan by re-calling with confirm: true. Every
-target is read before the write, so the plan shows the current values, and
+left alone, and an item that names no field at all is refused.
+${WRITE_CONFIRMATION_DESCRIPTION}
+Every target is read before the write, so the plan shows the current values, and
 read again after it, so each item reports before and after plus the fields
 that did not stick (unappliedFields) - or that the check was unavailable. A
 deal update takes name and status (open, won, lost) only; status is NOT the
@@ -691,7 +692,7 @@ function previewLine(counts: PlanCounts): string {
   return (
     `${UPDATE_RECORDS_TOOL} preview: ${counts.total} item(s) ` +
     `(${counts.persons} persons, ${counts.companies} companies, ${counts.deals} deals, ${counts.tasks} tasks). ` +
-    `Re-call with confirm: true to execute.`
+    `${WRITE_PREVIEW_HINT}`
   );
 }
 

@@ -87,7 +87,7 @@ describe("decideConfirm", () => {
     expect(decision).toEqual({
       code: "BAD_PARAMS",
       message: "dryRun and confirm cannot be combined.",
-      hint: "Send dryRun: true for a preview, or confirm: true to execute - not both.",
+      hint: "Send dryRun: true without confirm for a preview. For approval, omit both on a client with form elicitation.",
     });
   });
 

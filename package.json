@@ -49,7 +49,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
-    "hono": "4.13.0",
+    "hono": "4.13.5",
     "zod": "4.4.3"
   }
 }

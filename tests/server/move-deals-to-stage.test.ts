@@ -764,7 +764,7 @@ describe("the plan phase", () => {
     // A halt is not a per-deal verdict: "blocked" in this tool means "change
     // the request", and the recovery here is the opposite - wait and re-send.
     expect(result.text).toBe(
-      "move_deals_to_stage preview: 2 deal(s) - 0 forward, 0 backward, 0 unchanged, 0 blocked, 2 halted. 0 step(s) to mark done, 0 to un-mark. Re-call with confirm: true to execute.",
+      "move_deals_to_stage preview: 2 deal(s) - 0 forward, 0 backward, 0 unchanged, 0 blocked, 2 halted. 0 step(s) to mark done, 0 to un-mark. Use a client with form elicitation for approval. Without it, confirm: true is refused unless the operator enabled unsafe compatibility mode.",
     );
     expect(result.isError).toBe(false);
     expectPayload(result);
@@ -814,7 +814,7 @@ describe("the confirmation flow", () => {
     );
 
     expect(result.text).toBe(
-      "move_deals_to_stage preview: 3 deal(s) - 1 forward, 1 backward, 0 unchanged, 1 blocked, 0 halted. 5 step(s) to mark done, 2 to un-mark. Re-call with confirm: true to execute.",
+      "move_deals_to_stage preview: 3 deal(s) - 1 forward, 1 backward, 0 unchanged, 1 blocked, 0 halted. 5 step(s) to mark done, 2 to un-mark. Use a client with form elicitation for approval. Without it, confirm: true is refused unless the operator enabled unsafe compatibility mode.",
     );
     expect(result.structured["requiresConfirmation"]).toBe(true);
     expect(result.structured["results"]).toBeUndefined();
@@ -922,7 +922,7 @@ describe("the confirmation flow", () => {
 
     expect(result.text).toBe(
       [
-        "move_deals_to_stage preview: 1 deal(s) - 1 forward, 0 backward, 0 unchanged, 0 blocked, 0 halted. 5 step(s) to mark done, 0 to un-mark. Re-call with confirm: true to execute.",
+        "move_deals_to_stage preview: 1 deal(s) - 1 forward, 0 backward, 0 unchanged, 0 blocked, 0 halted. 5 step(s) to mark done, 0 to un-mark. Use a client with form elicitation for approval. Without it, confirm: true is refused unless the operator enabled unsafe compatibility mode.",
         "Confirmation was declined; nothing was written.",
       ].join("\n"),
     );
@@ -989,7 +989,7 @@ describe("the confirmation flow", () => {
     expect(result.structured["requiresConfirmation"]).toBe(true);
     expect(result.text).toBe(
       [
-        "move_deals_to_stage preview: 1 deal(s) - 1 forward, 0 backward, 0 unchanged, 0 blocked, 0 halted. 4 step(s) to mark done, 0 to un-mark. Re-call with confirm: true to execute.",
+        "move_deals_to_stage preview: 1 deal(s) - 1 forward, 0 backward, 0 unchanged, 0 blocked, 0 halted. 4 step(s) to mark done, 0 to un-mark. Use a client with form elicitation for approval. Without it, confirm: true is refused unless the operator enabled unsafe compatibility mode.",
         "Records changed since the preview; review and confirm again.",
       ].join("\n"),
     );

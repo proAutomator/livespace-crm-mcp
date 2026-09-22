@@ -38,6 +38,9 @@ import {
   CONFIRM_INPUT_KEY,
   NOTIFICATION_UNVERIFIABLE,
   WRITE_BUDGET_MS,
+  WRITE_CONFIRMATION_DESCRIPTION,
+  WRITE_CONFIRM_PARAMETER_DESCRIPTION,
+  WRITE_PREVIEW_HINT,
   type ActionWriteItem,
   type ItemResult,
   type WriteItemPlan,
@@ -120,7 +123,7 @@ const inputSchema = z.strictObject({
   confirm: z
     .boolean()
     .optional()
-    .describe("Send the previewed notification on clients that cannot prompt a human."),
+    .describe(WRITE_CONFIRM_PARAMETER_DESCRIPTION),
 });
 
 /**
@@ -201,12 +204,9 @@ export interface NotifyUserDeps {
 export const notifyUserToolConfig = {
   title: "Notify a CRM User",
   description: `Send ONE in-app Livespace notification to one CRM user - a short message and a
-link, shown in that user's notification bell. Nothing is sent until a human
-approves: a plain call answers with a plan (so does dryRun), clients that can
-prompt show a form carrying the message, which the human may EDIT before
-approving, and clients that cannot send the previewed notification by
-re-calling with confirm: true. Livespace exposes no read-back for
-notifications, so this tool reports a notification as dispatched, never as
+link, shown in that user's notification bell. ${WRITE_CONFIRMATION_DESCRIPTION}
+The human may edit the notification message in the approval form.
+Livespace exposes no read-back for notifications, so this tool reports a notification as dispatched, never as
 delivered - do not resend one, confirm with the recipient another way instead.
 userId comes from crm_metadata (sections: ["users"]) and is checked against it
 before anything is sent; that list is cached for a few minutes, so a user
@@ -520,7 +520,7 @@ function previewLine(detail: NotifyDetail): string {
   return (
     `${NOTIFY_USER_TOOL} preview: 1 notification for 1 recipient - ` +
     `${detail.textLength} character(s), ${linkPhrase(detail.urlKind)}. ` +
-    `Re-call with confirm: true to execute.`
+    `${WRITE_PREVIEW_HINT}`
   );
 }
 

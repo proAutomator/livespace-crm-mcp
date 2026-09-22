@@ -98,6 +98,51 @@ interface ToolResult {
   isError: boolean;
 }
 
+describe("empty activity recovery", () => {
+  test("a filtered empty feed page preserves its continuation and fixed hint", async () => {
+    const { fetchers: activity, calls } = fakeActivity({ feed: feedPage(20) });
+    const { fetchers: records } = fakeRecords();
+    const result = await runGetActivity(records, activity, {
+      source: "crm", dateFrom: "2026-01-01", dateTo: "2026-01-31", typeName: "synthetic-untrusted-type",
+    });
+    expect(result.structured["returned"]).toBe(0);
+    expect(result.structured["nextCursor"]).toBeDefined();
+    expect(result.structured["hint"]).toContain("nextCursor");
+    expect(result.text).toContain(result.structured["hint"] as string);
+    expect(result.text).not.toContain("synthetic-untrusted-type");
+    expect(result.isError).toBe(false);
+    expect(calls).toHaveLength(1);
+    expect(getActivityToolConfig.outputSchema.safeParse(result.structured).success).toBe(true);
+  });
+
+  test("an exhausted filtered page suggests checking typeName, not missing history", async () => {
+    const { fetchers: activity } = fakeActivity({ feed: feedPage(1) });
+    const { fetchers: records } = fakeRecords();
+    const result = await runGetActivity(records, activity, {
+      source: "crm", dateFrom: "2026-01-01", dateTo: "2026-01-31", typeName: "synthetic-untrusted-type",
+    });
+    expect(result.structured["hint"]).toContain("typeName");
+    expect(result.structured["hint"]).not.toContain("nextCursor");
+  });
+
+  test("empty tasks and record history get source-specific recovery", async () => {
+    const { fetchers: activity } = fakeActivity({ wall: { entries: [], totalEntries: 0, truncated: false } });
+    const { fetchers: records } = fakeRecords(taskPage(0));
+    const tasks = await runGetActivity(records, activity, { source: "tasks", completed: false });
+    expect(tasks.structured["hint"]).toContain("completed");
+    const wall = await runGetActivity(records, activity, { source: "record", record: { kind: "person", id: "synthetic-id" } });
+    expect(wall.structured["hint"]).toContain("search_crm");
+    expect(wall.text).not.toContain("synthetic-id");
+  });
+
+  test("nonempty history does not carry an empty-result hint", async () => {
+    const result = await runGetActivity(fakeRecords().fetchers, fakeActivity().fetchers, {
+      source: "record", record: { kind: "person", id: "synthetic-id" },
+    });
+    expect(result.structured["hint"]).toBeUndefined();
+  });
+});
+
 function entriesOf(result: ToolResult): WallEntry[] {
   return result.structured["entries"] as WallEntry[];
 }

@@ -748,7 +748,7 @@ describe("the confirmation flow", () => {
     );
 
     expect(result.text).toBe(
-      "create_records preview: 2 item(s) (1 persons, 1 companies, 0 deals, 0 tasks), 0 duplicate(s) skipped. Re-call with confirm: true to execute.",
+      "create_records preview: 2 item(s) (1 persons, 1 companies, 0 deals, 0 tasks), 0 duplicate(s) skipped. Use a client with form elicitation for approval. Without it, confirm: true is refused unless the operator enabled unsafe compatibility mode.",
     );
     expect(result.structured["requiresConfirmation"]).toBe(true);
     expect(result.structured["results"]).toBeUndefined();
@@ -867,7 +867,7 @@ describe("the confirmation flow", () => {
 
     expect(result.text).toBe(
       [
-        "create_records preview: 1 item(s) (1 persons, 0 companies, 0 deals, 0 tasks), 0 duplicate(s) skipped. Re-call with confirm: true to execute.",
+        "create_records preview: 1 item(s) (1 persons, 0 companies, 0 deals, 0 tasks), 0 duplicate(s) skipped. Use a client with form elicitation for approval. Without it, confirm: true is refused unless the operator enabled unsafe compatibility mode.",
         "Confirmation was declined; nothing was written.",
       ].join("\n"),
     );
@@ -950,7 +950,7 @@ describe("the confirmation flow", () => {
     expect(world.count("createPerson")).toBe(0);
     expect(result.text).toBe(
       [
-        "create_records preview: 1 item(s) (1 persons, 0 companies, 0 deals, 0 tasks), 1 duplicate(s) skipped. Re-call with confirm: true to execute.",
+        "create_records preview: 1 item(s) (1 persons, 0 companies, 0 deals, 0 tasks), 1 duplicate(s) skipped. Use a client with form elicitation for approval. Without it, confirm: true is refused unless the operator enabled unsafe compatibility mode.",
         "Records changed since the preview; review and confirm again.",
       ].join("\n"),
     );

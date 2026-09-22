@@ -38,6 +38,9 @@ import {
   PLAN_BUDGET_EXPIRED,
   WRITE_BATCH_CAP,
   WRITE_BUDGET_MS,
+  WRITE_CONFIRMATION_DESCRIPTION,
+  WRITE_CONFIRM_PARAMETER_DESCRIPTION,
+  WRITE_PREVIEW_HINT,
   type CreateResolution,
   type ExecutableItem,
   type ItemResult,
@@ -53,10 +56,11 @@ import {
  *
  * 1. **Nothing is written before it is shown.** A plain call answers with a
  *    plan; a client that can prompt gets the confirmation prompt (and the model
- *    cannot answer that prompt for the human); a client that cannot gets the
- *    documented `confirm: true` trigger. Between the preview and the write the
- *    plan is rebuilt and compared, so a batch never lands against records that
- *    changed underneath it (docs/security.md par. 5).
+ *    cannot answer that prompt for the human). Clients without form elicitation
+ *    can only preview unless the operator enables unsafe compatibility mode.
+ *    Between the preview and the write the plan is rebuilt and compared, so a
+ *    batch never lands against records that changed underneath it
+ *    (docs/security.md par. 5).
  * 2. **Duplicates are ours to find.** Livespace's own `__check_if_exists` does
  *    not dedupe (probe evidence 10), so a person is matched by exact e-mail and
  *    a company by exact name - against the CRM and against the earlier items of
@@ -177,7 +181,7 @@ const inputSchema = z.strictObject({
   confirm: z
     .boolean()
     .optional()
-    .describe("Execute the previewed plan on clients that cannot prompt a human."),
+    .describe(WRITE_CONFIRM_PARAMETER_DESCRIPTION),
 });
 
 // One static summary shape with optional keys per kind - never a union. A union
@@ -283,10 +287,8 @@ export interface WriteToolOptions {
 export const createRecordsToolConfig = {
   title: "Create CRM Records",
   description: `Create persons, companies, deals or tasks - at most 10 items per call across
-all four arrays. Nothing is written until a human approves: a plain call
-answers with a plan (so does dryRun), clients that can prompt get a
-confirmation prompt, and clients that cannot execute the previewed plan by
-re-calling with confirm: true. Notes: a person carrying e-mails is checked
+all four arrays. ${WRITE_CONFIRMATION_DESCRIPTION}
+Notes: a person carrying e-mails is checked
 against the CRM by exact address (case-insensitive) and against the earlier
 items of the same call, a company by exact name - a match is reported as
 skipped_duplicate with the existing id, and allowDuplicate: true creates
@@ -875,7 +877,7 @@ function previewLine(counts: PlanCounts): string {
   return (
     `${CREATE_RECORDS_TOOL} preview: ${counts.total} item(s) ` +
     `(${counts.persons} persons, ${counts.companies} companies, ${counts.deals} deals, ${counts.tasks} tasks), ` +
-    `${counts.duplicates} duplicate(s) skipped. Re-call with confirm: true to execute.`
+    `${counts.duplicates} duplicate(s) skipped. ${WRITE_PREVIEW_HINT}`
   );
 }
 
