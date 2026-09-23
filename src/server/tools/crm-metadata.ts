@@ -163,7 +163,7 @@ const currentUserData = z.object({
 
 const sectionsSchema = z.strictObject({
   processes: envelopeOf(processData).optional(),
-  users: envelopeOf(userData).optional(),
+  users: envelopeOf(userData).extend({ hint: z.string().optional() }).optional(),
   contactGroups: envelopeOf(z.array(idName)).optional(),
   dealGroups: envelopeOf(z.array(idName)).optional(),
   sources: envelopeOf(z.array(z.string())).optional(),
@@ -183,14 +183,31 @@ setting a stage directly; stages, steps and statuses are listed in their
 CRM order; sources have no ids (names only); currentUser.id is null when it
 cannot be resolved - then match currentUser.email in the users section.
 Custom-field datasets are not available yet. Results are cached server-side
-for a few minutes (see asOf/ageMs/stale per section).`,
-  inputSchema: z.object({
+for a few minutes (see asOf/ageMs/stale per section). userQuery filters users
+by a case-insensitive name or email substring, without accent folding or
+searching teams. With userQuery, omitted sections means users only; explicit
+sections must include users. All matching users are returned up to the cap;
+resolve multiple matches before choosing an owner or notification recipient.
+For queried users, totalItems counts matches in the cached dictionary before
+the cap, not all CRM users.`,
+  inputSchema: z.strictObject({
     sections: z
       .array(z.enum(METADATA_SECTIONS))
       .min(1)
       .optional()
       .describe(
-        "Dictionary sections to return (default: all). Fetch only what you need.",
+        "Dictionary sections to return (default: users with userQuery, otherwise all). Fetch only what you need.",
+      ),
+    userQuery: z
+      .string()
+      .trim()
+      .min(2)
+      .max(100)
+      .optional()
+      .describe(
+        "Name or email substring (2-100 characters after trimming), case-insensitive. " +
+        "Filters users only; when sections is omitted, returns only users. " +
+        "Resolve multiple matches before choosing a user.",
       ),
   }),
   outputSchema: z.object({
@@ -208,12 +225,18 @@ for a few minutes (see asOf/ageMs/stale per section).`,
 
 export type CrmMetadataResult = ToolRunResult;
 
+export interface CrmMetadataArgs {
+  sections?: MetadataSection[];
+  userQuery?: string;
+}
+
 interface SectionEnvelope {
   asOf: number;
   ageMs: number;
   stale: boolean;
   truncated: boolean;
   totalItems?: number;
+  hint?: string;
   data: unknown;
 }
 
@@ -265,7 +288,7 @@ function toSectionError(section: MetadataSection, error: unknown): SectionError 
 
 // Counts and fixed wording only: CRM-authored strings stay in structuredContent
 // where the schema types them as data (security.md par. 4).
-function sectionLine(outcome: SectionOutcome): string {
+function sectionLine(outcome: SectionOutcome, queriedUsers: boolean): string {
   if ("error" in outcome) {
     return `${outcome.section}: ERROR ${outcome.error.code} - ${outcome.error.hint}`;
   }
@@ -274,20 +297,38 @@ function sectionLine(outcome: SectionOutcome): string {
   if (envelope.totalItems === undefined) {
     return `${outcome.section}: ok${staleMark}`;
   }
+  const matching = outcome.section === "users" && queriedUsers ? " matching users" : "";
+  const hint = envelope.hint ? `\n${envelope.hint}` : "";
   if (envelope.truncated) {
     const counts = `${SECTION_ITEM_CAP} of ${envelope.totalItems}`;
-    return `${outcome.section}: ${counts} (truncated)${staleMark}`;
+    return `${outcome.section}: ${counts}${matching} (truncated)${staleMark}${hint}`;
   }
-  return `${outcome.section}: ${envelope.totalItems}${staleMark}`;
+  return `${outcome.section}: ${envelope.totalItems}${matching}${staleMark}${hint}`;
 }
 
 export async function runCrmMetadata(
   service: MetadataService,
-  args: { sections?: MetadataSection[] },
+  args: CrmMetadataArgs,
   opts: { signal?: AbortSignal; now?: () => number } = {},
 ): Promise<CrmMetadataResult> {
   const now = opts.now ?? (() => Date.now());
-  const requested = canonicalSections(args.sections);
+  const query = args.userQuery?.trim().toLowerCase();
+  if (query !== undefined && args.sections !== undefined && !args.sections.includes("users")) {
+    return {
+      text: "CRM metadata: userQuery requires the users section. Include users in sections, or omit sections to search users only.",
+      structured: {
+        sections: {},
+        errors: [{
+          section: "users",
+          code: "BAD_PARAMS",
+          message: "userQuery requires the users section.",
+          hint: "Include users in sections, or omit sections to search users only.",
+        }],
+      },
+      isError: true,
+    };
+  }
+  const requested = canonicalSections(args.sections ?? (query === undefined ? undefined : ["users"]));
   if (requested.length === 0) {
     return {
       text: "CRM metadata (0/0 sections ok)",
@@ -303,7 +344,22 @@ export async function runCrmMetadata(
     requested.map(async (section): Promise<SectionOutcome> => {
       try {
         const result = await service.get(section, callerOpts);
-        return { section, envelope: buildEnvelope(result, now()) };
+        // Filter a copy before the output cap; the shared cache must keep every
+        // user for later queries and currentUser ID resolution.
+        const selected = section === "users" && query !== undefined
+          ? {
+            ...result,
+            data: (result.data as UserInfo[]).filter((user) =>
+              user.name.toLowerCase().includes(query) || user.email.toLowerCase().includes(query)),
+          }
+          : result;
+        const envelope = buildEnvelope(selected, now());
+        if (section === "users" && query !== undefined && envelope.totalItems === 0) {
+          envelope.hint = "No matching users in this dictionary snapshot. Check the name or email, " +
+            "review asOf/ageMs/stale, and retry crm_metadata with userQuery if appropriate. " +
+            "An empty result does not prove the user is absent from the CRM.";
+        }
+        return { section, envelope };
       } catch (error) {
         return { section, error: toSectionError(section, error) };
       }
@@ -329,7 +385,7 @@ export async function runCrmMetadata(
   const ok = outcomes.length - errors.length;
   const text = [
     `CRM metadata (${ok}/${requested.length} sections ok)`,
-    ...outcomes.map(sectionLine),
+    ...outcomes.map((outcome) => sectionLine(outcome, query !== undefined)),
   ].join("\n");
 
   return { text, structured: { sections, errors }, isError: ok === 0 };

@@ -32,8 +32,8 @@ those lower-level calls into tasks an MCP client can use safely:
 | Tool | Mode | Purpose and bound |
 |---|---|---|
 | `health` | Read | Checks the server; `checkLivespace: true` also makes one lightweight Livespace API call. |
-| `crm_metadata` | Read | Returns nine dictionary sections, including processes, users, groups, sources, task dictionaries, products and the current user. |
-| `search_crm` | Read | Finds persons, companies or deals. Sorted deal searches use one 200-record sort window and report truncation. |
+| `crm_metadata` | Read | Returns nine dictionary sections, including processes, users, groups, sources, task dictionaries, products and the current user. Optional `userQuery` filters users by name or email before the 500-row cap. |
+| `search_crm` | Read | Finds persons, companies or deals, with record links even in lightweight results. Sorted deal searches use one 200-record sort window and report truncation. |
 | `get_records` | Read | Reads one record kind and up to 25 ids; walls for at most 5 persons, companies or deals. |
 | `get_activity` | Read | Reads one record wall, one bounded CRM feed range or bounded task pages per call. |
 | `analyze` | Read | Runs one named aggregation over bounded windows and reports whether its source window was truncated. |
@@ -115,12 +115,43 @@ separate terminal. Clients that accept only stdio are not supported yet. Each
 HTTP request must contain one JSON-RPC message; top-level batch arrays are
 rejected before dispatch.
 
-Read results put record data in `structuredContent` and keep the text summary
-short. Check that your host passes both channels to its model. Empty
-`search_crm` and `get_activity` pages include a `hint`; follow a returned
-cursor before concluding that no records match. See the
+## Read results
+
+Record data goes in `structuredContent`, with a short text summary. Check that
+your host passes both channels to its model. Empty `search_crm` and
+`get_activity` pages include the same `hint` in both channels; follow a
+returned cursor before concluding that no records match. An empty
+`crm_metadata` user search also carries a hint in both channels. See the
 [host compatibility checks](docs/host-compatibility.md) for tested versions,
 confirmation limits and a synthetic fixture you can run without CRM access.
+
+Use `crm_metadata` with `userQuery` to find a user by part of their name or
+email. For example, `{"userQuery":"synthetic@example.test"}` returns only the
+users section. The query must have 2-100 characters after trimming. Matching
+ignores case but preserves accents; it does not search team names. If you
+supply `sections`, it must include `users`; other requested sections remain
+unfiltered. Omitting the query preserves the usual section selection.
+
+The tool returns all matching users up to 500, in dictionary order. Resolve
+multiple matches before choosing an owner or write recipient. `totalItems`
+counts matches in the cached dictionary before that cap. Check `asOf`,
+`ageMs` and `stale`, especially when a user is missing from the results.
+
+Phrase-search links are generated locally from the API ID, without a separate
+check of each destination. An unusable ID produces an empty `url`. Record
+reads and filtered searches retain the URL supplied by Livespace, including
+at `detail: "minimal"` for persons, companies and deals; that URL can also be
+empty. Tasks have no record URL.
+
+Fields excluded by `detail` are omitted. An empty or null returned value means
+the response supplies no value; it does not establish an empty CRM field or
+an access restriction. For deal value and probability, distinguish numeric
+zero from null. A zero budget alone does not show whether someone set it
+intentionally. Some counters and flags normalize missing data to zero or
+false, so those defaults do not prove an explicitly stored value.
+
+All tools reject unsupported input parameters. Correct the arguments when
+the client reports an input validation error.
 
 ## Configuration
 

@@ -88,8 +88,10 @@ describe("buildInstructions", () => {
     expect(text).toContain("e-mail");
   });
 
-  test("warns that hand-kept deal values and dates may be empty", () => {
-    expect(buildInstructions({ readOnly: false })).toContain("not filled in");
+  test("does not infer CRM contents from missing values or discard deal zeroes", () => {
+    const text = buildInstructions({ readOnly: false }).replace(/\s+/gu, " ");
+    expect(text).toContain("distinguish numeric zero from null");
+    expect(text).not.toContain("Treat zero or empty values as");
   });
 
   test("read-only mode is announced when active", () => {
