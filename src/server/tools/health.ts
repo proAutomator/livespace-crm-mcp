@@ -30,7 +30,7 @@ export const healthToolConfig = {
   description:
     "Check that this MCP server is up. Pass checkLivespace: true to also " +
     "verify the Livespace API connection (one lightweight call).",
-  inputSchema: z.object({
+  inputSchema: z.strictObject({
     checkLivespace: z
       .boolean()
       .optional()

@@ -95,11 +95,14 @@ them. Every id answers for itself: status "ok" carries the record under the
 key of its kind, "not_found" means the record does not exist OR the API
 key's user cannot see it (Livespace does not distinguish the two), and
 "error" carries a {code, message, hint}. Duplicate ids are collapsed before
-fetching. Notes: detail picks which fields each record carries (minimal keeps
-a handful) and the ones it leaves out are ABSENT from the record, so a field
-you do get back that is empty really is empty in the CRM; includeWall adds
-the recent wall entries of each record and needs at most 5 ids and a kind other than task -
-use get_activity for longer histories or for the CRM-wide feed.`,
+fetching. detail omits fields outside the selected level. An empty or null
+returned field means this response supplies no value; it does not establish
+an empty CRM field or an access restriction. Keep numeric zero distinct from
+null for deal value and probability, without inferring whether a zero budget
+was intentionally set. Persons, companies and deals keep the upstream url even
+at minimal detail; it may be empty. Tasks have no record URL. includeWall adds
+recent wall entries for at most 5 persons, companies or deals; use get_activity
+for longer histories or the CRM-wide feed.`,
   inputSchema: z.strictObject({
     kind: z
       .enum(RECORD_KINDS)

@@ -118,6 +118,7 @@ const hitSchema = z.strictObject({
   name: z.string(),
   description: z.string(),
   modified: z.string(),
+  url: z.string(),
 });
 
 // One envelope per kind, each carrying its own record schema. A union of
@@ -139,18 +140,20 @@ export const searchCrmToolConfig = {
   title: "Search CRM",
   description: `Find persons, companies and deals. Two modes, exactly one per call:
 "phrase" runs the CRM's own word-prefix search and returns light hits
-(id, name, description) - use it when you have a name or a fragment of one;
+(id, name, description, url) - use it when you have a name or a fragment of one;
 "filters" lists records and returns full ones - use it for "all open deals in
 process X". An empty filters object lists everything of that kind. Feed the
 returned ids into get_records or get_activity; never guess ids. Notes:
 sorting is done by this server over one window of at most 200 rows, so
 sortBy cannot be combined with cursor and sortWindowTruncated tells you the
 window was full; sortBy value/dateEnd and the deal filters need
-kinds: ["deals"]; empty sort keys always sort last because a blank field
-means "not filled in", not zero; detail picks which fields each record carries
-(minimal keeps a handful) and the ones it leaves out are ABSENT from the item,
-so a field you do get back that is empty really is empty in the CRM; pass
-nextCursor back as cursor to get the next page of the same single kind.`,
+kinds: ["deals"]; empty sort keys always sort last. Fields excluded by detail
+are omitted. Empty/null returned values supply no usable value, without
+establishing why; do not infer an empty CRM field or access restrictions.
+Deal value/probability preserve numeric zero; counters and flags may use
+zero/false defaults. Minimal records keep their URL. Phrase-hit URLs are
+built from API IDs without an extra read and may be empty for unusable IDs.
+Pass nextCursor back as cursor for the next page of the same single kind.`,
   inputSchema: z.strictObject({
     kinds: z
       .array(z.enum(ARG_KINDS))
@@ -373,7 +376,7 @@ function sortValue(record: ListRecord, key: SortKey): SortValue {
   }
 }
 
-/** A blank field means "not filled in", so it sorts last in both directions. */
+/** Unavailable sort values sort last in both directions; numeric zero is retained. */
 function isEmptyKey(value: SortValue): boolean {
   return value === null || value === "";
 }
