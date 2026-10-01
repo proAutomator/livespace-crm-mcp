@@ -116,13 +116,16 @@ Read tools:
   sortWindowTruncated. Fields omitted by a detail level are absent, not empty.
   Phrase-hit URLs are generated locally from API IDs, without checking each
   destination. An unusable ID leaves url empty. Filtered results retain the
-  upstream URL, even at minimal detail; it may be empty.
+  upstream URL, even at minimal detail; it may be empty. Deal filters
+  createdFrom/createdTo take inclusive YYYY-MM-DD creation dates.
 - "get_records" reads one record kind and up to 25 ids. Each id gets its own
   ok, not_found or error status; not_found can also mean the API key user lacks
   permission. includeWall works for persons, companies and deals on at most
   five records, never tasks. Persons, companies and deals retain their upstream
   url at every detail level, including minimal; it may be empty. Tasks have no
-  record URL.
+  record URL. At detail "full", deals add checkedSteps (process steps marked
+  done) and their won/lost/outdated reasons; a reopened deal can keep an
+  earlier reason, so read status first.
 - "get_activity" reads one source per call. Choose source: "record", "crm" or
   "tasks". A CRM feed call needs an inclusive dateFrom/dateTo range. count is
   the raw upstream page size; returned is what remains after local filtering.

@@ -35,6 +35,13 @@ describe("README v1 contract", () => {
     expect(prose).toContain("5 per 10 minutes and 1 per recipient per minute");
   });
 
+  test("documents the deal value source, checked steps and the created-date filter", async () => {
+    const prose = (await readme()).replace(/\s+/gu, " ");
+    expect(prose).toContain("value_final");
+    expect(prose).toContain("checkedSteps");
+    expect(prose).toContain("createdFrom");
+  });
+
   test("states the runtime and single-user authentication constraints", async () => {
     const prose = (await readme()).replace(/\s+/gu, " ");
     expect(prose).toContain("Bun 1.3.14");

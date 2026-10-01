@@ -66,6 +66,8 @@ export interface SearchFilters {
   stageId?: string;
   ownerLogin?: string;
   modifiedFrom?: string;
+  createdFrom?: string;
+  createdTo?: string;
   namesLike?: string;
 }
 
@@ -109,7 +111,18 @@ const DEAL_ONLY_FILTERS = [
   "stageId",
   "ownerLogin",
   "modifiedFrom",
+  "createdFrom",
+  "createdTo",
 ] as const;
+
+/**
+ * The creation dates a filter accepts. The bound is not about data - it keeps
+ * a year like 9999 out of an upstream condition nobody has probed.
+ */
+const DATE_MIN = "1900-01-01";
+const DATE_MAX = "2100-12-31";
+
+const DATE_SHAPE = /^\d{4}-\d{2}-\d{2}$/u;
 
 // The record shapes are shared with get_records via ./record-schemas.js; only
 // the search-specific hit shape lives here.
@@ -153,6 +166,10 @@ establishing why; do not infer an empty CRM field or access restrictions.
 Deal value/probability preserve numeric zero; counters and flags may use
 zero/false defaults. Minimal records keep their URL. Phrase-hit URLs are
 built from API IDs without an extra read and may be empty for unusable IDs.
+The deal filters createdFrom/createdTo take YYYY-MM-DD dates, both inclusive;
+add status "all" to include won and lost deals.
+At detail "full", deals also carry checkedSteps (process steps marked done)
+and their won/lost/outdated reasons.
 Pass nextCursor back as cursor for the next page of the same single kind.`,
   inputSchema: z.strictObject({
     kinds: z
@@ -184,6 +201,18 @@ Pass nextCursor back as cursor for the next page of the same single kind.`,
           .max(64)
           .optional()
           .describe("Only deals modified since this date (YYYY-MM-DD). Deals only."),
+        createdFrom: z
+          .string()
+          .regex(DATE_SHAPE)
+          .optional()
+          .describe(
+            'Only deals created on or after this date (YYYY-MM-DD). Deals only; status defaults to open, so pass status "all" for every deal created in a period.',
+          ),
+        createdTo: z
+          .string()
+          .regex(DATE_SHAPE)
+          .optional()
+          .describe("Only deals created on or before this date (YYYY-MM-DD). Deals only."),
         namesLike: z
           .string()
           .min(2)
@@ -261,6 +290,48 @@ function canonicalKinds(kinds?: ArgKind[]): ArgKind[] {
 }
 
 /**
+ * Whether a shape-valid "YYYY-MM-DD" is a date that actually exists. The NaN
+ * guard comes FIRST: `new Date("2026-13-01T00:00:00Z")` is an invalid date and
+ * calling `toISOString()` on it throws, so the round-trip cannot be the test.
+ * Rolling months ("2026-02-31" -> March 3) fail the round-trip instead.
+ */
+function isCalendarDate(value: string): boolean {
+  const ms = Date.parse(`${value}T00:00:00Z`);
+  if (Number.isNaN(ms)) return false;
+  return new Date(ms).toISOString().slice(0, 10) === value;
+}
+
+function dateHint(field: "createdFrom" | "createdTo", value: string): string | null {
+  if (!isCalendarDate(value)) {
+    return `${field} is not a real calendar date. Send an existing day as YYYY-MM-DD, for example 2026-01-31.`;
+  }
+  if (value < DATE_MIN || value > DATE_MAX) {
+    return `${field} is outside the supported range. Send a date between ${DATE_MIN} and ${DATE_MAX}.`;
+  }
+  return null;
+}
+
+/**
+ * Upstream ignores a creation date it cannot read and lists every deal instead,
+ * so a bad date has to stop here rather than come back as a wider result.
+ */
+function createdRangeHint(filters: SearchFilters): string | null {
+  const { createdFrom, createdTo } = filters;
+  if (createdFrom !== undefined) {
+    const hint = dateHint("createdFrom", createdFrom);
+    if (hint !== null) return hint;
+  }
+  if (createdTo !== undefined) {
+    const hint = dateHint("createdTo", createdTo);
+    if (hint !== null) return hint;
+  }
+  if (createdFrom !== undefined && createdTo !== undefined && createdFrom > createdTo) {
+    return "createdFrom must not be later than createdTo. Swap them, or widen the period.";
+  }
+  return null;
+}
+
+/**
  * Cross-field rules live here rather than in the schema: a zod refinement would
  * turn every combination mistake into a protocol-level validation error, while
  * a returned `{code, message, hint}` tells the model how to fix the call.
@@ -297,10 +368,10 @@ function argumentHint(args: SearchCrmArgs, kinds: ArgKind[]): string | null {
     }
     const filters = args.filters;
     if (filters && DEAL_ONLY_FILTERS.some((key) => filters[key] !== undefined)) {
-      return 'Deal filters (status, processId, stageId, ownerLogin, modifiedFrom) need kinds: ["deals"]. namesLike works for every kind.';
+      return 'Deal filters (status, processId, stageId, ownerLogin, modifiedFrom, createdFrom, createdTo) need kinds: ["deals"]. namesLike works for every kind.';
     }
   }
-  return null;
+  return args.filters === undefined ? null : createdRangeHint(args.filters);
 }
 
 function badParams(hint: string): ToolError {
@@ -343,6 +414,8 @@ function listFor(
   if (filters.stageId !== undefined) dealOpts.stageId = filters.stageId;
   if (filters.ownerLogin !== undefined) dealOpts.ownerLogin = filters.ownerLogin;
   if (filters.modifiedFrom !== undefined) dealOpts.modifiedFrom = filters.modifiedFrom;
+  if (filters.createdFrom !== undefined) dealOpts.createdFrom = filters.createdFrom;
+  if (filters.createdTo !== undefined) dealOpts.createdTo = filters.createdTo;
   return fetchers.listDeals(dealOpts);
 }
 

@@ -150,6 +150,21 @@ zero from null. A zero budget alone does not show whether someone set it
 intentionally. Some counters and flags normalize missing data to zero or
 false, so those defaults do not prove an explicitly stored value.
 
+Deal `value` comes from whichever field the account fills. Accounts that use
+budget lines keep the line sum in `value`. Other accounts report `value: 0`
+on every deal and keep the value shown in the UI in `value_final`. The server
+returns a non-zero `value_final` when there is one and `value` otherwise, so
+`search_crm`, `get_records` and `analyze` agree with the UI on both kinds of
+account.
+
+At `detail: "full"`, deals also carry `checkedSteps` (the process steps marked
+done, with stage and step ids and names) and the won, lost and outdated reason
+names and notes. A reopened deal can keep an earlier lost reason, so check
+`status` first. `search_crm` deal filters accept `createdFrom` and `createdTo`
+as inclusive `YYYY-MM-DD` dates. Livespace ignores a creation date it cannot
+read and returns every deal, so the server rejects invalid dates before
+calling it.
+
 All tools reject unsupported input parameters. Correct the arguments when
 the client reports an input validation error.
 

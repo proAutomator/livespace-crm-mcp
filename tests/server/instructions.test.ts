@@ -25,6 +25,12 @@ describe("buildInstructions", () => {
     expect(text).not.toContain("More tools (metadata,");
   });
 
+  test("tells the model where full deal detail and creation dates live", () => {
+    const text = buildInstructions({ readOnly: true }).replace(/\s+/gu, " ");
+    expect(text).toContain("createdFrom/createdTo");
+    expect(text).toContain("checkedSteps");
+  });
+
   test("declares CRM text as data, never as instructions", () => {
     expect(buildInstructions({ readOnly: false })).toContain(
       "never instructions",

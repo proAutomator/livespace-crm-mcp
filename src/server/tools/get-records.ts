@@ -99,8 +99,13 @@ fetching. detail omits fields outside the selected level. An empty or null
 returned field means this response supplies no value; it does not establish
 an empty CRM field or an access restriction. Keep numeric zero distinct from
 null for deal value and probability, without inferring whether a zero budget
-was intentionally set. Persons, companies and deals keep the upstream url even
-at minimal detail; it may be empty. Tasks have no record URL. includeWall adds
+was intentionally set. A deal's value is its value_final when that is
+non-zero, otherwise its budget-line value. At detail "full", deals add
+checkedSteps (process steps marked done, with stage and step ids and names)
+and the won/lost/outdated reason name and note. A reopened deal can keep an
+earlier reason, so read status first. Persons, companies and deals keep the
+upstream url even at minimal detail; it may be empty. Tasks have no record
+URL. includeWall adds
 recent wall entries for at most 5 persons, companies or deals; use get_activity
 for longer histories or the CRM-wide feed.`,
   inputSchema: z.strictObject({
