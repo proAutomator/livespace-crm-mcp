@@ -5,6 +5,11 @@ import {
 } from "../../../src/server/tools/health.js";
 
 describe("healthToolConfig", () => {
+  test("rejects unsupported arguments instead of silently discarding them", () => {
+    expect(healthToolConfig.inputSchema.safeParse({ checkLivespace: true, typo: true }).success).toBe(false);
+    expect(healthToolConfig.inputSchema.safeParse({}).success).toBe(true);
+  });
+
   test("is read-only, idempotent, and closed-world", () => {
     expect(healthToolConfig.annotations).toEqual({
       readOnlyHint: true,

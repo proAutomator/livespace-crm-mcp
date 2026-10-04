@@ -25,7 +25,10 @@ import { company, deal, person } from "../../support/records.js";
 // Every value below is invented. No CRM data, no sandbox values (AGENTS.md).
 
 function hit(id: string, name: string): SearchHit {
-  return { id, name, description: "Synthetic hit description", modified: "" };
+  return {
+    id, name, description: "Synthetic hit description", modified: "",
+    url: `https://synthetic-demo.livespace.io/Contact/contact/details/api_id/${encodeURIComponent(id)}`,
+  };
 }
 
 function page<T>(items: T[], extra: Partial<ListPage<T>> = {}): ListPage<T> {
@@ -106,6 +109,19 @@ const cancelled = () =>
   );
 
 describe("runSearchCrm phrase mode", () => {
+  test("phrase hit URLs survive the strict output schema unchanged", async () => {
+    const { fetchers } = fakeFetchers({ searchPhrase: {
+      hits: [hit("person-synthetic-1", "Synthetic Hit")], rawCount: 1,
+    } });
+    const result = await runSearchCrm(fetchers, { kinds: ["persons"], phrase: "synthetic" });
+    expect(searchCrmToolConfig.outputSchema.parse(result.structured) as Record<string, unknown>)
+        .toEqual(result.structured);
+    const hits = resultsOf(result)["persons"]?.["hits"] as SearchHit[];
+    expect(hits[0]?.url).toBe(
+      "https://synthetic-demo.livespace.io/Contact/contact/details/api_id/person-synthetic-1",
+    );
+  });
+
   test("empty phrase results suggest word prefixes without echoing the query", async () => {
     const { fetchers, calls } = fakeFetchers();
     const result = await runSearchCrm(fetchers, {
@@ -182,6 +198,7 @@ describe("runSearchCrm phrase mode", () => {
           name: "Synthetic Hit",
           description: "Synthetic hit description",
           modified: "",
+          url: "https://synthetic-demo.livespace.io/Contact/contact/details/api_id/person-synthetic-1",
         },
       ],
       count: 1,
@@ -465,16 +482,17 @@ describe("runSearchCrm filter mode", () => {
       detail: "minimal",
     });
 
-    // Unrequested fields are ABSENT, not blanked: a returned empty value keeps
-    // its upstream meaning of "not filled in".
+    // Excluded fields are absent; returned empty values do not establish why
+    // the API supplied no usable value.
     const item = itemsOf(result, "companies")[0] as Record<string, unknown>;
     expect(item).toEqual({
       id: company().id,
       name: company().name,
       nip: company().nip,
       email: company().email,
+      url: company().url,
     });
-    expect(Object.keys(item).length).toBe(4);
+    expect(Object.keys(item).length).toBe(5);
     expect(searchCrmToolConfig.outputSchema.safeParse(result.structured).success).toBe(
       true,
     );
@@ -511,7 +529,7 @@ describe("runSearchCrm cursor arithmetic", () => {
         return { contact: window };
       }) as never,
     };
-    return { fetchers: createRecordFetchers(client), params };
+    return { fetchers: createRecordFetchers(client, "synthetic-demo"), params };
   }
 
   test("an upstream that ignores the limit advances the cursor by the delivered page", async () => {

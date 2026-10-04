@@ -350,6 +350,16 @@ describe("runCrmMetadata", () => {
 });
 
 describe("crmMetadataToolConfig", () => {
+  test("rejects unknown keys and validates trimmed user queries", () => {
+    const schema = crmMetadataToolConfig.inputSchema;
+    expect(schema.safeParse({ sections: ["users"], typo: true }).success).toBe(false);
+    for (const userQuery of ["", "   ", "x", " x ", "x".repeat(101)]) {
+      expect(schema.safeParse({ userQuery }).success).toBe(false);
+    }
+    expect(schema.parse({ userQuery: "  Ab  " })).toEqual({ userQuery: "Ab" });
+    expect(schema.safeParse({ userQuery: "x".repeat(100) }).success).toBe(true);
+  });
+
   test("is read-only, idempotent, and closed-world", () => {
     expect(crmMetadataToolConfig.annotations).toEqual({
       readOnlyHint: true,
@@ -434,6 +444,126 @@ function fakeClient(responses: Record<string, unknown>) {
     },
   };
 }
+
+describe("crm_metadata user lookup", () => {
+  const users = [
+    { id: "synthetic-user-1", name: "Synthetic Aleksandra", email: "first@synthetic.example", teams: [] },
+    { id: "synthetic-user-2", name: "Synthetic Aleksander", email: "second@synthetic.example", teams: [] },
+    { id: "synthetic-user-3", name: "Synthetic Żaneta", email: "third@synthetic.example", teams: [{ id: "synthetic-team", name: "Target team", roles: [] }] },
+  ];
+  function lookupService(data = users, stale = false) {
+    return fakeService({ users: { data, asOf: 1_000, stale } });
+  }
+
+  test("matches names and emails literally without selecting one of several users", async () => {
+    for (const [userQuery, ids] of [
+      ["  ALEKS  ", [users[0]!.id, users[1]!.id]],
+      ["SECOND@", [users[1]!.id]],
+      ["żAN", [users[2]!.id]],
+      ["zan", []],
+      ["Target team", []],
+      [".*", []],
+    ] as const) {
+      const { service, calls } = lookupService();
+      const result = await runCrmMetadata(service, { userQuery });
+      const output = crmMetadataToolConfig.outputSchema.parse(result.structured);
+      expect(result.isError).toBe(false);
+      expect(Object.keys(output.sections)).toEqual(["users"]);
+      expect(output.sections.users?.data.map((user) => user.id)).toEqual([...ids]);
+      expect(output.sections.users?.totalItems).toBe(ids.length);
+      expect(calls.map((call) => call.section)).toEqual(["users"]);
+      expect(result.text).not.toContain(userQuery);
+    }
+  });
+
+  test("filters before the cap while retaining age and stale metadata", async () => {
+    const many = Array.from({ length: 510 }, (_, i) => ({
+      id: `synthetic-user-${i}`, name: `Synthetic User ${i}`, email: `user-${i}@synthetic.example`, teams: [],
+    }));
+    many[509]!.name = "Synthetic Unique Match";
+    const { service } = lookupService(many, true);
+    const result = await runCrmMetadata(service, { userQuery: "unique" }, { now: () => 4_000 });
+    const envelope = sectionsOf(result)["users"]!;
+    expect(envelope).toEqual({ data: [many[509]], asOf: 1_000, ageMs: 3_000, stale: true, totalItems: 1, truncated: false });
+    expect(result.text).toContain("1 matching users");
+    expect(result.text).toContain("stale");
+    expect(result.text).not.toContain(many[509]!.name);
+  });
+
+  test("caps matching users and counts matches before the cap", async () => {
+    const many = Array.from({ length: 501 }, (_, i) => ({ ...users[0]!, id: `synthetic-user-${i}` }));
+    const { service } = lookupService(many);
+    const result = await runCrmMetadata(service, { userQuery: "aleks" });
+    const envelope = sectionsOf(result)["users"]!;
+    expect(envelope["data"]).toHaveLength(500);
+    expect(envelope["totalItems"]).toBe(501);
+    expect(envelope["truncated"]).toBe(true);
+    expect(result.text).toContain("500 of 501 matching users");
+  });
+
+  test("puts an empty-match hint in both channels without echoing the query", async () => {
+    const { service } = lookupService();
+    const result = await runCrmMetadata(service, { userQuery: "synthetic-missing-person" });
+    const parsed = crmMetadataToolConfig.outputSchema.parse(result.structured);
+    expect(result.structured).toEqual(parsed);
+    const envelope = parsed.sections.users!;
+    expect(envelope.data).toEqual([]);
+    expect(envelope.totalItems).toBe(0);
+    expect(envelope.truncated).toBe(false);
+    expect(envelope.hint).toBeString();
+    expect(result.text).toContain(envelope.hint!);
+    expect(result.text).not.toContain("synthetic-missing-person");
+  });
+
+  test("rejects a query without the users section before calling dependencies", async () => {
+    const { service, calls } = lookupService();
+    const result = await runCrmMetadata(service, { sections: ["processes"], userQuery: "aleks" });
+    expect(result.isError).toBe(true);
+    expect(errorsOf(result)[0]?.["code"]).toBe("BAD_PARAMS");
+    expect(result.structured).toEqual(crmMetadataToolConfig.outputSchema.parse(result.structured));
+    expect(calls).toEqual([]);
+  });
+
+  test("filters only users in a mixed section request", async () => {
+    const { service } = lookupService();
+    const result = await runCrmMetadata(service, { sections: ["processes", "users"], userQuery: "second@" });
+    expect(sectionsOf(result)["processes"]?.["data"]).toEqual(SYNTHETIC_PROCESSES);
+    expect(sectionsOf(result)["users"]?.["data"]).toEqual([users[1]]);
+  });
+
+  test("queries leave the cached dictionary and current-user resolution intact", async () => {
+    const { client, calls } = fakeClient({
+      "Default/User_getAll": users,
+      "Default/User_getInfo": { name: users[0]!.name, email: users[0]!.email },
+    });
+    const service = createMetadataService(client);
+    await runCrmMetadata(service, { userQuery: "second@" });
+    const second = await runCrmMetadata(service, { userQuery: "first@" });
+    expect(sectionsOf(second)["users"]?.["data"]).toEqual([users[0]]);
+    const full = await service.get("users");
+    expect(full.data).toEqual(users.map((user) => ({ ...user, teams: [] })));
+    expect(Object.isFrozen(full.data)).toBe(true);
+    expect((await service.get("currentUser")).data.id).toBe(users[0]!.id);
+    expect(calls.filter((call) => call === "Default/User_getAll")).toHaveLength(1);
+  });
+
+  test("cancelling one query does not cancel another or filter the shared fetch", async () => {
+    const pending = Promise.withResolvers<unknown>();
+    let calls = 0;
+    const service = createMetadataService({ call: (() => { calls++; return pending.promise; }) as never });
+    const controller = new AbortController();
+    const first = runCrmMetadata(service, { userQuery: "first@" }, { signal: controller.signal });
+    const second = runCrmMetadata(service, { userQuery: "second@" });
+    controller.abort("synthetic-cancel-reason");
+    const error = await rejection(first);
+    expect(error).toBeInstanceOf(LivespaceError);
+    expect((error as LivespaceError).code).toBe("CANCELLED");
+    pending.resolve(users);
+    expect(sectionsOf(await second)["users"]?.["data"]).toEqual([users[1]]);
+    expect((await service.get("users")).data).toEqual(users.map((user) => ({ ...user, teams: [] })));
+    expect(calls).toBe(1);
+  });
+});
 
 describe("createMetadataService", () => {
   test("caches per section and fetches each section separately", async () => {

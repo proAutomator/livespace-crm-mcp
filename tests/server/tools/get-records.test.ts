@@ -196,6 +196,22 @@ describe("runGetRecords batches", () => {
     expect(summaryOf(result)["requested"]).toBe(2);
   });
 
+  for (const [kind, makeRecord] of [
+    ["person", person], ["company", company], ["deal", deal],
+  ] as const) {
+    test(`${kind} minimal reads preserve the record's own URL`, async () => {
+      const record = makeRecord({ url: "https://synthetic.example/upstream-record-link" });
+      const { fetchers, calls } = fakeRecords({ [record.id]: record });
+      const result = await runGetRecords(fetchers, undefined, {
+        kind, ids: [record.id], detail: "minimal",
+      });
+      expect((itemsOf(result)[0]?.[kind] as { url: string }).url).toBe(record.url);
+      expect(calls).toHaveLength(1);
+      expect(getRecordsToolConfig.outputSchema.parse(result.structured) as Record<string, unknown>)
+        .toEqual(result.structured);
+    });
+  }
+
   test("applies the detail projection to every returned record", async () => {
     const { fetchers } = fakeRecords({ "task-synthetic-801": task() });
 
@@ -205,8 +221,8 @@ describe("runGetRecords batches", () => {
       detail: "minimal",
     });
 
-    // Unrequested fields are ABSENT, not blanked: a returned empty value keeps
-    // its upstream meaning of "not filled in".
+    // Excluded fields are absent; returned empty values do not establish why
+    // the API supplied no usable value.
     const record = itemsOf(result)[0]?.["task"] as Record<string, unknown>;
     expect(record).toEqual({
       id: task().id,

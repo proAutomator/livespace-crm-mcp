@@ -63,6 +63,26 @@ async function captureStderr<T>(
 }
 
 describe("MCP HTTP surface", () => {
+  test("legacy calls reject unsupported health and metadata arguments before executing", async () => {
+    let calls = 0;
+    const instance = buildApp({
+      config: BASE_CONFIG, version: "0.0.0-test",
+      livespacePing: async () => { calls++; return {}; },
+      metadata: { get: (async () => { calls++; return { data: [], asOf: 0, stale: false }; }) as never },
+    });
+    for (const name of ["health", "crm_metadata"]) {
+      const args = name === "health" ? { checkLivespace: true, typo: true } : { sections: ["users"], typo: true };
+      const payload = await jsonFromResponse(await instance.request(mcpRequest({
+        jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args },
+      })));
+      expect(payload.error).toBeUndefined();
+      expect(payload.result.isError).toBe(true);
+      expect(payload.result.structuredContent).toBeUndefined();
+      expect(payload.result.content[0].text).toContain("Input validation error");
+    }
+    expect(calls).toBe(0);
+  });
+
   test("tools/list exposes the health tool with annotations", async () => {
     const app = buildApp({ config: BASE_CONFIG, version: "0.0.0-test" });
     const response = await app.request(mcpRequest(TOOLS_LIST));

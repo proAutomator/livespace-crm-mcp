@@ -249,9 +249,10 @@ export async function fetchTaskWindow(
  *
  * Four rules of honesty run through all of them:
  *
- * 1. `null` means "not filled in", never zero. A row with no value stays out of
- *    the sum and is counted in `missing`; a row with no probability stays out
- *    of the average. Every aggregate says how many rows it skipped.
+ * 1. `null` means no numeric value was returned or parsed; the reason is
+ *    unknown. Zero value and probability remain numeric inputs. A row with
+ *    null value stays out of the sum and is counted in `missing`; null
+ *    probability stays out of the average. Skipped rows are counted.
  * 2. A sum over mixed currencies is a lie, so it is `null` instead. The check
  *    covers only the rows that CONTRIBUTE (non-null value), and every scope
  *    runs it over its own rows - a total is never the sum of sub-sums, because
@@ -378,7 +379,7 @@ interface ValuedRow {
  * The one place money is added up. Rows with no value only raise `missing` -
  * they never join the sum and never join the currency check, because a row that
  * contributes nothing cannot make the result ambiguous. A scope with no
- * contributing rows sums to 0, which is a real answer: nothing is worth nothing.
+ * contributing rows sums to 0; inspect `missing` before interpreting that sum.
  */
 function valueStats(rows: readonly ValuedRow[]): ValueStats {
   const currencies = new Set<string>();
@@ -444,8 +445,8 @@ function averageProbability(rows: readonly DealRecord[]): {
  * Whether a date falls inside a period, both ends included. Dates arrive either
  * as "YYYY-MM-DD" or as "YYYY-MM-DD HH:mm:ss+TZ", so only the day part is
  * compared: on an ISO day, lexicographic order IS chronological order and no
- * timezone can shift it. An empty date is never in period - it means the field
- * was never filled in.
+ * timezone can shift it. An empty date is never in period; the response does
+ * not establish why no date is available.
  */
 export function inPeriod(dateText: string, period: Period): boolean {
   const day = dateText.slice(0, 10);

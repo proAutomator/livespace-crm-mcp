@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { LivespaceError } from "../../src/livespace/errors.js";
+import { searchHitUrl } from "../../src/livespace/record-links.js";
 import {
   ARG_KIND_TO_RECORD_KIND,
   createRecordFetchers,
@@ -428,7 +429,7 @@ describe("full-record mappers", () => {
     expect(
       mapCompany({ id: "company-synthetic-110", url: "https://synthetic.example/y" }).url,
     ).toBe("https://synthetic.example/y");
-    // Absent or non-string follows the empty convention: not filled in.
+    // Absent or non-string supplies no URL; the response does not establish why.
     expect(mapDeal({ id: "deal-synthetic-404" }).url).toBe("");
     expect(mapPerson({ id: "person-synthetic-011", url: 7 }).url).toBe("");
     expect(mapCompany({ id: "company-synthetic-111", url: null }).url).toBe("");
@@ -589,8 +590,9 @@ describe("projectRecord", () => {
       name: PERSON.name,
       email: PERSON.email,
       companyName: PERSON.companyName,
+      url: PERSON.url,
     });
-    expect(Object.keys(projected).length).toBe(4);
+    expect(Object.keys(projected).length).toBe(5);
   });
 
   test("person standard omits the full-only keys entirely", () => {
@@ -612,8 +614,9 @@ describe("projectRecord", () => {
       name: COMPANY.name,
       nip: COMPANY.nip,
       email: COMPANY.email,
+      url: COMPANY.url,
     });
-    expect(Object.keys(projected).length).toBe(4);
+    expect(Object.keys(projected).length).toBe(5);
   });
 
   test("company standard omits the full-only keys entirely", () => {
@@ -638,8 +641,9 @@ describe("projectRecord", () => {
       currency: DEAL.currency,
       stageName: DEAL.stageName,
       ownerName: DEAL.ownerName,
+      url: DEAL.url,
     });
-    expect(Object.keys(projected).length).toBe(7);
+    expect(Object.keys(projected).length).toBe(8);
   });
 
   test("deal standard omits the full-only keys entirely", () => {
@@ -677,13 +681,14 @@ describe("projectRecord", () => {
   });
 
   test("an empty value inside the level is returned, never omitted", () => {
-    // Absence means "not requested"; an empty value still means "not filled in".
+    // Excluded fields are absent; returned empty values have an unknown cause.
     const projected = projectRecord("person", { ...PERSON, email: "" }, "minimal");
     expect(projected).toEqual({
       id: PERSON.id,
       name: PERSON.name,
       email: "",
       companyName: PERSON.companyName,
+      url: PERSON.url,
     });
     expect("email" in projected).toBe(true);
   });
@@ -751,7 +756,7 @@ function fakeRecordClient(responses: Record<string, unknown>) {
 
 function recordFetchersFor(responses: Record<string, unknown>) {
   const { client, calls } = fakeRecordClient(responses);
-  return { fetchers: createRecordFetchers(client), calls };
+  return { fetchers: createRecordFetchers(client, "synthetic-demo"), calls };
 }
 
 function syntheticRows(count: number, prefix: string): Array<{ id: string; name: string }> {
@@ -1132,6 +1137,15 @@ describe("list fetchers", () => {
 });
 
 describe("searchPhrase", () => {
+  test("the search URL wrapper leaves empty, dot and malformed IDs unlinked", () => {
+    for (const id of ["", ".", "..", "synthetic-\ud800", "synthetic-\udc00"]) {
+      expect(searchHitUrl("synthetic-demo", "deal", id)).toBe("");
+    }
+    expect(searchHitUrl("synthetic-demo", "deal", "synthetic-😀")).toBe(
+      "https://synthetic-demo.livespace.io/Deal/deal/details/api_id/synthetic-%F0%9F%98%80",
+    );
+  });
+
   const HITS = [
     {
       id: "deal-synthetic-401",
@@ -1159,9 +1173,54 @@ describe("searchPhrase", () => {
         name: "Synthetic Deal One",
         description: "Synthetic hit description",
         modified: "2025-11-05 16:45:00+02",
+        url: "https://synthetic-demo.livespace.io/Deal/deal/details/api_id/deal-synthetic-401",
       },
-      { id: "402", name: "Synthetic Deal Two", description: "", modified: "" },
+      {
+        id: "402", name: "Synthetic Deal Two", description: "", modified: "",
+        url: "https://synthetic-demo.livespace.io/Deal/deal/details/api_id/402",
+      },
     ]);
+  });
+
+  for (const [kind, type, path] of [
+    ["person", "contact", "Contact/contact"],
+    ["company", "company", "Contact/company"],
+    ["deal", "deal", "Deal/deal"],
+  ] as const) {
+    test(`${kind} search links use the API ID without fetching each record`, async () => {
+      const id = "synthetic/id?query=1#fragment%";
+      const { fetchers, calls } = recordFetchersFor({
+        "Search/getResult": { [type]: [{ id, name: "Synthetic Hit" }] },
+      });
+      const result = await fetchers.searchPhrase({ q: "synthetic", kind, limit: 3 });
+      expect(result.hits[0]?.url).toBe(
+        `https://synthetic-demo.livespace.io/${path}/details/api_id/synthetic%2Fid%3Fquery%3D1%23fragment%25`,
+      );
+      expect(result.rawCount).toBe(1);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        module: "Search", method: "getResult",
+        params: { q: "synthetic", object_type: type, limit: 3 },
+      });
+    });
+  }
+
+  test("unusable link IDs do not fail the search or change its raw count", async () => {
+    const { fetchers, calls } = recordFetchersFor({
+      "Search/getResult": { deal: [
+        { id: "", name: "Synthetic Empty ID" },
+        { id: ".", name: "Synthetic Dot" },
+        { id: "..", name: "Synthetic Dot Dot" },
+        { id: "synthetic-\ud800", name: "Synthetic Surrogate" },
+        { id: "synthetic-safe", name: "Synthetic Safe" },
+      ] },
+    });
+    const result = await fetchers.searchPhrase({ q: "synthetic", kind: "deal", limit: 5 });
+    expect(result.rawCount).toBe(5);
+    expect(result.hits.map(({ url }) => url)).toEqual([
+      "", "", "", "https://synthetic-demo.livespace.io/Deal/deal/details/api_id/synthetic-safe",
+    ]);
+    expect(calls).toHaveLength(1);
   });
 
   test("slices defensively when upstream returns more than the limit", async () => {

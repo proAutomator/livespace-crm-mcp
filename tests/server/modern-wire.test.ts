@@ -300,6 +300,46 @@ describe("modern era (2026-07-28) wire behavior", () => {
 });
 
 describe("crm_metadata wiring", () => {
+  test("health and metadata reject unknown arguments before any dependency call", async () => {
+    let calls = 0;
+    const instance = app({
+      livespacePing: async () => { calls++; return {}; },
+      metadata: fakeMetadata(() => { calls++; return []; }),
+    });
+    const listed = await jsonFromResponse(await instance.request(modernRequest({ method: "tools/list" })));
+    for (const name of ["health", "crm_metadata"]) {
+      expect(listed.result.tools.find((tool: any) => tool.name === name).inputSchema.additionalProperties).toBe(false);
+      const args = name === "health" ? { checkLivespace: true, unexpected: true } : { sections: ["users"], unexpected: true };
+      const payload = await jsonFromResponse(await instance.request(modernRequest({
+        method: "tools/call", name, params: { name, arguments: args },
+      })));
+      expect(payload.error).toBeUndefined();
+      expect(payload.result.isError).toBe(true);
+      expect(payload.result.structuredContent).toBeUndefined();
+      expect(payload.result.content[0].text).toContain("Input validation error");
+    }
+    expect(calls).toBe(0);
+  });
+
+  test("userQuery reaches metadata and returns only matching users", async () => {
+    const sections: string[] = [];
+    const instance = app({ metadata: fakeMetadata((section) => {
+      sections.push(section);
+      return [
+        { id: "synthetic-user-1", name: "Synthetic Alice", email: "alice@synthetic.example", teams: [] },
+        { id: "synthetic-user-2", name: "Synthetic Bob", email: "bob@synthetic.example", teams: [] },
+      ];
+    }) });
+    const payload = await jsonFromResponse(await instance.request(modernRequest({
+      method: "tools/call", name: "crm_metadata",
+      params: { name: "crm_metadata", arguments: { userQuery: " ALICE@ " } },
+    })));
+    expect(payload.result.isError).toBeUndefined();
+    expect(Object.keys(payload.result.structuredContent.sections)).toEqual(["users"]);
+    expect(payload.result.structuredContent.sections.users.data.map((user: any) => user.id)).toEqual(["synthetic-user-1"]);
+    expect(sections).toEqual(["users"]);
+  });
+
   test("is listed and callable when a metadata service is configured", async () => {
     const instance = app({ metadata: fakeMetadata(syntheticSection) });
 
@@ -542,6 +582,7 @@ describe("read tool wiring", () => {
               name: "Synthetic Person",
               description: "Synthetic Company",
               modified: "2025-01-03 03:04:05+02",
+              url: "https://synthetic.livespace.io/Contact/contact/details/api_id/person-synthetic-1",
             },
           ],
           rawCount: 1,

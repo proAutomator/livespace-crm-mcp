@@ -1,5 +1,6 @@
 import type { LivespaceCallOptions, LivespaceClient } from "./client.js";
 import { LivespaceError } from "./errors.js";
+import { searchHitUrl, type LinkableKind } from "./record-links.js";
 import {
   asBool,
   asCount,
@@ -19,10 +20,10 @@ import {
  *    the `detail` cut is a separate projection applied after sorting/slicing
  *    (`projectRecord`).
  * 2. Empty conventions are uniform: string -> `""`, array -> `[]`, nullable ->
- *    `null`, boolean -> `false`, number -> `0`. They mean one thing only: the
- *    field is not filled in upstream. A field the `detail` level leaves out is
- *    therefore OMITTED, never blanked - absence says "not requested", so the two
- *    answers can never be confused.
+ *    `null`, boolean -> `false`, number -> `0`. Empty/null means no usable
+ *    value was supplied; the response does not establish why. Some counters
+ *    and flags use zero/false defaults. Deal value/probability preserve numeric
+ *    zero separately from null. Fields excluded by `detail` are OMITTED.
  * 3. Ids are opaque strings read from `raw.id`. Contact/Deal payloads also carry
  *    `contact_id`/`company_id`/`deal_id`, which are NOT the record id.
  *
@@ -204,7 +205,7 @@ function requiredId(data: Record<string, unknown>): string {
 /**
  * Livespace sends decimals as strings with a Polish comma and space-grouped
  * thousands (`"1 234,50"`). Numbers pass through; anything unparseable is
- * `null` so callers can tell "not filled in" from a real zero.
+ * `null` so callers can distinguish an unavailable numeric value from a real zero.
  */
 export function parseCommaDecimal(value: unknown): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
@@ -418,9 +419,9 @@ export function mapTask(raw: unknown): TaskRecord {
 }
 
 const MINIMAL_FIELDS: Record<RecordKind, readonly string[]> = {
-  person: ["id", "name", "email", "companyName"],
-  company: ["id", "name", "nip", "email"],
-  deal: ["id", "name", "status", "value", "currency", "stageName", "ownerName"],
+  person: ["id", "name", "email", "companyName", "url"],
+  company: ["id", "name", "nip", "email", "url"],
+  deal: ["id", "name", "status", "value", "currency", "stageName", "ownerName", "url"],
   task: ["id", "title", "typeName", "isCompleted", "dateFrom"],
 };
 
@@ -434,9 +435,9 @@ const STANDARD_OMITTED: Record<RecordKind, readonly string[]> = {
 
 /**
  * Cuts a full record down to a detail level by OMITTING the keys outside it.
- * Blanking them instead would collide with the upstream convention that an empty
- * value means "not filled in" - and it would ship the whole record shape on
- * every `minimal` item for nothing.
+ * Blanking them instead would hide the distinction between an excluded field
+ * and a returned field without a usable value. It would also ship every key
+ * on each `minimal` item.
  *
  * Applied AFTER sorting and slicing: a projected record no longer carries the
  * key a sort may run on.
@@ -472,12 +473,13 @@ export interface ListPage<T> {
   rawCount: number;
 }
 
-/** `Search/getResult` returns pointers, not records: id, name and two labels. */
+/** `Search/getResult` pointers plus a link built from the API ID, not individually verified. */
 export interface SearchHit {
   id: string;
   name: string;
   description: string;
   modified: string;
+  url: string;
 }
 
 export interface ListOptions {
@@ -581,7 +583,7 @@ function toListPage<T>(
   return { items: page.map(map), hasMore: rawCount >= limit, rawCount };
 }
 
-function mapSearchHit(raw: unknown): SearchHit | null {
+function mapSearchHit(raw: unknown, kind: LinkableKind, subdomain: string): SearchHit | null {
   const data = asRecord(raw);
   if (data === null) return null;
   const id = optionalId(data["id"]);
@@ -591,6 +593,7 @@ function mapSearchHit(raw: unknown): SearchHit | null {
     name: asName(data["name"]),
     description: asName(data["description"]),
     modified: asName(data["modified"]),
+    url: searchHitUrl(subdomain, kind, id),
   };
 }
 
@@ -649,6 +652,7 @@ function isNotFoundOnGet(error: unknown): boolean {
 
 export function createRecordFetchers(
   client: Pick<LivespaceClient, "call">,
+  subdomain: string,
 ): RecordFetchers {
   const call = (
     module: string,
@@ -739,7 +743,7 @@ export function createRecordFetchers(
       // that was searched for, and that form was probed for all three.
       const raw = unwrapList(payload, [objectType], badShape);
       const hits = raw
-        .map(mapSearchHit)
+        .map((row) => mapSearchHit(row, opts.kind, subdomain))
         .filter((hit): hit is SearchHit => hit !== null)
         .slice(0, opts.limit);
       return { hits, rawCount: raw.length };

@@ -10,9 +10,11 @@ import * as z from "zod/v4";
  * M3 lesson that keeps every schema here strict and per-kind.
  *
  * Only the identifying core (`id` plus the display name) is required. Every
- * other field is optional because `detail` OMITS what it does not include: an
- * absent key means "not requested by the detail level", while a key that is
- * present but empty means "not filled in in the CRM". The schemas stay strict,
+ * other field is optional because `detail` omits what it does not include.
+ * An empty or null returned value supplies no value; it does not establish
+ * whether the CRM field is empty or access is restricted. Deal value and
+ * probability preserve numeric zero separately from null. Some counters and
+ * flags use zero or false as normalization defaults. The schemas stay strict,
  * so an unknown key is still rejected.
  */
 

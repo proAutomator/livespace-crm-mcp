@@ -21,7 +21,7 @@ const app = buildApp({
   metadata: createMetadataService(client),
   // Record and activity data is never cached (docs/security.md par. 8); these
   // fetchers are stateless and only share the client's throttle and auth.
-  records: createRecordFetchers(client),
+  records: createRecordFetchers(client, livespaceConfig.subdomain),
   activity: createActivityFetchers(client),
   // A deal's own step state, read fresh on every stage move: the cached
   // dictionary numbers positions, the deal decides the flips.
