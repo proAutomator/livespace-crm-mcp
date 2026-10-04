@@ -6,6 +6,7 @@ import {
   asCount,
   asName,
   asRecord,
+  stepIds,
   unexpectedShape,
   unwrapList,
 } from "./shape.js";
@@ -113,6 +114,14 @@ export interface CompanyRecord {
   url: string;
 }
 
+/** One process step marked done on a deal, with the stage it belongs to. */
+export interface CheckedStep {
+  stageId: string;
+  stageName: string;
+  stepId: string;
+  name: string;
+}
+
 export interface DealRecord {
   id: string;
   name: string;
@@ -142,6 +151,18 @@ export interface DealRecord {
   groups: string[];
   creatorName: string;
   statusChangeDate: string;
+  /** Steps marked done, in process order. Full detail only. */
+  checkedSteps: CheckedStep[];
+  /**
+   * Reasons as upstream stores them. A reopened deal can still carry the lost
+   * reason from before, so the status, not these fields, says where it stands.
+   */
+  wonReasonName: string;
+  wonReasonNote: string;
+  lostReasonName: string;
+  lostReasonNote: string;
+  outdatedReasonName: string;
+  outdatedReasonNote: string;
   url: string;
 }
 
@@ -216,6 +237,19 @@ export function parseCommaDecimal(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/**
+ * An account fills one of two value fields (probe 2026-10-01). With budget
+ * lines on, `value` holds their sum and `value_final` is "0.00" or null. An
+ * account that types the value in reports `value: 0` on every deal and holds
+ * the value its UI shows in `value_final`. So a non-zero `value_final` wins,
+ * and a zero one only stands in when `value` is unusable.
+ */
+function dealValue(data: Record<string, unknown>): number | null {
+  const final = parseCommaDecimal(data["value_final"]);
+  if (final !== null && final !== 0) return final;
+  return parseCommaDecimal(data["value"]) ?? final;
+}
+
 /** Tags and groups come as plain strings or as objects carrying `name`. */
 function mapNames(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -281,6 +315,46 @@ function mapAddress(data: Record<string, unknown>): string {
     if (value) parts.push(value);
   }
   return parts.join(", ");
+}
+
+/**
+ * `substages` maps stage id -> the CHECKED step map, and a stage with none is
+ * PHP's empty map `[]` (probe 2026-10-01). Step maps go through the same
+ * `stepIds` as the stage-move reader, so both tools see the same steps.
+ *
+ * Order is the process order: stages as `stages_all` lists them, steps as
+ * `substages_all` lists them - the same sources the stage-move reader orders
+ * by. A checked stage or step those lists do not name is still reported,
+ * after the rest; a read hides nothing. Names come from the checked map, then
+ * from `substages_all`, and a step keeps its id when neither has one.
+ */
+function mapCheckedSteps(data: Record<string, unknown>): CheckedStep[] {
+  const checked = asRecord(data["substages"]);
+  if (checked === null) return [];
+  const stageNames = asRecord(data["stages_all"]) ?? {};
+  const allSteps = asRecord(data["substages_all"]) ?? {};
+  const stageOrder = new Set([...Object.keys(stageNames), ...Object.keys(checked)]);
+  const steps: CheckedStep[] = [];
+  for (const stageId of stageOrder) {
+    if (stageId === "") continue;
+    const done = new Set(stepIds(checked[stageId]));
+    if (done.size === 0) continue;
+    const ordered = new Set([
+      ...stepIds(allSteps[stageId]).filter((stepId) => done.has(stepId)),
+      ...done,
+    ]);
+    const checkedNames = asRecord(checked[stageId]);
+    const allNames = asRecord(allSteps[stageId]);
+    for (const stepId of ordered) {
+      steps.push({
+        stageId,
+        stageName: asName(stageNames[stageId]),
+        stepId,
+        name: asName(checkedNames?.[stepId]) || asName(allNames?.[stepId]),
+      });
+    }
+  }
+  return steps;
 }
 
 /** `role_*` keys are dynamic and carry no record link - only `objects` does. */
@@ -367,7 +441,7 @@ export function mapDeal(raw: unknown): DealRecord {
     // The item-level `status` carries the same labels the filter accepts:
     // "open" | "won" | "lost".
     status: asName(data["status"]),
-    value: parseCommaDecimal(data["value"]),
+    value: dealValue(data),
     currency: asName(data["currency"]),
     probability: parseCommaDecimal(data["probability"]),
     processId: idText(data["process_id"]),
@@ -392,6 +466,13 @@ export function mapDeal(raw: unknown): DealRecord {
     groups: mapNames(data["groups"]),
     creatorName: asName(data["creator_name"]),
     statusChangeDate: asName(data["status_change_date"]),
+    checkedSteps: mapCheckedSteps(data),
+    wonReasonName: asName(data["won_reason_name"]),
+    wonReasonNote: asName(data["won_reason_note"]),
+    lostReasonName: asName(data["lost_reason_name"]),
+    lostReasonNote: asName(data["lost_reason_note"]),
+    outdatedReasonName: asName(data["outdated_reason_name"]),
+    outdatedReasonNote: asName(data["outdated_reason_note"]),
     url: asName(data["url"]),
   };
 }
@@ -429,7 +510,18 @@ const MINIMAL_FIELDS: Record<RecordKind, readonly string[]> = {
 const STANDARD_OMITTED: Record<RecordKind, readonly string[]> = {
   person: ["cell", "www", "address", "groups"],
   company: ["www", "address", "groups"],
-  deal: ["groups", "creatorName", "statusChangeDate"],
+  deal: [
+    "groups",
+    "creatorName",
+    "statusChangeDate",
+    "checkedSteps",
+    "wonReasonName",
+    "wonReasonNote",
+    "lostReasonName",
+    "lostReasonNote",
+    "outdatedReasonName",
+    "outdatedReasonNote",
+  ],
   task: [],
 };
 
@@ -495,6 +587,9 @@ export interface DealListOptions extends ListOptions {
   stageId?: string;
   ownerLogin?: string;
   modifiedFrom?: string;
+  /** Inclusive creation-date bounds, "YYYY-MM-DD", validated by the caller. */
+  createdFrom?: string;
+  createdTo?: string;
 }
 
 export interface TaskListOptions {
@@ -546,6 +641,20 @@ const LARGE_PAGE_TIMEOUT_MS = 60_000;
 
 function largePageTimeoutMs(limit: number): number | undefined {
   return limit >= LARGE_PAGE_LIMIT ? LARGE_PAGE_TIMEOUT_MS : undefined;
+}
+
+/**
+ * `Deal/getAll` honors a NESTED `created: {from, to}` condition, unlike the
+ * flat `created_from` it ignores (probe 2026-10-01). `from` is inclusive, but
+ * a bare `to` date means that day's midnight and drops the day itself, so the
+ * inclusive end goes out as its last second. An unreadable date is ignored
+ * upstream without an error - callers validate first.
+ */
+function createdCondition(opts: DealListOptions): Record<string, string> | null {
+  const created: Record<string, string> = {};
+  if (opts.createdFrom !== undefined) created["from"] = opts.createdFrom;
+  if (opts.createdTo !== undefined) created["to"] = `${opts.createdTo} 23:59:59`;
+  return Object.keys(created).length > 0 ? created : null;
 }
 
 const TASK_WRAPPER_KEY = "todo";
@@ -705,6 +814,8 @@ export function createRecordFetchers(
       if (opts.stageId !== undefined) params["stages"] = opts.stageId;
       if (opts.ownerLogin !== undefined) params["owner_login"] = opts.ownerLogin;
       if (opts.modifiedFrom !== undefined) params["modified"] = opts.modifiedFrom;
+      const created = createdCondition(opts);
+      if (created !== null) params["created"] = created;
       if (opts.namesLike !== undefined) params["names"] = opts.namesLike;
       const payload = await call(
         "Deal",

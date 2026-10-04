@@ -211,6 +211,39 @@ const DEAL_RAW = {
   creator_name: "Synthetic Creator",
   status_change_date: "2025-11-05 16:45:00+02",
   url: "https://synthetic.livespace.io/Deal/deal/details/api_id/deal-synthetic-401",
+  // Checked steps per stage; a stage with none is PHP's empty map `[]`.
+  substages: {
+    "stage-synthetic-600": {
+      "step-synthetic-611": "Synthetic step one",
+      "step-synthetic-612": "Synthetic step two",
+    },
+    "stage-synthetic-601": { "step-synthetic-621": "Synthetic step three" },
+    "stage-synthetic-602": [],
+  },
+  // Every step of the process - not mapped, only `substages` says what is done.
+  substages_all: {
+    "stage-synthetic-600": {
+      "step-synthetic-611": "Synthetic step one",
+      "step-synthetic-612": "Synthetic step two",
+    },
+    "stage-synthetic-601": {
+      "step-synthetic-621": "Synthetic step three",
+      "step-synthetic-622": "Synthetic step four",
+    },
+    "stage-synthetic-602": { "step-synthetic-631": "Synthetic step five" },
+  },
+  stages_all: {
+    "stage-synthetic-600": "Synthetic Stage Zero",
+    "stage-synthetic-601": "Synthetic Stage",
+    "stage-synthetic-602": "Synthetic Stage Two",
+  },
+  // A reopened deal keeps its old lost reason upstream.
+  won_reason_name: "",
+  won_reason_note: "",
+  lost_reason_name: "Synthetic lost reason",
+  lost_reason_note: "Synthetic lost note",
+  outdated_reason_name: "Synthetic outdated reason",
+  outdated_reason_note: "Synthetic outdated note",
 };
 
 const DEAL: DealRecord = {
@@ -242,6 +275,32 @@ const DEAL: DealRecord = {
   groups: ["Group Four"],
   creatorName: "Synthetic Creator",
   statusChangeDate: "2025-11-05 16:45:00+02",
+  checkedSteps: [
+    {
+      stageId: "stage-synthetic-600",
+      stageName: "Synthetic Stage Zero",
+      stepId: "step-synthetic-611",
+      name: "Synthetic step one",
+    },
+    {
+      stageId: "stage-synthetic-600",
+      stageName: "Synthetic Stage Zero",
+      stepId: "step-synthetic-612",
+      name: "Synthetic step two",
+    },
+    {
+      stageId: "stage-synthetic-601",
+      stageName: "Synthetic Stage",
+      stepId: "step-synthetic-621",
+      name: "Synthetic step three",
+    },
+  ],
+  wonReasonName: "",
+  wonReasonNote: "",
+  lostReasonName: "Synthetic lost reason",
+  lostReasonNote: "Synthetic lost note",
+  outdatedReasonName: "Synthetic outdated reason",
+  outdatedReasonNote: "Synthetic outdated note",
   url: "https://synthetic.livespace.io/Deal/deal/details/api_id/deal-synthetic-401",
 };
 
@@ -274,6 +333,13 @@ const DEAL_EMPTY: DealRecord = {
   groups: [],
   creatorName: "",
   statusChangeDate: "",
+  checkedSteps: [],
+  wonReasonName: "",
+  wonReasonNote: "",
+  lostReasonName: "",
+  lostReasonNote: "",
+  outdatedReasonName: "",
+  outdatedReasonNote: "",
   url: "",
 };
 
@@ -494,6 +560,105 @@ describe("full-record mappers", () => {
     ]);
   });
 
+  test("checked steps skip malformed levels and keep upstream order", () => {
+    // PHP empty maps (`[]`), junk stage values and idless steps are skipped at
+    // every level; a step whose name is not a string keeps its id.
+    const mapped = mapDeal({
+      id: "deal-synthetic-405",
+      substages: {
+        "stage-synthetic-650": [],
+        "stage-synthetic-651": "junk",
+        "stage-synthetic-652": { "step-synthetic-661": "Synthetic step", "": "no id" },
+        "stage-synthetic-653": null,
+        "stage-synthetic-654": { "step-synthetic-671": 7 },
+      },
+      stages_all: { "stage-synthetic-652": "Synthetic Stage Five", "stage-synthetic-654": 3 },
+    });
+    expect(mapped.checkedSteps).toEqual([
+      {
+        stageId: "stage-synthetic-652",
+        stageName: "Synthetic Stage Five",
+        stepId: "step-synthetic-661",
+        name: "Synthetic step",
+      },
+      { stageId: "stage-synthetic-654", stageName: "", stepId: "step-synthetic-671", name: "" },
+    ]);
+  });
+
+  test("checked steps follow the process order from stages_all and substages_all", () => {
+    // Ids descend on purpose: a mapper that sorted, or trusted the emission
+    // order of `substages`, would put them the other way round.
+    const mapped = mapDeal({
+      id: "deal-synthetic-408",
+      substages: {
+        "stage-synthetic-680": { "step-synthetic-681": "Synthetic step C" },
+        "stage-synthetic-690": {
+          "step-synthetic-698": "Synthetic step B",
+          "step-synthetic-699": "Synthetic step A",
+        },
+      },
+      substages_all: {
+        "stage-synthetic-690": {
+          "step-synthetic-699": "Synthetic step A",
+          "step-synthetic-698": "Synthetic step B",
+          "step-synthetic-697": "Synthetic step unchecked",
+        },
+        "stage-synthetic-680": { "step-synthetic-681": "Synthetic step C" },
+      },
+      stages_all: {
+        "stage-synthetic-690": "Synthetic Stage First",
+        "stage-synthetic-680": "Synthetic Stage Second",
+      },
+    });
+    expect(mapped.checkedSteps.map((step) => step.stepId)).toEqual([
+      "step-synthetic-699",
+      "step-synthetic-698",
+      "step-synthetic-681",
+    ]);
+    expect(mapped.checkedSteps.map((step) => step.stageName)).toEqual([
+      "Synthetic Stage First",
+      "Synthetic Stage First",
+      "Synthetic Stage Second",
+    ]);
+  });
+
+  test("checked steps read a list-shaped step map the way stage moves do", () => {
+    // Same field, same parser as move_deals_to_stage: a bare list of step ids
+    // is a step map too, and its names come from `substages_all`. A checked
+    // stage that `stages_all` does not name is still reported, after the rest.
+    const mapped = mapDeal({
+      id: "deal-synthetic-409",
+      substages: {
+        "stage-synthetic-710": ["step-synthetic-711", "", 5],
+        "stage-synthetic-720": { "step-synthetic-721": "Synthetic step E" },
+      },
+      substages_all: {
+        "stage-synthetic-710": { "step-synthetic-711": "Synthetic step D" },
+      },
+      stages_all: { "stage-synthetic-710": "Synthetic Stage Listed" },
+    });
+    expect(mapped.checkedSteps).toEqual([
+      {
+        stageId: "stage-synthetic-710",
+        stageName: "Synthetic Stage Listed",
+        stepId: "step-synthetic-711",
+        name: "Synthetic step D",
+      },
+      {
+        stageId: "stage-synthetic-720",
+        stageName: "",
+        stepId: "step-synthetic-721",
+        name: "Synthetic step E",
+      },
+    ]);
+  });
+
+  test("a deal with no checked step anywhere maps to an empty list", () => {
+    // A process with no steps done arrives as PHP's empty map for the whole field.
+    expect(mapDeal({ id: "deal-synthetic-406", substages: [] }).checkedSteps).toEqual([]);
+    expect(mapDeal({ id: "deal-synthetic-407", substages: "junk" }).checkedSteps).toEqual([]);
+  });
+
   test("address flattening skips empty parts", () => {
     expect(
       mapPerson({
@@ -575,6 +740,45 @@ describe("parseCommaDecimal", () => {
   }
 });
 
+/**
+ * An account fills one of two value fields (probe 2026-10-01): budget-line
+ * accounts keep the sum in `value` with `value_final` at "0.00" or null, while
+ * accounts that type the value in report `value: 0` and hold the shown value in
+ * `value_final`. A non-zero `value_final` wins; a zero one only stands in for an
+ * unusable `value`.
+ */
+describe("deal value source", () => {
+  const cases: Array<[string, Record<string, unknown>, number | null]> = [
+    ["non-zero value_final beats a zero value", { value: 0, value_final: "4500.00" }, 4500],
+    ["comma-decimal value_final is parsed", { value: 0, value_final: "1 234,50" }, 1234.5],
+    // Chosen precedence, not observed: no probed deal had both fields non-zero.
+    ["value_final wins even over a non-zero value", { value: 300, value_final: "450.00" }, 450],
+    ["zero value_final falls back to value", { value: 1500, value_final: "0.00" }, 1500],
+    ["null value_final falls back to value", { value: 1500, value_final: null }, 1500],
+    ["absent value_final falls back to value", { value: "1 234,50" }, 1234.5],
+    ["unparseable value_final falls back to value", { value: 900, value_final: "n/a" }, 900],
+    ["zero value_final stands in for an absent value", { value_final: "0.00" }, 0],
+    ["a real zero value is kept", { value: 0, value_final: null }, 0],
+    ["both absent is null", {}, null],
+  ];
+
+  for (const [label, fields, expected] of cases) {
+    test(label, () => {
+      expect(mapDeal({ id: "deal-synthetic-450", ...fields }).value).toBe(expected);
+    });
+  }
+
+  test("a list page maps the final value too", async () => {
+    const { fetchers } = recordFetchersFor({
+      "Deal/getAll": { deal: [{ ...DEAL_RAW, value: 0, value_final: "4500.00" }] },
+    });
+
+    const page = await fetchers.listDeals({ limit: 20, offset: 0 });
+
+    expect(page.items[0]?.value).toBe(4500);
+  });
+});
+
 /** Drops keys from a copy, so a `standard` expectation reads as "full minus". */
 function without(record: object, keys: readonly string[]): Record<string, unknown> {
   const rest: Record<string, unknown> = { ...record };
@@ -647,11 +851,21 @@ describe("projectRecord", () => {
   });
 
   test("deal standard omits the full-only keys entirely", () => {
+    const fullOnly = [
+      "groups",
+      "creatorName",
+      "statusChangeDate",
+      "checkedSteps",
+      "wonReasonName",
+      "wonReasonNote",
+      "lostReasonName",
+      "lostReasonNote",
+      "outdatedReasonName",
+      "outdatedReasonNote",
+    ];
     const projected = projectRecord("deal", DEAL, "standard");
-    expect(projected).toEqual(
-      without(DEAL, ["groups", "creatorName", "statusChangeDate"]),
-    );
-    for (const key of ["groups", "creatorName", "statusChangeDate"]) {
+    expect(projected).toEqual(without(DEAL, fullOnly));
+    for (const key of fullOnly) {
       expect(key in projected).toBe(false);
     }
   });
@@ -842,6 +1056,51 @@ describe("fetcher call table", () => {
         owner_login: "owner.synthetic",
         modified: "2025-11-01",
         names: "Synthetic",
+      },
+    },
+    {
+      // Nested `created` is honored upstream (probe 2026-10-01); a bare `to`
+      // date means its midnight, so the inclusive end is the day's last second.
+      name: "listDeals with a created range",
+      responses: { "Deal/getAll": { deal: [] } },
+      run: (fetchers, signal) =>
+        fetchers.listDeals({
+          limit: 20,
+          offset: 0,
+          createdFrom: "2026-01-01",
+          createdTo: "2026-03-31",
+          signal,
+        }),
+      module: "Deal",
+      method: "getAll",
+      params: {
+        status: "open",
+        limit: 20,
+        offset: 0,
+        created: { from: "2026-01-01", to: "2026-03-31 23:59:59" },
+      },
+    },
+    {
+      name: "listDeals with only a created start",
+      responses: { "Deal/getAll": { deal: [] } },
+      run: (fetchers, signal) =>
+        fetchers.listDeals({ limit: 20, offset: 0, createdFrom: "2026-01-01", signal }),
+      module: "Deal",
+      method: "getAll",
+      params: { status: "open", limit: 20, offset: 0, created: { from: "2026-01-01" } },
+    },
+    {
+      name: "listDeals with only a created end",
+      responses: { "Deal/getAll": { deal: [] } },
+      run: (fetchers, signal) =>
+        fetchers.listDeals({ limit: 20, offset: 0, createdTo: "2026-03-31", signal }),
+      module: "Deal",
+      method: "getAll",
+      params: {
+        status: "open",
+        limit: 20,
+        offset: 0,
+        created: { to: "2026-03-31 23:59:59" },
       },
     },
     {

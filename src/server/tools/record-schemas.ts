@@ -101,6 +101,22 @@ export const dealSchema = z.strictObject({
   groups: z.array(z.string()).optional(),
   creatorName: z.string().optional(),
   statusChangeDate: z.string().optional(),
+  checkedSteps: z
+    .array(
+      z.strictObject({
+        stageId: z.string(),
+        stageName: z.string(),
+        stepId: z.string(),
+        name: z.string(),
+      }),
+    )
+    .optional(),
+  wonReasonName: z.string().optional(),
+  wonReasonNote: z.string().optional(),
+  lostReasonName: z.string().optional(),
+  lostReasonNote: z.string().optional(),
+  outdatedReasonName: z.string().optional(),
+  outdatedReasonNote: z.string().optional(),
   url: z.string().optional(),
 });
 

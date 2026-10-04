@@ -335,6 +335,38 @@ describe("runSearchCrm argument rules", () => {
       { kinds: ["persons", "deals"], filters: { status: "won" } },
       "Deal filters",
     ],
+    [
+      "a created filter outside a deals-only search",
+      { kinds: ["persons", "deals"], filters: { createdFrom: "2025-10-01" } },
+      "createdFrom, createdTo",
+    ],
+    [
+      // Upstream silently ignores a date it cannot read and lists everything.
+      "a createdFrom that is not a calendar date",
+      { kinds: ["deals"], filters: { createdFrom: "2025-02-31" } },
+      "createdFrom is not a real calendar date",
+    ],
+    [
+      // `Date.parse` gives NaN here; without the guard toISOString() would throw.
+      "a createdFrom with month 13",
+      { kinds: ["deals"], filters: { createdFrom: "2026-13-01" } },
+      "createdFrom is not a real calendar date",
+    ],
+    [
+      "a createdFrom before the supported range",
+      { kinds: ["deals"], filters: { createdFrom: "1899-12-31" } },
+      "createdFrom is outside the supported range",
+    ],
+    [
+      "a createdTo outside the supported range",
+      { kinds: ["deals"], filters: { createdTo: "2101-01-01" } },
+      "createdTo is outside the supported range",
+    ],
+    [
+      "a reversed created range",
+      { kinds: ["deals"], filters: { createdFrom: "2025-11-01", createdTo: "2025-10-01" } },
+      "createdFrom must not be later than createdTo",
+    ],
   ];
 
   for (const [label, args, hintFragment] of cases) {
@@ -456,6 +488,8 @@ describe("runSearchCrm filter mode", () => {
         stageId: "stage-synthetic-601",
         ownerLogin: "owner.synthetic",
         modifiedFrom: "2025-11-01",
+        createdFrom: "2025-10-01",
+        createdTo: "2025-10-31",
         namesLike: "Synthetic",
       },
       limit: 10,
@@ -470,7 +504,21 @@ describe("runSearchCrm filter mode", () => {
       stageId: "stage-synthetic-601",
       ownerLogin: "owner.synthetic",
       modifiedFrom: "2025-11-01",
+      createdFrom: "2025-10-01",
+      createdTo: "2025-10-31",
     });
+  });
+
+  test("a single-day created range is accepted and forwarded", async () => {
+    const { fetchers, calls } = fakeFetchers();
+
+    const result = await runSearchCrm(fetchers, {
+      kinds: ["deals"],
+      filters: { status: "all", createdFrom: "2025-10-01", createdTo: "2025-10-01" },
+    });
+
+    expect(result.isError).toBe(false);
+    expect(calls[0]?.opts).toMatchObject({ createdFrom: "2025-10-01", createdTo: "2025-10-01" });
   });
 
   test("applies the detail projection to the returned page", async () => {
@@ -892,6 +940,15 @@ describe("runSearchCrm output discipline", () => {
 });
 
 describe("searchCrmToolConfig", () => {
+  test("the description names the created-date filters and the full-only deal fields", () => {
+    const description = searchCrmToolConfig.description.replace(/\s+/gu, " ");
+    expect(description).toContain("createdFrom/createdTo");
+    expect(description).toContain("inclusive");
+    expect(description).toContain("checkedSteps");
+    // Filter mode defaults to open deals, so a creation cohort needs "all".
+    expect(description).toContain('status "all"');
+  });
+
   test("is read-only, idempotent, and closed-world", () => {
     expect(searchCrmToolConfig.annotations).toEqual({
       readOnlyHint: true,
@@ -911,6 +968,8 @@ describe("searchCrmToolConfig", () => {
         stageId: "stage-synthetic-601",
         ownerLogin: "owner.synthetic",
         modifiedFrom: "2025-11-01",
+        createdFrom: "2025-10-01",
+        createdTo: "2025-10-31",
         namesLike: "sy",
       },
       detail: "full",
@@ -941,6 +1000,8 @@ describe("searchCrmToolConfig", () => {
     ["a 513 char cursor", { kinds: ["persons"], filters: {}, cursor: "a".repeat(513) }],
     ["a bogus detail level", { phrase: "synthetic", detail: "everything" }],
     ["a bogus sort key", { phrase: "synthetic", sortBy: "probability" }],
+    ["a created date with a time", { kinds: ["deals"], filters: { createdFrom: "2025-10-01 10:00" } }],
+    ["a created date in another format", { kinds: ["deals"], filters: { createdTo: "01.10.2025" } }],
   ];
 
   for (const [label, args] of rejected) {

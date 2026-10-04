@@ -34,6 +34,23 @@ export function asCount(value: unknown): number {
 }
 
 /**
+ * A step map, however PHP serialized it: an id-keyed record (the normal shape),
+ * an empty `[]` (an empty map), or a bare list of ids. The KEY is the step id;
+ * the value is the display name and is not read. Shared by the record mapper
+ * and the stage-move reader so both tools see the same steps on one deal.
+ */
+export function stepIds(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter(
+      (entry): entry is string => typeof entry === "string" && entry !== "",
+    );
+  }
+  const record = asRecord(value);
+  if (record === null) return [];
+  return Object.keys(record).filter((key) => key !== "");
+}
+
+/**
  * Fixed wording only: upstream content must never reach an error message
  * (docs/security.md par. 6). `subject` names what was being read - "record",
  * "activity" - so each caller keeps the message it always had.

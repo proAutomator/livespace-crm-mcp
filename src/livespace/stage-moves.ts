@@ -1,6 +1,6 @@
 import type { LivespaceClient } from "./client.js";
 import { LivespaceError } from "./errors.js";
-import { asName, asRecord, unexpectedShape } from "./shape.js";
+import { asName, asRecord, stepIds, unexpectedShape } from "./shape.js";
 
 /**
  * The step arithmetic behind `move_deals_to_stage`, and the reader that fetches
@@ -215,22 +215,6 @@ function badShape(): LivespaceError {
 function idText(value: unknown): string {
   if (value === null || value === undefined || typeof value === "object") return "";
   return String(value);
-}
-
-/**
- * A step map, however PHP serialized it: an id-keyed record (the normal shape),
- * an empty `[]` (an empty map), or a bare list of ids. The KEY is the step id;
- * the value is the display name and is not read.
- */
-function stepIds(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.filter(
-      (entry): entry is string => typeof entry === "string" && entry !== "",
-    );
-  }
-  const record = asRecord(value);
-  if (record === null) return [];
-  return Object.keys(record).filter((key) => key !== "");
 }
 
 /**

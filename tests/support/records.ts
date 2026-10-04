@@ -98,6 +98,20 @@ export function deal(overrides: Partial<DealRecord> = {}): DealRecord {
     groups: ["Group Four"],
     creatorName: "Synthetic Creator",
     statusChangeDate: "2025-11-05 16:45:00+02",
+    checkedSteps: [
+      {
+        stageId: "stage-synthetic-601",
+        stageName: "Synthetic Stage",
+        stepId: "step-synthetic-621",
+        name: "Synthetic step",
+      },
+    ],
+    wonReasonName: "",
+    wonReasonNote: "",
+    lostReasonName: "",
+    lostReasonNote: "",
+    outdatedReasonName: "",
+    outdatedReasonNote: "",
     url: "https://synthetic.livespace.io/Deal/deal/details/api_id/deal-synthetic-401",
     ...overrides,
   };
