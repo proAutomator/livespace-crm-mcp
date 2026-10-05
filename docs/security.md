@@ -53,11 +53,15 @@ This document is the threat model and the binding security requirements for
   to 10 seconds and capped at 60 seconds. Timed-out or disconnected waiters
   MUST leave the queue immediately.
 - Tool execution after body upload MUST receive a separate absolute deadline,
-  defaulting to 90 seconds and capped at 300 seconds. The deadline signal MUST
+  defaulting to 90 seconds and capped at 180 seconds. The deadline signal MUST
   remain live until the response body finishes, including streamed responses.
   The admission slot MUST remain held for the same lifetime, then release on
   completion, cancellation or deadline. A timed-out write keeps the existing
   unknown-outcome semantics and MUST NOT be presented as safely retryable.
+- The HTTP runtime's idle-connection timeout MUST outlast the ingress and
+  execution deadlines together, so a slow call ends with this server's own
+  result, never with a dropped connection. Bun defaults to 10 seconds and
+  accepts at most 255, which is why execution is capped at 180 seconds.
 - `/mcp` responses MUST send `Cache-Control: no-store` and vary by
   `Authorization`. The unauthenticated `/health` liveness endpoint exposes
   status only.
@@ -201,6 +205,8 @@ The suite MUST cover at least:
 14. the post-upload execution deadline aborts real tool work and remains live
     through streamed response consumption;
 15. `/mcp` responses are non-cacheable and `/health` exposes status only.
+16. the runtime idle timeout outlasts ingress plus execution, so a handler
+    still working past Bun's 10-second default answers normally.
 
 ### Regression map
 
@@ -224,6 +230,7 @@ the complete gate and MUST also pass before release.
 | 13 | `tests/server/write-support.test.ts` and write-tool wire tests - refusal by default and explicit compatibility control |
 | 14 | `tests/config/server-env.test.ts` and `tests/server/http.test.ts` - bounded execution setting, live abort signal and streamed-response admission lifetime |
 | 15 | `tests/server/http.test.ts` - `no-store`, `Vary: Authorization` and minimal liveness response |
+| 16 | `tests/config/server-env.test.ts` - idle timeout derived from both deadlines and within Bun's maximum; `tests/server/idle-timeout.test.ts` - a 15-second handler answers through the real listener |
 
 ## Trust boundaries (out of scope)
 

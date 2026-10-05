@@ -29,7 +29,28 @@ const MIN_AUTH_TOKEN_BYTES = 32;
 /** The SDK's codec refuses a shorter one, and so does startup. */
 const MIN_REQUEST_STATE_KEY_BYTES = 32;
 const MAX_REQUEST_INGRESS_TIMEOUT_MS = 60_000;
-const MAX_REQUEST_EXECUTION_TIMEOUT_MS = 300_000;
+/**
+ * Bound by Bun, not by taste: the runtime's idle timeout has to outlast
+ * ingress plus execution (see `idleTimeoutSeconds`), and Bun accepts at most
+ * 255 s. 60 s + 180 s + the margin stays under it.
+ */
+const MAX_REQUEST_EXECUTION_TIMEOUT_MS = 180_000;
+
+/** The largest `idleTimeout` Bun.serve accepts. */
+export const BUN_MAX_IDLE_TIMEOUT_SECONDS = 255;
+/** Room for the server's own timeout response after the execution deadline. */
+const IDLE_TIMEOUT_MARGIN_SECONDS = 5;
+
+/**
+ * Bun closes a connection that stays silent for its idle timeout, 10 s by
+ * default, even while a handler is still working. A slow tool call must end
+ * with this server's own deadline result, never with a dropped connection, so
+ * the runtime waits out ingress plus execution and a margin.
+ */
+export function idleTimeoutSeconds(config: ServerConfig): number {
+  const deadlines = config.requestIngressTimeoutMs + config.requestExecutionTimeoutMs;
+  return Math.ceil(deadlines / 1000) + IDLE_TIMEOUT_MARGIN_SECONDS;
+}
 
 function positiveInt(
   env: Record<string, string | undefined>,

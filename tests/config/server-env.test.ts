@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { loadServerConfig } from "../../src/config/server-env.js";
+import {
+  BUN_MAX_IDLE_TIMEOUT_SECONDS,
+  idleTimeoutSeconds,
+  loadServerConfig,
+} from "../../src/config/server-env.js";
 
 /** 38 bytes - the codec refuses anything under 32 (AGENTS.md: synthetic). */
 const REQUEST_STATE_KEY = "synthetic-request-state-key-0123456789";
@@ -62,9 +66,30 @@ describe("loadServerConfig", () => {
     expect(() =>
       loadServerConfig({ MCP_REQUEST_EXECUTION_TIMEOUT_MS: "0" }),
     ).toThrow(/MCP_REQUEST_EXECUTION_TIMEOUT_MS/);
+    expect(
+      loadServerConfig({ MCP_REQUEST_EXECUTION_TIMEOUT_MS: "180000" })
+        .requestExecutionTimeoutMs,
+    ).toBe(180_000);
     expect(() =>
-      loadServerConfig({ MCP_REQUEST_EXECUTION_TIMEOUT_MS: "300001" }),
+      loadServerConfig({ MCP_REQUEST_EXECUTION_TIMEOUT_MS: "180001" }),
     ).toThrow(/MCP_REQUEST_EXECUTION_TIMEOUT_MS/);
+  });
+
+  test("the runtime idle timeout outlasts ingress plus execution", () => {
+    // Defaults: 10 s ingress + 90 s execution + the 5 s margin.
+    expect(idleTimeoutSeconds(loadServerConfig({}))).toBe(105);
+    const slowest = loadServerConfig({
+      MCP_REQUEST_INGRESS_TIMEOUT_MS: "60000",
+      MCP_REQUEST_EXECUTION_TIMEOUT_MS: "180000",
+    });
+    expect(idleTimeoutSeconds(slowest)).toBe(245);
+    expect(idleTimeoutSeconds(slowest)).toBeLessThanOrEqual(BUN_MAX_IDLE_TIMEOUT_SECONDS);
+    // A sub-second remainder rounds up, never down below the deadlines.
+    const uneven = loadServerConfig({
+      MCP_REQUEST_INGRESS_TIMEOUT_MS: "1500",
+      MCP_REQUEST_EXECUTION_TIMEOUT_MS: "1",
+    });
+    expect(idleTimeoutSeconds(uneven)).toBe(7);
   });
 
   test("parses port, read-only flag, and auth token", () => {
