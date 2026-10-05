@@ -3,7 +3,7 @@
   "name": "io.github.proAutomator/livespace-crm-mcp",
   "title": "Livespace CRM MCP Server",
   "description": "Unofficial local MCP server for Livespace CRM with read tools and guarded writes.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "websiteUrl": "https://github.com/proAutomator/livespace-crm-mcp#readme",
   "repository": {
     "url": "https://github.com/proAutomator/livespace-crm-mcp",
@@ -15,7 +15,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "livespace-crm-mcp",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "transport": {
         "type": "streamable-http",
         "url": "http://127.0.0.1:{MCP_PORT}/mcp",

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { ServerConfig } from "../src/config/server-env.js";
 import { buildApp } from "../src/server/app.js";
 
-const VERSION = "0.1.1";
+const VERSION = "0.1.2";
 const PACKAGE_NAME = "livespace-crm-mcp";
 const MCP_NAME = "io.github.proAutomator/livespace-crm-mcp";
 const SCHEMA_URL =
