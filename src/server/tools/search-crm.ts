@@ -186,7 +186,9 @@ Pass nextCursor back as cursor for the next page of the same single kind.`,
         status: z
           .enum(["open", "won", "lost", "outdated", "all"])
           .optional()
-          .describe("Deal status (default: open). outdated = expired deals. Deals only."),
+          .describe(
+            'Deal status (default: open). "outdated" is the status of deals closed as no longer current, not of deals past dateEnd. Deals only.',
+          ),
         processId: z.string().max(64).optional().describe("Deal process id. Deals only."),
         stageId: z.string().max(64).optional().describe("Deal stage id. Deals only."),
         ownerLogin: z

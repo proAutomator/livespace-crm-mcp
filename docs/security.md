@@ -61,7 +61,9 @@ This document is the threat model and the binding security requirements for
 - The HTTP runtime's idle-connection timeout MUST outlast the ingress and
   execution deadlines together, so a slow call ends with this server's own
   result, never with a dropped connection. Bun defaults to 10 seconds and
-  accepts at most 255, which is why execution is capped at 180 seconds.
+  accepts at most 255, which is why execution is capped at 180 seconds. The
+  same timeout keeps idle keep-alive connections open between requests;
+  network-exposed deployments sit behind the required reverse proxy.
 - `/mcp` responses MUST send `Cache-Control: no-store` and vary by
   `Authorization`. The unauthenticated `/health` liveness endpoint exposes
   status only.
@@ -204,7 +206,7 @@ The suite MUST cover at least:
     operator explicitly enables the unsafe compatibility flag;
 14. the post-upload execution deadline aborts real tool work and remains live
     through streamed response consumption;
-15. `/mcp` responses are non-cacheable and `/health` exposes status only.
+15. `/mcp` responses are non-cacheable and `/health` exposes status only;
 16. the runtime idle timeout outlasts ingress plus execution, so a handler
     still working past Bun's 10-second default answers normally.
 
