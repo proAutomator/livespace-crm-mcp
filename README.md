@@ -160,9 +160,9 @@ account.
 At `detail: "full"`, deals also carry `checkedSteps` (the process steps marked
 done, with stage and step ids and names) and the won, lost and outdated reason
 names and notes. A reopened deal can keep an earlier lost reason, so check
-`status` first. `search_crm` deal filters accept `createdFrom` and `createdTo`
-as inclusive `YYYY-MM-DD` dates. Livespace ignores a creation date it cannot
-read and returns every deal, so the server rejects invalid dates before
+`status` first. `search_crm` deal filters accept `modifiedFrom`, `createdFrom`
+and `createdTo` as inclusive `YYYY-MM-DD` dates. Livespace ignores a date it
+cannot read and returns every deal, so the server rejects invalid dates before
 calling it.
 
 All tools reject unsupported input parameters. Correct the arguments when
