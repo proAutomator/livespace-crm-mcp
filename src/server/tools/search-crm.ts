@@ -116,8 +116,8 @@ const DEAL_ONLY_FILTERS = [
 ] as const;
 
 /**
- * The creation dates a filter accepts. The bound is not about data - it keeps
- * a year like 9999 out of an upstream condition nobody has probed.
+ * The dates a filter accepts. The bound is not about data - it keeps a year
+ * like 9999 out of an upstream condition nobody has probed.
  */
 const DATE_MIN = "1900-01-01";
 const DATE_MAX = "2100-12-31";
@@ -166,8 +166,8 @@ establishing why; do not infer an empty CRM field or access restrictions.
 Deal value/probability preserve numeric zero; counters and flags may use
 zero/false defaults. Minimal records keep their URL. Phrase-hit URLs are
 built from API IDs without an extra read and may be empty for unusable IDs.
-The deal filters createdFrom/createdTo take YYYY-MM-DD dates, both inclusive;
-add status "all" to include won and lost deals.
+The deal filters modifiedFrom and createdFrom/createdTo take inclusive
+YYYY-MM-DD dates; add status "all" to include won and lost deals.
 At detail "full", deals also carry checkedSteps (process steps marked done)
 and their won/lost/outdated reasons.
 Pass nextCursor back as cursor for the next page of the same single kind.`,
@@ -198,9 +198,9 @@ Pass nextCursor back as cursor for the next page of the same single kind.`,
           .describe("Deal owner login. Deals only."),
         modifiedFrom: z
           .string()
-          .max(64)
+          .regex(DATE_SHAPE)
           .optional()
-          .describe("Only deals modified since this date (YYYY-MM-DD). Deals only."),
+          .describe("Only deals modified on or after this date (YYYY-MM-DD). Deals only."),
         createdFrom: z
           .string()
           .regex(DATE_SHAPE)
@@ -301,7 +301,9 @@ function isCalendarDate(value: string): boolean {
   return new Date(ms).toISOString().slice(0, 10) === value;
 }
 
-function dateHint(field: "createdFrom" | "createdTo", value: string): string | null {
+type DateFilter = "modifiedFrom" | "createdFrom" | "createdTo";
+
+function dateHint(field: DateFilter, value: string): string | null {
   if (!isCalendarDate(value)) {
     return `${field} is not a real calendar date. Send an existing day as YYYY-MM-DD, for example 2026-01-31.`;
   }
@@ -312,17 +314,16 @@ function dateHint(field: "createdFrom" | "createdTo", value: string): string | n
 }
 
 /**
- * Upstream ignores a creation date it cannot read and lists every deal instead,
- * so a bad date has to stop here rather than come back as a wider result.
+ * Upstream ignores a modified or creation date it cannot read and lists every
+ * record instead (probes 2026-10-01 and 2026-10-05), so a bad date has to stop
+ * here rather than come back as a wider result.
  */
-function createdRangeHint(filters: SearchFilters): string | null {
+function dateFilterHint(filters: SearchFilters): string | null {
   const { createdFrom, createdTo } = filters;
-  if (createdFrom !== undefined) {
-    const hint = dateHint("createdFrom", createdFrom);
-    if (hint !== null) return hint;
-  }
-  if (createdTo !== undefined) {
-    const hint = dateHint("createdTo", createdTo);
+  for (const field of ["modifiedFrom", "createdFrom", "createdTo"] as const) {
+    const value = filters[field];
+    if (value === undefined) continue;
+    const hint = dateHint(field, value);
     if (hint !== null) return hint;
   }
   if (createdFrom !== undefined && createdTo !== undefined && createdFrom > createdTo) {
@@ -371,7 +372,7 @@ function argumentHint(args: SearchCrmArgs, kinds: ArgKind[]): string | null {
       return 'Deal filters (status, processId, stageId, ownerLogin, modifiedFrom, createdFrom, createdTo) need kinds: ["deals"]. namesLike works for every kind.';
     }
   }
-  return args.filters === undefined ? null : createdRangeHint(args.filters);
+  return args.filters === undefined ? null : dateFilterHint(args.filters);
 }
 
 function badParams(hint: string): ToolError {

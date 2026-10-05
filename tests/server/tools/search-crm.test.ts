@@ -363,6 +363,17 @@ describe("runSearchCrm argument rules", () => {
       "createdTo is outside the supported range",
     ],
     [
+      // Upstream silently ignores a modified date it cannot read, too.
+      "a modifiedFrom that is not a calendar date",
+      { kinds: ["deals"], filters: { modifiedFrom: "2025-02-31" } },
+      "modifiedFrom is not a real calendar date",
+    ],
+    [
+      "a modifiedFrom outside the supported range",
+      { kinds: ["deals"], filters: { modifiedFrom: "2101-01-01" } },
+      "modifiedFrom is outside the supported range",
+    ],
+    [
       "a reversed created range",
       { kinds: ["deals"], filters: { createdFrom: "2025-11-01", createdTo: "2025-10-01" } },
       "createdFrom must not be later than createdTo",
@@ -1002,6 +1013,9 @@ describe("searchCrmToolConfig", () => {
     ["a bogus sort key", { phrase: "synthetic", sortBy: "probability" }],
     ["a created date with a time", { kinds: ["deals"], filters: { createdFrom: "2025-10-01 10:00" } }],
     ["a created date in another format", { kinds: ["deals"], filters: { createdTo: "01.10.2025" } }],
+    // Upstream ignores a modified date it cannot read and lists every deal.
+    ["a modified date that is not a date", { kinds: ["deals"], filters: { modifiedFrom: "not-a-date" } }],
+    ["a modified date with a time", { kinds: ["deals"], filters: { modifiedFrom: "2025-10-01 10:00" } }],
   ];
 
   for (const [label, args] of rejected) {
