@@ -439,7 +439,7 @@ export function mapDeal(raw: unknown): DealRecord {
     id: requiredId(data),
     name: asName(data["name"]),
     // The item-level `status` carries the same labels the filter accepts:
-    // "open" | "won" | "lost".
+    // "open" | "won" | "lost" | "outdated".
     status: asName(data["status"]),
     value: dealValue(data),
     currency: asName(data["currency"]),
@@ -582,7 +582,12 @@ export interface ListOptions {
 }
 
 export interface DealListOptions extends ListOptions {
-  status?: "open" | "won" | "lost" | "all";
+  /**
+   * `outdated` is a real upstream label: it returns its own (empty on the
+   * sandbox) list, while an unknown label is ignored and lists everything
+   * (probe 2026-10-05).
+   */
+  status?: "open" | "won" | "lost" | "outdated" | "all";
   processId?: string;
   stageId?: string;
   ownerLogin?: string;
