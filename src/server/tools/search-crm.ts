@@ -61,7 +61,7 @@ export type SortKey = "name" | "modified" | "value" | "dateEnd";
 export type SortDir = "asc" | "desc";
 
 export interface SearchFilters {
-  status?: "open" | "won" | "lost" | "all";
+  status?: "open" | "won" | "lost" | "outdated" | "all";
   processId?: string;
   stageId?: string;
   ownerLogin?: string;
@@ -186,9 +186,9 @@ Pass nextCursor back as cursor for the next page of the same single kind.`,
     filters: z
       .strictObject({
         status: z
-          .enum(["open", "won", "lost", "all"])
+          .enum(["open", "won", "lost", "outdated", "all"])
           .optional()
-          .describe("Deal status (default: open). Deals only."),
+          .describe("Deal status (default: open). outdated = expired deals. Deals only."),
         processId: z.string().max(64).optional().describe("Deal process id. Deals only."),
         stageId: z.string().max(64).optional().describe("Deal stage id. Deals only."),
         ownerLogin: z

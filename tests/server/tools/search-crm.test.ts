@@ -520,6 +520,18 @@ describe("runSearchCrm filter mode", () => {
     });
   });
 
+  test("the outdated status reaches the deal fetcher", async () => {
+    const { fetchers, calls } = fakeFetchers();
+
+    const result = await runSearchCrm(fetchers, {
+      kinds: ["deals"],
+      filters: { status: "outdated" },
+    });
+
+    expect(result.isError).toBe(false);
+    expect(calls[0]?.opts).toMatchObject({ status: "outdated" });
+  });
+
   test("a single-day created range is accepted and forwarded", async () => {
     const { fetchers, calls } = fakeFetchers();
 
@@ -988,6 +1000,7 @@ describe("searchCrmToolConfig", () => {
       sortDir: "asc",
       limit: 100,
     }],
+    ["the outdated deal status", { kinds: ["deals"], filters: { status: "outdated" } }],
     ["a minimal limit", { phrase: "synthetic", limit: 1 }],
     ["a 512 char cursor", { kinds: ["persons"], filters: {}, cursor: "a".repeat(512) }],
   ];

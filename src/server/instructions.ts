@@ -144,8 +144,9 @@ Read tools:
   mixed currencies also make a sum null, with currencies listing the reason.
 ${writeSection}
 CRITICAL - Livespace facts this server enforces for you:
-- Deal status (open/won/lost) is NOT the process stage. Stage changes happen by
-  completing process steps; use the dedicated stage tool when writing is on.
+- Deal status (open/won/lost/outdated) is NOT the process stage. Stage
+  changes happen by completing process steps; use the dedicated stage tool
+  when writing is on.
 - API record IDs differ from IDs visible in the Livespace UI. Never guess IDs;
   take them from tool results.
 - Every operation uses the API key user's permissions. A permission-denied
