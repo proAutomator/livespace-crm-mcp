@@ -336,9 +336,15 @@ describe("runSearchCrm argument rules", () => {
       "Deal filters",
     ],
     [
-      "a created filter outside a deals-only search",
-      { kinds: ["persons", "deals"], filters: { createdFrom: "2025-10-01" } },
-      "createdFrom, createdTo",
+      "a modified filter outside a deals-only search",
+      { kinds: ["persons", "deals"], filters: { modifiedFrom: "2025-10-01" } },
+      "Deal filters (status, processId, stageId, ownerLogin, modifiedFrom)",
+    ],
+    [
+      // Range checks run for every kind now that persons and companies take dates.
+      "a reversed created range on persons",
+      { kinds: ["persons"], filters: { createdFrom: "2025-11-01", createdTo: "2025-10-01" } },
+      "createdFrom must not be later than createdTo",
     ],
     [
       // Upstream silently ignores a date it cannot read and lists everything.
@@ -518,6 +524,22 @@ describe("runSearchCrm filter mode", () => {
       createdFrom: "2025-10-01",
       createdTo: "2025-10-31",
     });
+  });
+
+  test("created dates reach the person and company fetchers", async () => {
+    const { fetchers, calls } = fakeFetchers();
+
+    const result = await runSearchCrm(fetchers, {
+      kinds: ["persons", "companies"],
+      filters: { createdFrom: "2025-10-01", createdTo: "2025-10-31" },
+      limit: 10,
+    });
+
+    expect(result.isError).toBe(false);
+    expect(calls.map((call) => call.opts)).toStrictEqual([
+      { limit: 10, offset: 0, createdFrom: "2025-10-01", createdTo: "2025-10-31" },
+      { limit: 10, offset: 0, createdFrom: "2025-10-01", createdTo: "2025-10-31" },
+    ]);
   });
 
   test("the outdated status reaches the deal fetcher", async () => {

@@ -111,8 +111,6 @@ const DEAL_ONLY_FILTERS = [
   "stageId",
   "ownerLogin",
   "modifiedFrom",
-  "createdFrom",
-  "createdTo",
 ] as const;
 
 /**
@@ -166,8 +164,8 @@ establishing why; do not infer an empty CRM field or access restrictions.
 Deal value/probability preserve numeric zero; counters and flags may use
 zero/false defaults. Minimal records keep their URL. Phrase-hit URLs are
 built from API IDs without an extra read and may be empty for unusable IDs.
-The deal filters modifiedFrom and createdFrom/createdTo take inclusive
-YYYY-MM-DD dates; add status "all" to include won and lost deals.
+modifiedFrom (deals) and createdFrom/createdTo (every kind) take inclusive
+YYYY-MM-DD dates; for deals, add status "all" to include won and lost ones.
 At detail "full", deals also carry checkedSteps (process steps marked done)
 and their won/lost/outdated reasons.
 Pass nextCursor back as cursor for the next page of the same single kind.`,
@@ -206,13 +204,13 @@ Pass nextCursor back as cursor for the next page of the same single kind.`,
           .regex(DATE_SHAPE)
           .optional()
           .describe(
-            'Only deals created on or after this date (YYYY-MM-DD). Deals only; status defaults to open, so pass status "all" for every deal created in a period.',
+            'Only records created on or after this date (YYYY-MM-DD). Every kind; deal status defaults to open, so pass status "all" for every deal created in a period.',
           ),
         createdTo: z
           .string()
           .regex(DATE_SHAPE)
           .optional()
-          .describe("Only deals created on or before this date (YYYY-MM-DD). Deals only."),
+          .describe("Only records created on or before this date (YYYY-MM-DD). Every kind."),
         namesLike: z
           .string()
           .min(2)
@@ -369,7 +367,7 @@ function argumentHint(args: SearchCrmArgs, kinds: ArgKind[]): string | null {
     }
     const filters = args.filters;
     if (filters && DEAL_ONLY_FILTERS.some((key) => filters[key] !== undefined)) {
-      return 'Deal filters (status, processId, stageId, ownerLogin, modifiedFrom, createdFrom, createdTo) need kinds: ["deals"]. namesLike works for every kind.';
+      return 'Deal filters (status, processId, stageId, ownerLogin, modifiedFrom) need kinds: ["deals"]. namesLike, createdFrom and createdTo work for every kind.';
     }
   }
   return args.filters === undefined ? null : dateFilterHint(args.filters);
@@ -406,6 +404,8 @@ function listFor(
   // fetchers only send a param when the key exists.
   const base: ListOptions = { limit, offset };
   if (filters.namesLike !== undefined) base.namesLike = filters.namesLike;
+  if (filters.createdFrom !== undefined) base.createdFrom = filters.createdFrom;
+  if (filters.createdTo !== undefined) base.createdTo = filters.createdTo;
   if (signal !== undefined) base.signal = signal;
   if (kind === "person") return fetchers.listPersons(base);
   if (kind === "company") return fetchers.listCompanies(base);
@@ -415,8 +415,6 @@ function listFor(
   if (filters.stageId !== undefined) dealOpts.stageId = filters.stageId;
   if (filters.ownerLogin !== undefined) dealOpts.ownerLogin = filters.ownerLogin;
   if (filters.modifiedFrom !== undefined) dealOpts.modifiedFrom = filters.modifiedFrom;
-  if (filters.createdFrom !== undefined) dealOpts.createdFrom = filters.createdFrom;
-  if (filters.createdTo !== undefined) dealOpts.createdTo = filters.createdTo;
   return fetchers.listDeals(dealOpts);
 }
 
