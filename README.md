@@ -187,7 +187,7 @@ the client reports an input validation error.
 | `MCP_RATE_LIMIT_PER_MINUTE` / `MCP_RATE_LIMIT_BURST` | Per-principal request rate. Defaults: 120 per minute and burst 30. |
 | `MCP_MAX_CONCURRENT_REQUESTS` / `MCP_MAX_QUEUED_REQUESTS` | Admission limits. Defaults: 8 in flight and 16 queued. |
 | `MCP_REQUEST_INGRESS_TIMEOUT_MS` | Absolute limit for admission queueing plus body upload, not tool execution. Default: 10000; maximum: 60000. |
-| `MCP_REQUEST_EXECUTION_TIMEOUT_MS` | Absolute limit for tool execution after upload. Default: 90000; maximum: 180000. The HTTP idle timeout follows both limits. |
+| `MCP_REQUEST_EXECUTION_TIMEOUT_MS` | Absolute limit for tool execution after upload. Default: 90000; maximum: 180000 (300000 before 0.1.2; a higher value now stops startup). The HTTP idle timeout follows both limits. |
 
 The server refuses a non-loopback bind unless `MCP_AUTH_TOKEN` and
 `MCP_ALLOWED_HOSTS` are set. It also refuses to enable writes without both
@@ -293,10 +293,10 @@ If a Livespace key, bearer token or confirmation key may be compromised:
   controlled probe confirms that the link persists. Existing links returned
   by Livespace are still exposed as `linkedRecords`.
 - Logged notes and calls cannot be edited or removed.
-- Deal updates cover name and status; stage changes use
-  `move_deals_to_stage`. `create_records` can set budget lines when it creates
-  a deal, but `update_records` does not edit an existing budget because the
-  append-versus-replace behavior has not been verified.
+- Deal updates cover name and status (`open`, `won` or `lost`); stage changes
+  use `move_deals_to_stage`. `create_records` can set budget lines when it
+  creates a deal, but `update_records` does not edit an existing budget because
+  the append-versus-replace behavior has not been verified.
 - `stage_conversion` is a point-in-time estimate because Livespace exposes no
   stage history.
 - Reads and analyses use bounded windows. Inspect truncation fields before
