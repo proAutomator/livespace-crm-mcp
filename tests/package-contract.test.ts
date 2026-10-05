@@ -180,7 +180,7 @@ async function assertPackagedServer(readOnly: boolean): Promise<void> {
   try {
     const health = await waitForHealth(port, child);
     expect(await health.json()).toEqual({ status: "ok" });
-    expect(await initializeVersion(port)).toBe("0.1.1");
+    expect(await initializeVersion(port)).toBe("0.1.2");
     const listed = await modernCall(port, "tools/list", 2);
     expect(listed.result?.tools?.map((tool: any) => tool.name)).toEqual(
       readOnly ? READ_TOOLS : ALL_TOOLS,
@@ -347,10 +347,10 @@ describe("public npm package contract", () => {
     expect(readme).toContain("LIVESPACE_API_SECRET");
     expect(readme).toContain("Streamable HTTP");
     expect(readme).toContain(
-      "https://www.npmjs.com/package/livespace-crm-mcp/v/0.1.1",
+      "https://www.npmjs.com/package/livespace-crm-mcp/v/0.1.2",
     );
     expect(readme).toContain(
-      "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.proAutomator%2Flivespace-crm-mcp/versions/0.1.1",
+      "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.proAutomator%2Flivespace-crm-mcp/versions/0.1.2",
     );
   });
 

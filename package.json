@@ -1,6 +1,6 @@
 {
   "name": "livespace-crm-mcp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Unofficial local MCP server for Livespace CRM with read tools and guarded writes.",
   "mcpName": "io.github.proAutomator/livespace-crm-mcp",
   "type": "module",
