@@ -116,8 +116,9 @@ Read tools:
   sortWindowTruncated. Fields omitted by a detail level are absent, not empty.
   Phrase-hit URLs are generated locally from API IDs, without checking each
   destination. An unusable ID leaves url empty. Filtered results retain the
-  upstream URL, even at minimal detail; it may be empty. Deal filters
-  modifiedFrom and createdFrom/createdTo take inclusive YYYY-MM-DD dates.
+  upstream URL, even at minimal detail; it may be empty. modifiedFrom
+  (deals) and createdFrom/createdTo (every kind) take inclusive YYYY-MM-DD
+  dates.
 - "get_records" reads one record kind and up to 25 ids. Each id gets its own
   ok, not_found or error status; not_found can also mean the API key user lacks
   permission. includeWall works for persons, companies and deals on at most

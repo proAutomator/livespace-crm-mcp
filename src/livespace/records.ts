@@ -578,6 +578,9 @@ export interface ListOptions {
   limit: number;
   offset: number;
   namesLike?: string;
+  /** Inclusive creation-date bounds, "YYYY-MM-DD", validated by the caller. */
+  createdFrom?: string;
+  createdTo?: string;
   signal?: AbortSignal;
 }
 
@@ -592,9 +595,6 @@ export interface DealListOptions extends ListOptions {
   stageId?: string;
   ownerLogin?: string;
   modifiedFrom?: string;
-  /** Inclusive creation-date bounds, "YYYY-MM-DD", validated by the caller. */
-  createdFrom?: string;
-  createdTo?: string;
 }
 
 export interface TaskListOptions {
@@ -650,12 +650,13 @@ function largePageTimeoutMs(limit: number): number | undefined {
 
 /**
  * `Deal/getAll` honors a NESTED `created: {from, to}` condition, unlike the
- * flat `created_from` it ignores (probe 2026-10-01). `from` is inclusive, but
- * a bare `to` date means that day's midnight and drops the day itself, so the
- * inclusive end goes out as its last second. An unreadable date is ignored
+ * flat `created_from` it ignores (probe 2026-10-01), and `Contact/getAll` does
+ * the same for persons and companies (probe 2026-10-05). `from` is inclusive,
+ * but a bare `to` date means that day's midnight and drops the day itself, so
+ * the inclusive end goes out as its last second. An unreadable date is ignored
  * upstream without an error - callers validate first.
  */
-function createdCondition(opts: DealListOptions): Record<string, string> | null {
+function createdCondition(opts: ListOptions): Record<string, string> | null {
   const created: Record<string, string> = {};
   if (opts.createdFrom !== undefined) created["from"] = opts.createdFrom;
   if (opts.createdTo !== undefined) created["to"] = `${opts.createdTo} 23:59:59`;
@@ -794,6 +795,8 @@ export function createRecordFetchers(
       params["names"] = opts.namesLike;
       params["condition"] = "like";
     }
+    const created = createdCondition(opts);
+    if (created !== null) params["created"] = created;
     const payload = await call(
       "Contact",
       "getAll",

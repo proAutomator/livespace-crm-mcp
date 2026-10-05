@@ -1023,6 +1023,40 @@ describe("fetcher call table", () => {
       params: { type: "company", limit: 20, offset: 0 },
     },
     {
+      // `Contact/getAll` honors the same nested `created` condition as deals
+      // for both contact types (probe 2026-10-05), with the same inclusive end.
+      name: "listPersons with a created range and a name filter",
+      responses: { "Contact/getAll": { contact: [] } },
+      run: (fetchers, signal) =>
+        fetchers.listPersons({
+          limit: 20,
+          offset: 0,
+          namesLike: "Synthetic",
+          createdFrom: "2026-01-01",
+          createdTo: "2026-03-31",
+          signal,
+        }),
+      module: "Contact",
+      method: "getAll",
+      params: {
+        type: "contact",
+        limit: 20,
+        offset: 0,
+        names: "Synthetic",
+        condition: "like",
+        created: { from: "2026-01-01", to: "2026-03-31 23:59:59" },
+      },
+    },
+    {
+      name: "listCompanies with only a created start",
+      responses: { "Contact/getAll": { company: [] } },
+      run: (fetchers, signal) =>
+        fetchers.listCompanies({ limit: 20, offset: 0, createdFrom: "2026-01-01", signal }),
+      module: "Contact",
+      method: "getAll",
+      params: { type: "company", limit: 20, offset: 0, created: { from: "2026-01-01" } },
+    },
+    {
       name: "listDeals defaults to the open status",
       responses: { "Deal/getAll": { deal: [] } },
       run: (fetchers, signal) => fetchers.listDeals({ limit: 20, offset: 0, signal }),
