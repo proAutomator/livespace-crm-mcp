@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 const MAP_FILES = [
   "tests/config/server-env.test.ts",
   "tests/server/http.test.ts",
+  "tests/server/idle-timeout.test.ts",
   "tests/server/body-limit.test.ts",
   "tests/server/limits.test.ts",
   "tests/server/write-registration.test.ts",
@@ -38,12 +39,12 @@ async function repoFile(path: string): Promise<string> {
 }
 
 describe("docs/security.md section 10 contract", () => {
-  test("maps all fifteen numbered requirements to their regression proofs", async () => {
+  test("maps all sixteen numbered requirements to their regression proofs", async () => {
     const security = await repoFile("docs/security.md");
     const rows = [...security.matchAll(/^\|\s*(\d+)\s*\|/gmu)].map(
       (match) => Number(match[1]),
     );
-    expect(rows).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+    expect(rows).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
     for (const path of MAP_FILES) expect(security).toContain(`\`${path}\``);
     expect(security).toContain("`bun run test:security`");
   });

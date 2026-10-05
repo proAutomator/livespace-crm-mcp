@@ -6,6 +6,7 @@ import { createRecordFetchers } from "./livespace/records.js";
 import { createDealStepReader } from "./livespace/stage-moves.js";
 import { createWriteFetchers } from "./livespace/writes.js";
 import { buildApp } from "./server/app.js";
+import { listen } from "./server/listen.js";
 import { createMetadataService } from "./server/tools/crm-metadata.js";
 import packageJson from "../package.json";
 
@@ -41,11 +42,7 @@ const app = buildApp({
     ),
 });
 
-const server = Bun.serve({
-  hostname: serverConfig.bindHost,
-  port: serverConfig.port,
-  fetch: app.fetch,
-});
+const server = listen(app.fetch, serverConfig);
 
 console.error(
   `livespace-crm-mcp v${packageJson.version} listening on ` +
