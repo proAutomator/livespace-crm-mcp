@@ -9,12 +9,15 @@ Everything after that approval runs in `.github/workflows/publish.yml`.
    of `server.json`, the README version links and `bunx` pin, the supported
    versions in `SECURITY.md`, and the version pins in
    `tests/release-metadata.test.ts` and `tests/package-contract.test.ts`.
-   Merge with rebase once CI is green, so each commit stays on `main`.
+   Merge with rebase once CI is green, so each commit stays on `main`:
+   `gh pr merge --repo proAutomator/livespace-crm-mcp <number> --rebase --match-head-commit <sha>`.
+   Both `gh` commands start with `--repo`, so a maintainer can allow exactly
+   these two prefixes for an agent in Claude Code permission rules.
 2. **GitHub Release.** Create `vX.Y.Z` on the merge commit with release
    notes. `v*` tags are protected against update and deletion.
 
    ```bash
-   gh release create vX.Y.Z --repo proAutomator/livespace-crm-mcp --target <sha> --title "vX.Y.Z - <summary>" --notes-file <notes.md>
+   gh release create --repo proAutomator/livespace-crm-mcp vX.Y.Z --target <sha> --title "vX.Y.Z - <summary>" --notes-file <notes.md>
    ```
 
 3. **Approve `npm-release`.** Open the workflow run and use "Review
