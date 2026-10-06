@@ -72,6 +72,12 @@ Work proceeds milestone by milestone. For each one:
 4. Record deviations discovered during execution in the plan doc, under
    "Execution notes", so the next person does not rediscover them.
 
+## Releases
+
+Follow `docs/releasing.md`. An agent can prepare the release PR, the notes and
+the post-release checks. Approving the `npm-release` environment is always the
+maintainer's decision; npm and the MCP Registry follow from it automatically.
+
 ## Maintainer working state
 
 The roadmap, handoffs, and open decisions live **outside this repository**, in
