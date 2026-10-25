@@ -272,6 +272,28 @@ describe("modern era (2026-07-28) wire behavior", () => {
     expect(payload.error.code).toBe(-32020);
   });
 
+  // SDK 2.0.0 served this request; 2.1.0 and later refuse it before dispatch.
+  test("missing MCP-Protocol-Version on a modern request is rejected before tool work", async () => {
+    let calls = 0;
+    const response = await app({
+      livespacePing: async () => {
+        calls += 1;
+        return {};
+      },
+    }).request(
+      modernRequest({
+        method: "tools/call",
+        name: "health",
+        params: { name: "health", arguments: { checkLivespace: true } },
+        omitHeaders: ["mcp-protocol-version"],
+      }),
+    );
+    expect(response.status).toBe(400);
+    const payload = await jsonFromResponse(response);
+    expect(payload.error.code).toBe(-32020);
+    expect(calls).toBe(0);
+  });
+
   test("unsupported protocol version is rejected with -32022", async () => {
     const response = await app().request(
       modernRequest({
@@ -605,6 +627,57 @@ describe("read tool wiring", () => {
     expect(payload.result.resultType).toBe("complete");
     expect(payload.result.structuredContent.results.persons.returned).toBe(1);
     expect(payload.result.structuredContent.errors).toEqual([]);
+  });
+
+  // GHSA-jm63-cq47-j5jp: a shared server or transport matched responses to
+  // clients by JSON-RPC id alone, and SDK clients all start counting at 0.
+  // Two calls with the same id, both in flight at once, must each get their own.
+  test("overlapping calls with the same JSON-RPC id each get their own result", async () => {
+    let arrived = 0;
+    let releaseBoth: () => void = () => undefined;
+    const bothArrived = new Promise<void>((resolve) => {
+      releaseBoth = resolve;
+    });
+    const instance = fullApp({
+      records: fakeRecords({
+        searchPhrase: async ({ q }) => {
+          arrived += 1;
+          if (arrived === 2) releaseBoth();
+          await bothArrived;
+          return {
+            hits: [
+              {
+                id: `person-${q}`,
+                name: q,
+                description: "Synthetic Company",
+                modified: "2025-01-03 03:04:05+02",
+                url: `https://synthetic.livespace.io/Contact/contact/details/api_id/person-${q}`,
+              },
+            ],
+            rawCount: 1,
+          };
+        },
+      }),
+    });
+    const call = (phrase: string) =>
+      instance.request(
+        modernRequest({
+          method: "tools/call",
+          name: "search_crm",
+          params: { name: "search_crm", arguments: { kinds: ["persons"], phrase } },
+          id: 0,
+        }),
+      );
+    const responses = await Promise.all([call("alpha-synthetic"), call("bravo-synthetic")]);
+    const names = await Promise.all(
+      responses.map(async (response) => {
+        expect(response.status).toBe(200);
+        const payload = await jsonFromResponse(response);
+        expect(payload.id).toBe(0);
+        return payload.result.structuredContent.results.persons.hits[0].name;
+      }),
+    );
+    expect(names).toEqual(["alpha-synthetic", "bravo-synthetic"]);
   });
 
   test("get_records answers a batch call end to end", async () => {
