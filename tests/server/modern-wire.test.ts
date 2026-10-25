@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildApp } from "../../src/server/app.js";
 import type { ServerConfig } from "../../src/config/server-env.js";
-import type { AppDeps } from "../../src/server/mcp.js";
+import { MAX_TOOL_INPUT_ELEMENTS, type AppDeps } from "../../src/server/mcp.js";
 import type { MetadataService } from "../../src/server/tools/crm-metadata.js";
 import type { ActivityFetchers } from "../../src/livespace/activity.js";
 import type { RecordFetchers } from "../../src/livespace/records.js";
@@ -886,5 +886,96 @@ describe("read tool wiring", () => {
       const source = await Bun.file(new URL(path, import.meta.url)).text();
       expect(source).not.toContain("server/cache");
     }
+  });
+});
+
+/**
+ * The largest number of elements (array elements plus object members, the
+ * SDK's `maxToolInputElements` measure) an input valid under `schema` can hold.
+ * An array without `maxItems`, or an object open to unlisted members, has no
+ * such number and fails the test that calls this.
+ */
+function maxInputElements(schema: any, path: string): number {
+  const branches = schema.anyOf ?? schema.oneOf;
+  if (branches !== undefined) {
+    return Math.max(...branches.map((branch: any) => maxInputElements(branch, path)));
+  }
+  if (schema.type === "array") {
+    if (schema.maxItems === undefined) throw new Error(`${path} has no maxItems`);
+    return schema.maxItems * (1 + maxInputElements(schema.items ?? {}, `${path}[]`));
+  }
+  if (schema.type === "object") {
+    if (schema.additionalProperties !== false) {
+      throw new Error(`${path} accepts unlisted members`);
+    }
+    let total = 0;
+    for (const [key, child] of Object.entries(schema.properties ?? {})) {
+      total += 1 + maxInputElements(child, `${path}.${key}`);
+    }
+    return total;
+  }
+  return 0;
+}
+
+describe("tool input bounds", () => {
+  function everyToolApp(overrides: Partial<AppDeps> = {}) {
+    return app({
+      metadata: fakeMetadata(syntheticSection),
+      records: fakeRecords(),
+      activity: fakeActivity(),
+      writes: fakeWrites(),
+      dealSteps: fakeDealSteps(),
+      subdomain: SUBDOMAIN,
+      ...overrides,
+    });
+  }
+
+  // GHSA-46jr-4wx8-v453 and GHSA-mrhx-c7xc-m3w5: validation cost grows with
+  // every element of the arguments, so a valid call has a known ceiling and
+  // the server's cap sits above it.
+  test("every tool input is bounded and fits under the input element cap", async () => {
+    const listed = await jsonFromResponse(
+      await everyToolApp().request(modernRequest({ method: "tools/list" })),
+    );
+    const largest: Record<string, number> = {};
+    for (const tool of listed.result.tools) {
+      largest[tool.name] = maxInputElements(tool.inputSchema, tool.name);
+    }
+    expect(Object.keys(largest)).toHaveLength(11);
+    for (const [name, count] of Object.entries(largest)) {
+      expect({ name, fits: count <= MAX_TOOL_INPUT_ELEMENTS }).toEqual({ name, fits: true });
+    }
+  });
+
+  test("a call over the input element cap is refused before validation and tool work", async () => {
+    let calls = 0;
+    const instance = everyToolApp({
+      records: fakeRecords({
+        searchPhrase: async () => {
+          calls += 1;
+          return { hits: [], rawCount: 0 };
+        },
+      }),
+    });
+    const payload = await jsonFromResponse(
+      await instance.request(
+        modernRequest({
+          method: "tools/call",
+          name: "search_crm",
+          params: {
+            name: "search_crm",
+            arguments: {
+              phrase: "synthetic",
+              padding: Array.from({ length: MAX_TOOL_INPUT_ELEMENTS }, () => 0),
+            },
+          },
+        }),
+      ),
+    );
+    expect(payload.result.isError).toBe(true);
+    expect(payload.result.content[0].text).toContain(
+      `more than the maximum of ${MAX_TOOL_INPUT_ELEMENTS} elements`,
+    );
+    expect(calls).toBe(0);
   });
 });
