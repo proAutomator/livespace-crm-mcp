@@ -194,6 +194,7 @@ the cap, not all CRM users.`,
     sections: z
       .array(z.enum(METADATA_SECTIONS))
       .min(1)
+      .max(METADATA_SECTIONS.length)
       .optional()
       .describe(
         "Dictionary sections to return (default: users with userQuery, otherwise all). Fetch only what you need.",

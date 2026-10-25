@@ -39,12 +39,12 @@ async function repoFile(path: string): Promise<string> {
 }
 
 describe("docs/security.md section 10 contract", () => {
-  test("maps all sixteen numbered requirements to their regression proofs", async () => {
+  test("maps all seventeen numbered requirements to their regression proofs", async () => {
     const security = await repoFile("docs/security.md");
     const rows = [...security.matchAll(/^\|\s*(\d+)\s*\|/gmu)].map(
       (match) => Number(match[1]),
     );
-    expect(rows).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    expect(rows).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
     for (const path of MAP_FILES) expect(security).toContain(`\`${path}\``);
     expect(security).toContain("`bun run test:security`");
   });

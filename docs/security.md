@@ -47,6 +47,12 @@ This document is the threat model and the binding security requirements for
 - Each HTTP request MUST contain one top-level JSON-RPC message. Batch arrays
   MUST be rejected before MCP dispatch so one admission cannot fan out into
   unbounded tool work.
+- Tool arguments MUST be bounded before schema validation, because
+  validation cost grows with every element. Every input array declares a
+  maximum length, and one call's arguments hold at most
+  `MAX_TOOL_INPUT_ELEMENTS` array elements and object members, counted at
+  every level before any schema runs. A call over the cap gets an error
+  result and no tool work. The cap stays above the largest valid input.
 - Request body size limits; a buffered body MUST preserve the original request
   cancellation signal; `x-powered-by` disabled; no directory listings. The
   admission queue and body upload MUST share one absolute deadline, defaulting
@@ -209,6 +215,8 @@ The suite MUST cover at least:
 15. `/mcp` responses are non-cacheable and `/health` exposes status only;
 16. the runtime idle timeout outlasts ingress plus execution, so a handler
     still working past Bun's 10-second default answers normally.
+17. every tool input has a finite largest valid size under the input element
+    cap, and a call over the cap is refused before validation and tool work.
 
 ### Regression map
 
@@ -233,6 +241,7 @@ the complete gate and MUST also pass before release.
 | 14 | `tests/config/server-env.test.ts` and `tests/server/http.test.ts` - bounded execution setting, live abort signal and streamed-response admission lifetime |
 | 15 | `tests/server/http.test.ts` - `no-store`, `Vary: Authorization` and minimal liveness response |
 | 16 | `tests/config/server-env.test.ts` - idle timeout derived from both deadlines and within Bun's maximum; `tests/server/idle-timeout.test.ts` - a 15-second handler answers through the real listener |
+| 17 | `tests/server/modern-wire.test.ts` - `every tool input is bounded and fits under the input element cap`; `a call over the input element cap is refused before validation and tool work` |
 
 ## Trust boundaries (out of scope)
 
