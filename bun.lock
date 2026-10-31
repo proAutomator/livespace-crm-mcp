@@ -17,7 +17,7 @@
     },
   },
   "packages": {
-    "@hono/node-server": ["@hono/node-server@2.1.0", "", { "peerDependencies": { "hono": "^4" } }, "sha512-XovyyCCnBzW+zKu+z/zq8hwNs4KOR5rEMAOxo2f40Q5xoOI37IMm6MIg2COOUtUApo0i6850MTBKH2u4QLGIqg=="],
+    "@hono/node-server": ["@hono/node-server@2.1.5", "", { "peerDependencies": { "hono": "^4 || ^5.0.0-0" } }, "sha512-MgP/I06GdvsilDspMk/qmRzpk8LOUStP6jFAbSRi40W09DhoyUn+Mj7eyKICPqeYKybOjVFLVIAQzvu1bfIa7Q=="],
 
     "@modelcontextprotocol/conformance": ["@modelcontextprotocol/conformance@0.1.16", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.27.1", "@octokit/rest": "^22.0.0", "commander": "^14.0.2", "eventsource-parser": "^3.0.6", "express": "^5.1.0", "jose": "^6.1.2", "undici": "^7.19.0", "yaml": "^2.8.2", "zod": "^4.3.6" }, "bin": { "conformance": "dist/index.js" } }, "sha512-GI7qiN0r39/MH2srVUR3AXaEN0YLCro20lIBbnvc1frBhszenxvUifBuTzxeVQVagILfBzCIcnungUOma8OrgA=="],
 
