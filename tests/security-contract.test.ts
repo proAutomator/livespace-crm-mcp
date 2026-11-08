@@ -83,9 +83,14 @@ describe("docs/security.md section 10 contract", () => {
       "`Authorization` header",
       "`crm:sales-process:write`",
       "`Idempotency-Key`",
+      // The keyed-write resend rule as the client implements it.
+      "at most once after an unknown outcome, once more after a 409 that names `Retry-After`",
     ]) {
       expect(security).toContain(phrase);
     }
+    // Least privilege: crm:deal:read already grants the process dictionaries.
+    expect(security).toContain("| `analyze` | `crm:deal:read` |");
+    expect(security).not.toContain("`crm:sales-process:read`");
   });
 
   test("no source file sends a DELETE request", async () => {

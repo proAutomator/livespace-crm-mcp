@@ -18,6 +18,13 @@ export interface RateLimitSnapshot {
   observedAt: number | null;
 }
 
+const DAY_MS = 86_400_000;
+
+/** The UTC day of an epoch-ms instant; the daily budget resets at 00:00 UTC. */
+function utcDay(epochMs: number): number {
+  return Math.floor(epochMs / DAY_MS);
+}
+
 /** A non-negative integer header, digits only; anything else is "absent". */
 function integerHeader(headers: Headers, name: string): number | null {
   const raw = headers.get(name)?.trim();
@@ -33,6 +40,8 @@ export class RateLimitTracker {
     dailyRemaining: null,
     observedAt: null,
   };
+  /** When the daily count was last seen; it is stale on another UTC day. */
+  private dailyObservedAt: number | null = null;
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -43,6 +52,7 @@ export class RateLimitTracker {
     const reset = integerHeader(headers, "x-ratelimit-reset");
     const daily = integerHeader(headers, "x-ratelimit-daily-remaining");
     if (limit === null && remaining === null && reset === null && daily === null) return;
+    if (daily !== null) this.dailyObservedAt = this.now();
     this.state = {
       burstLimit: limit ?? this.state.burstLimit,
       burstRemaining: remaining ?? this.state.burstRemaining,
@@ -52,8 +62,15 @@ export class RateLimitTracker {
     };
   }
 
+  /** The daily count, or null once 00:00 UTC has passed since it was seen. */
+  private freshDailyRemaining(): number | null {
+    if (this.dailyObservedAt === null) return null;
+    if (utcDay(this.dailyObservedAt) !== utcDay(this.now())) return null;
+    return this.state.dailyRemaining;
+  }
+
   snapshot(): RateLimitSnapshot {
-    return { ...this.state };
+    return { ...this.state, dailyRemaining: this.freshDailyRemaining() };
   }
 
   /** ms to wait before the next request, 0 when none. */
@@ -65,11 +82,13 @@ export class RateLimitTracker {
 
   /**
    * True once the account's daily budget is at or below the reserve. Never
-   * while unknown (no counted response yet), and never with a zero reserve,
+   * while unknown (no counted response yet, or the last count is from before
+   * the 00:00 UTC reset - a refused request is never sent, so nothing else
+   * would ever see the new day's budget), and never with a zero reserve,
    * which turns the guard off.
    */
   isDailyBudgetLow(reserve: number): boolean {
-    const { dailyRemaining } = this.state;
+    const dailyRemaining = this.freshDailyRemaining();
     if (reserve <= 0 || dailyRemaining === null) return false;
     return dailyRemaining <= reserve;
   }

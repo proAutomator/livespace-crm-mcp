@@ -18,7 +18,9 @@ const PROBLEM_NAMESPACE = "https://api.livespace.io/problems/";
 const MAX_POINTERS = 20;
 const POINTER_RE = /^\/[A-Za-z0-9_.\-/]{0,200}$/;
 const REQUEST_ID_RE = /^[0-9a-f]{32}$/;
-const SCOPE_RE = /^crm:[a-z-]+:(read|write|delete)$/;
+/** The scope areas the v2 contract defines; anything else is never echoed. */
+const SCOPE_RE =
+  /^crm:(call|company|cost-catalog|deal|email|note|notification|person|product-catalog|sales-process|task):(read|write|delete)$/;
 
 type ProblemType =
   | "authentication-required"
@@ -90,9 +92,9 @@ export function sanitizePointers(violations: unknown): string[] {
 }
 
 /**
- * `Bearer error="insufficient_scope", scope="crm:deals:write"`: the scopes the
- * challenge names, each surfaced only in the documented `crm:<area>:<level>`
- * shape. The second value tells whether the challenge reported a missing
+ * `Bearer error="insufficient_scope", scope="crm:deal:write"`: the scopes the
+ * challenge names, each surfaced only as a documented `crm:<area>:<level>`
+ * with an area the contract defines. The second value tells whether the challenge reported a missing
  * scope at all.
  */
 function challengeScopes(header: string | null): { insufficient: boolean; scopes: string[] } {

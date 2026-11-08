@@ -33,10 +33,10 @@ set each one needs once it runs on API v2.
 | Tool | Scopes |
 |---|---|
 | `health` | none (`GET /users/me`) |
-| `crm_metadata` | `crm:person:read`, `crm:company:read`, `crm:deal:read`, `crm:task:read`, `crm:sales-process:read` |
+| `crm_metadata` | `crm:person:read`, `crm:company:read`, `crm:deal:read`, `crm:task:read` (`crm:deal:read` also covers the sales process dictionaries) |
 | `search_crm`, `get_records` | `crm:person:read`, `crm:company:read`, `crm:deal:read`, `crm:task:read`; included notes, calls and e-mails add `crm:note:read`, `crm:call:read`, `crm:email:read` |
 | `get_activity` | `crm:note:read`, `crm:call:read`, `crm:email:read`, `crm:task:read` |
-| `analyze` | `crm:deal:read`, `crm:sales-process:read` |
+| `analyze` | `crm:deal:read` |
 | `create_records`, `update_records` | `crm:person:write`, `crm:company:write`, `crm:deal:write`, `crm:task:write` |
 | `move_deals_to_stage` | `crm:deal:write` |
 | `log_activities` | `crm:note:write`, `crm:call:write` |
@@ -174,11 +174,15 @@ names). That content is **untrusted data**:
 - The server ships **no delete and no merge operations at all** - the worst
   mistakes are impossible, not just guarded. The API v2 client cannot send a
   `DELETE` request.
-- API v2 writes without an `Idempotency-Key` (people, companies, deals, notes,
-  notifications) are never resent once dispatched: a timeout, 5xx, network
-  error or abort reports an unknown outcome. Only a 429 retries, because it
-  was refused before processing. A write that carries a key is retried at
-  most once, with the same key.
+- The v2 client treats every `POST` and `PATCH` as a write unless the call
+  marks it as a read (a `POST .../searches`). Writes without an
+  `Idempotency-Key` (people, companies, deals, notes, notifications) are never
+  resent once dispatched: a timeout, 5xx, network error or abort reports an
+  unknown outcome. Only a 429 retries, because it was refused before
+  processing. A write that carries a key is resent only with the same key: at
+  most once after an unknown outcome, once more after a 409 that names
+  `Retry-After` (the first request is still running), and after a 429, never
+  more than three attempts in all.
 - Write tools are absent by default. `LIVESPACE_MCP_ENABLE_WRITES=true` is the
   explicit opt-in, while `LIVESPACE_MCP_READ_ONLY=true` remains a global
   kill-switch and wins over that opt-in.
@@ -299,7 +303,7 @@ The suite MUST cover at least:
 20. API v2 load discipline: explicit `perPage` and bounded pages, a request
     budget per tool call, the burst window and the daily reserve refusal;
 21. API v2 writes without an idempotency key never retry after dispatch, and
-    keyed writes retry only once, with the same key;
+    keyed writes are resent only with the same key, within three attempts;
 22. a non-loopback bind refuses to start without
     `LIVESPACE_V2_SHARED_ACCESS=acknowledged`.
 
@@ -315,7 +319,7 @@ the complete gate and MUST also pass before release.
 | 3 | `tests/server/write-registration.test.ts` - `read-only mode lists the six read tools and none of the write tools`; `read-only refuses a direct call to every write tool, fetchers untouched` |
 | 4 | `tests/server/http.test.ts` - `upstream bodies and bearer tokens reach neither results nor stderr`; `tests/livespace/client.test.ts` - envelope and auth-echo redaction; `tests/server/tools/tool-error.test.ts` - fixed generic mapping |
 | 5 | `tests/server/http.test.ts` - `unknown Origin is rejected` and the localhost control |
-| 6 | `tests/livespace/client.test.ts` - `keeps an opaque user id in POST data and out of the request URL`; `tests/livespace/writes.test.ts` - `recordUrl percent-encodes the id it is given`; `tests/livespace/v2/client.test.ts` - `encodes path ids`, `refuses ids that are empty or dot segments`, `refuses a path that did not come from v2Path` |
+| 6 | `tests/livespace/client.test.ts` - `keeps an opaque user id in POST data and out of the request URL`; `tests/livespace/writes.test.ts` - `recordUrl percent-encodes the id it is given`; `tests/livespace/v2/client.test.ts` - `encodes path ids`, `refuses ids that are empty or dot segments`, `refuses a path that did not come from v2Path`, `every id v2Path accepts builds a path request() accepts` |
 | 7 | `tests/server/modern-wire.test.ts` - `every listed tool carries its exact security annotations`; `tests/server/write-registration.test.ts` - read-only enforcement |
 | 8 | `tests/livespace/metadata.test.ts`, `tests/server/tools/crm-metadata.test.ts`, `tests/livespace/records.test.ts`, `tests/livespace/activity.test.ts`, `tests/livespace/aggregate-windows.test.ts`, `tests/server/tools/search-crm.test.ts`, `tests/server/tools/get-activity.test.ts`, and `tests/server/analyze.test.ts` pin upstream limits, dictionary caps, fixed pages and bounded windows; each API v2 list and search call adds its `perPage` and page-cap test here as its tool moves to API v2 |
 | 9 | `tests/server/http.test.ts` - `buffering a normal MCP body preserves client cancellation` |
@@ -328,9 +332,9 @@ the complete gate and MUST also pass before release.
 | 16 | `tests/config/server-env.test.ts` - idle timeout derived from both deadlines and within Bun's maximum; `tests/server/idle-timeout.test.ts` - a 15-second handler answers through the real listener |
 | 17 | `tests/server/modern-wire.test.ts` - `every tool input is bounded and fits under the input element cap`; `a call over the input element cap is refused before validation and tool work` |
 | 18 | `tests/livespace/v2/client.test.ts` - `sends the key only as a Bearer header`, `does not follow redirects, so the key never leaves for another host`, `the key never appears in errors or stderr`; `tests/config/env.test.ts` - `rejects a malformed v2 key without echoing it` |
-| 19 | `tests/livespace/v2/problems.test.ts` - `violation messages and detail never reach the error`, pointer, request id and scope checks; `tests/server/tools/tool-error.test.ts` - `toToolError copies fields and requestId from LivespaceError details` |
-| 20 | `tests/livespace/v2/budget.test.ts` - `a call over its request budget stops before the next request`, burst and daily tracking; `tests/livespace/v2/client.test.ts` - `refuses when the daily budget is at the reserve`, `spends the call budget per attempt, retries included`, `consecutive requests start at least 150 ms apart` and the burst window tests; `perPage` and page caps as under requirement 8 |
-| 21 | `tests/livespace/v2/client.test.ts` - `a timed-out create without a key is unknown and never resent`, `a keyed write retries once with the same key`, `cancellation before dispatch is CANCELLED, after dispatch of a write is unknown`; `tests/security-contract.test.ts` - `no source file sends a DELETE request` |
+| 19 | `tests/livespace/v2/problems.test.ts` - `violation messages and detail never reach the error`, `403 insufficient-scope names only scopes of a known area`, pointer and request id checks; `tests/server/tools/tool-error.test.ts` - `toToolError copies fields and requestId from LivespaceError details` |
+| 20 | `tests/livespace/v2/budget.test.ts` - `a call over its request budget stops before the next request`, burst and daily tracking; `tests/livespace/v2/client.test.ts` - `refuses when the daily budget is at the reserve`, `spends the call budget per attempt, retries included`, `consecutive requests start at least 150 ms apart`, `a reserve hit before 00:00 UTC clears after the reset` and the burst window tests; `perPage` and page caps as under requirement 8 |
+| 21 | `tests/livespace/v2/client.test.ts` - `a timed-out create without a key is unknown and never resent`, `a POST without the write flag is never resent after dispatch`, `a keyed write retries once with the same key`, `a keyed write is sent at most three times, always with the same key`, `cancellation before dispatch is CANCELLED, after dispatch of a write is unknown`; `tests/security-contract.test.ts` - `no source file sends a DELETE request` |
 | 22 | `tests/config/server-env.test.ts` - `non-loopback bind with a v2 key needs the shared access acknowledgement` |
 
 ## Trust boundaries (out of scope)

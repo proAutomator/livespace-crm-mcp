@@ -112,6 +112,22 @@ describe("RateLimitTracker", () => {
     expect(rate.isDailyBudgetLow(99)).toBe(false);
   });
 
+  test("a low budget observed before 00:00 UTC does not refuse after it", () => {
+    const beforeMidnight = Date.UTC(2026, 9, 25, 23, 59, 59);
+    const clock = { now: beforeMidnight };
+    const rate = tracker(clock);
+    rate.observe(rateHeaders({ "daily-remaining": "50" }));
+    expect(rate.isDailyBudgetLow(100)).toBe(true);
+    clock.now = Date.UTC(2026, 9, 26, 0, 0, 1);
+    expect(rate.isDailyBudgetLow(100)).toBe(false);
+    expect(rate.snapshot().dailyRemaining).toBeNull();
+    // A burst-only header after midnight does not revive yesterday's count.
+    rate.observe(rateHeaders({ remaining: "99" }));
+    expect(rate.isDailyBudgetLow(100)).toBe(false);
+    rate.observe(rateHeaders({ "daily-remaining": "40" }));
+    expect(rate.isDailyBudgetLow(100)).toBe(true);
+  });
+
   test("a zero reserve turns the daily guard off", () => {
     const rate = tracker();
     rate.observe(rateHeaders({ "daily-remaining": "0" }));

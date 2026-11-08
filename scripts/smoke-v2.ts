@@ -6,7 +6,8 @@ import { MEDIA_MINIMAL } from "../src/livespace/v2/media-types.js";
 // Read-only live check of the API v2 client. Run it against a demo or sandbox
 // account only, never a production CRM. It reads LIVESPACE_SUBDOMAIN and
 // LIVESPACE_API_V2_KEY from the environment (Bun loads a local .env, or a
-// secret manager can inject them) and makes exactly two requests.
+// secret manager can inject them) and makes two logical requests (reads may
+// retry a transport failure, so at most six HTTP attempts).
 //
 // Output is statuses and counts only: never record content, never the key.
 // This script's output may land in terminals, CI logs or transcripts.
@@ -35,12 +36,11 @@ try {
   );
   console.log(`GET /users/me: 200, requestId ${requestIdState(me.requestId)}`);
 
-  const deals = await client.request<unknown[]>({
-    method: "POST",
-    path: "/deals/searches",
-    body: { perPage: 1 },
-    accept: MEDIA_MINIMAL,
-  });
+  // A search is a read sent as POST: `write: false` lets it retry.
+  const deals = await client.request<unknown[]>(
+    { method: "POST", path: "/deals/searches", body: { perPage: 1 }, accept: MEDIA_MINIMAL },
+    { write: false },
+  );
   const total = deals.extra["totalCount"];
   const rows = Array.isArray(deals.data) ? deals.data.length : "not a list";
   console.log(

@@ -35,7 +35,11 @@ export interface V2Request {
 
 export interface V2CallOptions {
   signal?: AbortSignal;
-  /** Write semantics: no blind retry once the request went out. */
+  /**
+   * Write semantics: no blind retry once the request went out. Defaults to
+   * true for POST and PATCH, so a forgotten flag can never resend a create;
+   * a `POST .../searches` passes `write: false` to retry like a read.
+   */
   write?: boolean;
   timeoutMs?: number;
   /** The tool call's request budget; every HTTP attempt spends one unit. */
@@ -65,11 +69,41 @@ export interface LivespaceV2ClientOptions extends LivespaceClientOptions {
 
 const METHODS: ReadonlySet<string> = new Set(["GET", "POST", "PATCH"]);
 /** What `v2Path` produces: unreserved characters, `%XX` escapes and slashes. */
-const PATH_RE = /^\/(?!\/)[A-Za-z0-9\-._~%/]*$/;
+const PATH_RE = /^\/[A-Za-z0-9\-._~%/]*$/;
 const DOT_SEGMENT_RE = /^(?:\.|%2e){1,2}$/i;
 const IDEMPOTENCY_KEY_RE = /^[\x21-\x7e]{1,255}$/;
 /** The longest burst window the client waits out before a request. */
 const MAX_BURST_WAIT_MS = 10_000;
+
+function invalidId(): LivespaceError {
+  return new LivespaceError(
+    "VALIDATION_ERROR",
+    "A record id is empty or not a valid id.",
+    "Take ids from search_crm or crm_metadata instead of guessing them.",
+  );
+}
+
+/**
+ * RFC 3986 strict: `encodeURIComponent` leaves `!'()*` as they are, and the
+ * path guard in `request()` accepts only unreserved characters. A lone
+ * surrogate cannot be encoded at all and is a validation error, not a crash.
+ */
+function encodeStrict(value: string): string {
+  let encoded: string;
+  try {
+    encoded = encodeURIComponent(value);
+  } catch {
+    throw new LivespaceError(
+      "VALIDATION_ERROR",
+      "A value in the request is not valid text.",
+      "Remove broken characters from the arguments and retry.",
+    );
+  }
+  return encoded.replace(
+    /[!'()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
 
 /**
  * `v2Path("/deals/{}/process", id)`: each `{}` takes one id, percent-encoded.
@@ -86,14 +120,8 @@ export function v2Path(template: string, ...ids: string[]): string {
   }
   let path = parts[0] ?? "";
   ids.forEach((id, index) => {
-    if (id === "" || id === "." || id === "..") {
-      throw new LivespaceError(
-        "VALIDATION_ERROR",
-        "A record id is empty or not a valid id.",
-        "Take ids from search_crm or crm_metadata instead of guessing them.",
-      );
-    }
-    path += encodeURIComponent(id) + (parts[index + 1] ?? "");
+    if (id === "" || id === "." || id === "..") throw invalidId();
+    path += encodeStrict(id) + (parts[index + 1] ?? "");
   });
   return path;
 }
@@ -104,20 +132,20 @@ export function newIdempotencyKey(): string {
 }
 
 function encodeQueryValue(value: string | number | boolean | readonly string[]): string {
-  if (typeof value === "string") return encodeURIComponent(value);
+  if (typeof value === "string") return encodeStrict(value);
   if (typeof value === "boolean") return String(value);
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new RangeError("A query number must be finite.");
     return String(value);
   }
-  return value.map((item) => encodeURIComponent(item)).join(",");
+  return value.map((item) => encodeStrict(item)).join(",");
 }
 
 function queryString(query: V2Request["query"]): string {
   const parts: string[] = [];
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value === undefined) continue;
-    parts.push(`${encodeURIComponent(key)}=${encodeQueryValue(value)}`);
+    parts.push(`${encodeStrict(key)}=${encodeQueryValue(value)}`);
   }
   return parts.length === 0 ? "" : `?${parts.join("&")}`;
 }
@@ -136,6 +164,7 @@ function writeOutcomeUnknown(): LivespaceError {
 
 /** Per-attempt bookkeeping the retry loop reads after a failure. */
 interface AttemptState {
+  readonly write: boolean;
   dispatched: boolean;
 }
 
@@ -184,7 +213,7 @@ export class LivespaceV2Client {
    */
   async request<T>(req: V2Request, opts: V2CallOptions = {}): Promise<V2Response<T>> {
     const url = this.url(req);
-    const write = opts.write === true;
+    const write = opts.write ?? req.method !== "GET";
     const keyed = req.idempotencyKey !== undefined;
     let unknown = false;
     let keyedRetryUsed = false;
@@ -192,7 +221,7 @@ export class LivespaceV2Client {
     let failure: LivespaceError | undefined;
 
     for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
-      const state: AttemptState = { dispatched: false };
+      const state: AttemptState = { write, dispatched: false };
       try {
         return await this.withSlot(() => this.once<T>(url, req, opts, state), opts.signal);
       } catch (error) {
@@ -248,8 +277,13 @@ export class LivespaceV2Client {
     if (!METHODS.has(req.method)) {
       throw new RangeError("The v2 client sends only GET, POST and PATCH.");
     }
-    // URL parsers resolve `.` and `..` segments, `%2e` spellings included.
-    if (!PATH_RE.test(req.path) || req.path.split("/").some((part) => DOT_SEGMENT_RE.test(part))) {
+    // URL parsers resolve `.` and `..` segments, `%2e` spellings included; an
+    // empty segment (`//`) never comes from v2Path either.
+    const segments = req.path.split("/").slice(1);
+    const badSegment = segments.some(
+      (part, index) => DOT_SEGMENT_RE.test(part) || (part === "" && index < segments.length - 1),
+    );
+    if (!PATH_RE.test(req.path) || badSegment) {
       throw new RangeError("A v2 path must come from v2Path.");
     }
     if (req.idempotencyKey !== undefined && !IDEMPOTENCY_KEY_RE.test(req.idempotencyKey)) {
@@ -364,7 +398,7 @@ export class LivespaceV2Client {
     const body = parseJson(text);
     if (!isRecord(body) || !("data" in body)) {
       // A write that answered 2xx was applied; only its answer is unreadable.
-      if (opts.write === true) throw writeOutcomeUnknown();
+      if (state.write) throw writeOutcomeUnknown();
       throw new LivespaceError(
         "UPSTREAM_ERROR",
         "Livespace API v2 returned a response in an unexpected shape.",

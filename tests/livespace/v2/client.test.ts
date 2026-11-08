@@ -45,6 +45,7 @@ interface Harness {
   sleeps: number[];
   /** The fake clock at each fetch, epoch ms. */
   times: number[];
+  clock: { now: number };
 }
 
 /**
@@ -78,7 +79,7 @@ function harness(
       ...rest,
     },
   );
-  return { client, calls, sleeps, times };
+  return { client, calls, sleeps, times, clock };
 }
 
 const ok = (data: unknown = { id: syntheticId(1) }, headers: Record<string, string> = {}) =>
@@ -137,6 +138,25 @@ describe("LivespaceV2Client requests", () => {
     expect(() => v2Path("/users/me", "x")).toThrow();
   });
 
+  test("every id v2Path accepts builds a path request() accepts", async () => {
+    const id = "abc(1)!*'~._-";
+    const path = v2Path("/deals/{}", id);
+    expect(path).toBe("/deals/abc%281%29%21%2A%27~._-");
+    const { client, calls } = harness({ [`GET ${path}`]: ok({ id: syntheticId(1) }) });
+    await client.request({ method: "GET", path });
+    expect(calls).toHaveLength(1);
+  });
+
+  test("an id or query value that cannot be encoded is a validation error", async () => {
+    expect(() => v2Path("/deals/{}", "\uD800")).toThrow(LivespaceError);
+    const { client, calls } = harness({ "GET /search": ok([]) });
+    const error = await failure(
+      client.request({ method: "GET", path: "/search", query: { q: "\uD800" } }),
+    );
+    expect(error.code).toBe("VALIDATION_ERROR");
+    expect(calls).toHaveLength(0);
+  });
+
   test("refuses ids that are empty or dot segments", () => {
     for (const id of ["", ".", ".."]) {
       expect(() => v2Path("/deals/{}", id)).toThrow(LivespaceError);
@@ -155,6 +175,7 @@ describe("LivespaceV2Client requests", () => {
       "/deals/./x",
       "/deals/%2e%2E/users/me",
       "/deals/.%2e",
+      "/deals//x",
     ]) {
       await expect(client.request({ method: "GET", path })).rejects.toThrow();
     }
@@ -253,11 +274,10 @@ describe("LivespaceV2Client responses", () => {
       requestId: SYNTHETIC_REQUEST_ID,
       replayed: false,
     });
-    const page = await client.request<{ id: string }[]>({
-      method: "POST",
-      path: "/deals/searches",
-      body: { perPage: 1 },
-    });
+    const page = await client.request<{ id: string }[]>(
+      { method: "POST", path: "/deals/searches", body: { perPage: 1 } },
+      { write: false },
+    );
     expect(page.data).toEqual([{ id: syntheticId(1) }]);
     expect(page.extra).toEqual({ page: 1, perPage: 1, totalCount: 7 });
   });
@@ -513,6 +533,54 @@ describe("LivespaceV2Client retries", () => {
     expect(sleeps).toEqual([1000]);
   });
 
+  test("a POST without the write flag is never resent after dispatch", async () => {
+    const { client, calls } = harness({
+      "POST /people": [throwing(timeoutError()), throwing(timeoutError()), created()],
+    });
+    expect((await failure(client.request(CREATE_PERSON))).code).toBe("WRITE_OUTCOME_UNKNOWN");
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a PATCH without the write flag is a write too", async () => {
+    const id = syntheticId(4);
+    const { client, calls } = harness({
+      [`PATCH /deals/${id}`]: [problem(503, "service-unavailable"), ok({ id })],
+    });
+    const error = await failure(
+      client.request({ method: "PATCH", path: v2Path("/deals/{}", id), body: { name: "SYNTHETIC" } }),
+    );
+    expect(error.code).toBe("WRITE_OUTCOME_UNKNOWN");
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a search POST marked write: false retries like a read", async () => {
+    const { client, calls } = harness({
+      "POST /deals/searches": [throwing(timeoutError()), ok([])],
+    });
+    await client.request(
+      { method: "POST", path: "/deals/searches", body: { perPage: 1 } },
+      { write: false },
+    );
+    expect(calls).toHaveLength(2);
+  });
+
+  test("a keyed write is sent at most three times, always with the same key", async () => {
+    const path = `POST /deals/${syntheticId(1)}/tasks`;
+    const { client, calls } = harness({
+      [path]: [
+        throwing(timeoutError()),
+        problem(409, "conflict", { "retry-after": "1" }),
+        created(),
+        created(),
+      ],
+    });
+    await client.request(CREATE_TASK, { write: true });
+    expect(calls).toHaveLength(3);
+    expect(new Set(calls.map((call) => call.headers.get("idempotency-key")))).toEqual(
+      new Set(["lcm-synthetic-0001"]),
+    );
+  });
+
   test("a write rejected with 400 or 422 is a known refusal", async () => {
     const { client, calls } = harness({
       "POST /people": [problem(422, "domain-validation"), created()],
@@ -544,6 +612,18 @@ describe("LivespaceV2Client budgets", () => {
     await client.request(ME);
     await client.request(ME);
     expect(times).toEqual([NOW, NOW + 150, NOW + 300]);
+  });
+
+  test("a reserve hit before 00:00 UTC clears after the reset", async () => {
+    const { client, calls, clock } = harness({
+      "GET /users/me": [ok({}, DAILY_LOW), ok(), ok()],
+    });
+    clock.now = Date.UTC(2026, 9, 25, 23, 59, 0);
+    await client.request(ME);
+    expect((await failure(client.request(ME))).code).toBe("DAILY_BUDGET_LOW");
+    clock.now = Date.UTC(2026, 9, 26, 0, 0, 5);
+    await client.request(ME);
+    expect(calls).toHaveLength(2);
   });
 
   test("a zero reserve never refuses", async () => {
