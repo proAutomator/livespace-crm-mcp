@@ -173,6 +173,7 @@ Pass nextCursor back as cursor for the next page of the same single kind.`,
     kinds: z
       .array(z.enum(ARG_KINDS))
       .min(1)
+      .max(ARG_KINDS.length)
       .optional()
       .describe("Record kinds to search (default: all three)."),
     phrase: z

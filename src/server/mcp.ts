@@ -39,6 +39,16 @@ import type { ToolRunResult } from "./tools/tool-error.js";
 import { updateRecordsToolConfig, runUpdateRecords } from "./tools/update-records.js";
 import { buildWriteCodec, type WriteState } from "./tools/write-support.js";
 
+/**
+ * The most elements (array elements plus object members, counted through
+ * every level) one `tools/call` may carry in its arguments. The SDK counts
+ * them before any schema runs and answers a larger call with an `isError`
+ * result, so validation work stays bounded (docs/security.md par. 2). The
+ * largest valid input today is a full `create_records` batch at 1326; a
+ * wire test fails when a schema change outgrows this cap.
+ */
+export const MAX_TOOL_INPUT_ELEMENTS = 2_000;
+
 export interface AppDeps {
   config: ServerConfig;
   version: string;
@@ -142,6 +152,7 @@ export function createServerFactory(deps: AppDeps): () => McpServer {
           "server/discover": { ttlMs: 60_000, cacheScope: "private" },
           "tools/list": { ttlMs: 60_000, cacheScope: "private" },
         },
+        maxToolInputElements: MAX_TOOL_INPUT_ELEMENTS,
         // A confirmation the client echoes back is attacker-controlled input:
         // the seam verifies its signature before the handler runs and answers
         // the frozen -32602 when it fails. Configured only where write tools

@@ -180,7 +180,7 @@ async function assertPackagedServer(readOnly: boolean): Promise<void> {
   try {
     const health = await waitForHealth(port, child);
     expect(await health.json()).toEqual({ status: "ok" });
-    expect(await initializeVersion(port)).toBe("0.1.2");
+    expect(await initializeVersion(port)).toBe("0.1.3");
     const listed = await modernCall(port, "tools/list", 2);
     expect(listed.result?.tools?.map((tool: any) => tool.name)).toEqual(
       readOnly ? READ_TOOLS : ALL_TOOLS,
@@ -265,9 +265,9 @@ describe("public npm package contract", () => {
     expect(packageJson.scripts.build).toBe("bun run scripts/build-package.ts");
     expect(packageJson.scripts.prepack).toBe("bun run build");
     expect(packageJson.dependencies).toEqual({
-      "@modelcontextprotocol/server": "2.0.0",
-      hono: "4.13.7",
-      zod: "4.4.3",
+      "@modelcontextprotocol/server": "2.3.1",
+      hono: "4.13.11",
+      zod: "4.6.6",
     });
     expect(packageJson.devDependencies).toEqual({
       "@modelcontextprotocol/conformance": "0.1.16",
@@ -347,10 +347,10 @@ describe("public npm package contract", () => {
     expect(readme).toContain("LIVESPACE_API_SECRET");
     expect(readme).toContain("Streamable HTTP");
     expect(readme).toContain(
-      "https://www.npmjs.com/package/livespace-crm-mcp/v/0.1.2",
+      "https://www.npmjs.com/package/livespace-crm-mcp/v/0.1.3",
     );
     expect(readme).toContain(
-      "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.proAutomator%2Flivespace-crm-mcp/versions/0.1.2",
+      "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.proAutomator%2Flivespace-crm-mcp/versions/0.1.3",
     );
   });
 

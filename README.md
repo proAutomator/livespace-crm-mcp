@@ -5,10 +5,10 @@ Unofficial [MCP](https://modelcontextprotocol.io) server for
 instead of mirroring the raw API and targets the stateless Streamable HTTP
 transport in MCP spec 2026-07-28.
 
-Version 0.1.2 is available on
-[npm](https://www.npmjs.com/package/livespace-crm-mcp/v/0.1.2), in the
-[official MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.proAutomator%2Flivespace-crm-mcp/versions/0.1.2),
-and as a [GitHub Release](https://github.com/proAutomator/livespace-crm-mcp/releases/tag/v0.1.2).
+Version 0.1.3 is available on
+[npm](https://www.npmjs.com/package/livespace-crm-mcp/v/0.1.3), in the
+[official MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.proAutomator%2Flivespace-crm-mcp/versions/0.1.3),
+and as a [GitHub Release](https://github.com/proAutomator/livespace-crm-mcp/releases/tag/v0.1.3).
 
 The v1 implementation is complete in this repository. It has six read tools
 and five optional write tools, read-only defaults, bounded API access,
@@ -93,7 +93,7 @@ then use `crm_metadata` before any operation that needs a user, process, stage,
 group or dictionary ID.
 
 `bunx` downloads the package from npm and caches it locally. To pin this
-release, run `bunx livespace-crm-mcp@0.1.2`.
+release, run `bunx livespace-crm-mcp@0.1.3`.
 
 ## Connect an MCP client
 
