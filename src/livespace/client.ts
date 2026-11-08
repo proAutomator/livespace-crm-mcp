@@ -1,4 +1,4 @@
-import type { LivespaceConfig } from "../config/env.js";
+import type { LivespaceV1Config } from "../config/env.js";
 import { buildSignature } from "./crypto.js";
 import { cancelledError, errorFromEnvelope, LivespaceError } from "./errors.js";
 import { createThrottle } from "./throttle.js";
@@ -107,7 +107,7 @@ export class LivespaceClient {
   ) => Promise<T>;
 
   constructor(
-    private readonly config: LivespaceConfig,
+    private readonly config: LivespaceV1Config,
     options: LivespaceClientOptions = {},
   ) {
     this.fetchImpl = options.fetchImpl ?? fetch;
