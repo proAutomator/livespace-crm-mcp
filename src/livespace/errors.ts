@@ -11,7 +11,22 @@ export type LivespaceErrorCode =
   | "TIMEOUT"
   | "CANCELLED"
   | "RATE_LIMITED"
-  | "WRITE_OUTCOME_UNKNOWN";
+  | "WRITE_OUTCOME_UNKNOWN"
+  | "NOT_FOUND"
+  | "CONFLICT"
+  | "INSUFFICIENT_SCOPE"
+  | "DAILY_BUDGET_LOW"
+  | "CALL_BUDGET_EXCEEDED";
+
+/**
+ * Sanitized extras of an API v2 failure (docs/security.md par. 6): JSON Pointer
+ * paths of the rejected inputs, never the upstream messages, and the request
+ * id only in its documented 32-hex shape.
+ */
+export interface LivespaceErrorDetails {
+  fields?: readonly string[];
+  requestId?: string;
+}
 
 export class LivespaceError extends Error {
   constructor(
@@ -29,6 +44,7 @@ export class LivespaceError extends Error {
      * would replay business failures.
      */
     readonly transport: boolean = false,
+    readonly details: LivespaceErrorDetails = {},
   ) {
     super(message);
     this.name = "LivespaceError";

@@ -1,6 +1,7 @@
 import type { LivespaceV1Config } from "../config/env.js";
 import { buildSignature } from "./crypto.js";
 import { cancelledError, errorFromEnvelope, LivespaceError } from "./errors.js";
+import { parseRetryAfterMs } from "./http-shared.js";
 import { createThrottle } from "./throttle.js";
 
 interface Envelope {
@@ -85,14 +86,6 @@ function combineSignals(primary: AbortSignal, extra?: AbortSignal): CombinedSign
       extra.removeEventListener("abort", onExtra);
     },
   };
-}
-
-// Only the delta-seconds form is honored; HTTP-date values are ignored.
-function parseRetryAfterMs(value: string | null): number | undefined {
-  if (value === null) return undefined;
-  const seconds = Number(value.trim());
-  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
-  return Math.round(seconds * 1000);
 }
 
 export class LivespaceClient {

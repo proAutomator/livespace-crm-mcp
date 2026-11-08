@@ -5,6 +5,10 @@ export interface ToolError {
   code: string;
   message: string;
   hint: string;
+  /** Sanitized JSON Pointers of the rejected inputs (API v2 only). */
+  fields?: string[];
+  /** Livespace request id, 32 hex, to quote to Livespace support. */
+  requestId?: string;
 }
 
 /**
@@ -17,6 +21,8 @@ export const toolErrorSchema = z.strictObject({
   code: z.string(),
   message: z.string(),
   hint: z.string(),
+  fields: z.array(z.string()).max(20).optional(),
+  requestId: z.string().regex(/^[0-9a-f]{32}$/).optional(),
 });
 
 /**
@@ -42,7 +48,15 @@ export interface ToolRunResult {
  */
 export function toToolError(error: unknown): ToolError {
   if (error instanceof LivespaceError) {
-    return { code: error.code, message: error.message, hint: error.hint };
+    // `details` was sanitized where the error was built (v2/problems.ts).
+    const { fields, requestId } = error.details;
+    return {
+      code: error.code,
+      message: error.message,
+      hint: error.hint,
+      ...(fields === undefined || fields.length === 0 ? {} : { fields: [...fields] }),
+      ...(requestId === undefined ? {} : { requestId }),
+    };
   }
   return {
     code: "UPSTREAM_ERROR",
