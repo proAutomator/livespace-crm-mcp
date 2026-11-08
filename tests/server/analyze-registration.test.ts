@@ -23,6 +23,7 @@ const BASE_CONFIG: ServerConfig = {
   maxQueuedRequests: 32,
   requestIngressTimeoutMs: 10_000,
   requestExecutionTimeoutMs: 90_000,
+  v2SharedAccessAcknowledged: false,
 };
 
 const PROTOCOL = "2026-07-28";

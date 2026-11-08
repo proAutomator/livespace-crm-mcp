@@ -1,6 +1,14 @@
-import type { LivespaceConfig } from "../config/env.js";
+import type { LivespaceV1Config } from "../config/env.js";
 import { buildSignature } from "./crypto.js";
 import { cancelledError, errorFromEnvelope, LivespaceError } from "./errors.js";
+import {
+  combineSignals,
+  DEFAULT_TIMEOUT_MS,
+  defaultSleep,
+  type LivespaceClientOptions,
+  parseRetryAfterMs,
+  retryDelayMs,
+} from "./http-shared.js";
 import { createThrottle } from "./throttle.js";
 
 interface Envelope {
@@ -27,11 +35,6 @@ function stripAuthEcho(data: unknown): unknown {
   return data;
 }
 
-const BASE_RETRY_DELAY_MS = 200;
-const MAX_RETRY_DELAY_MS = 2_000;
-const MAX_RETRY_AFTER_MS = 10_000;
-const DEFAULT_TIMEOUT_MS = 30_000;
-
 /**
  * The token fetch is sub-second in practice (measured on a sandbox account),
  * so it keeps its own tight budget and ignores per-call overrides. That caps a
@@ -40,13 +43,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  */
 export const TOKEN_TIMEOUT_MS = 10_000;
 
-export interface LivespaceClientOptions {
-  fetchImpl?: typeof fetch;
-  timeoutMs?: number;
-  maxAttempts?: number;
-  sleep?: (ms: number) => Promise<void>;
-  random?: () => number;
-}
+export type { LivespaceClientOptions } from "./http-shared.js";
 
 export interface LivespaceCallOptions {
   signal?: AbortSignal;
@@ -62,39 +59,6 @@ interface PreparedRequest {
   body: URLSearchParams;
 }
 
-interface CombinedSignal {
-  signal: AbortSignal;
-  dispose: () => void;
-}
-
-// AbortSignal.any is not available on every supported runtime; combine
-// manually and always clean up listeners.
-function combineSignals(primary: AbortSignal, extra?: AbortSignal): CombinedSignal {
-  if (!extra) return { signal: primary, dispose: () => {} };
-  const controller = new AbortController();
-  const onPrimary = () => controller.abort(primary.reason);
-  const onExtra = () => controller.abort(extra.reason);
-  if (primary.aborted) controller.abort(primary.reason);
-  else if (extra.aborted) controller.abort(extra.reason);
-  primary.addEventListener("abort", onPrimary, { once: true });
-  extra.addEventListener("abort", onExtra, { once: true });
-  return {
-    signal: controller.signal,
-    dispose: () => {
-      primary.removeEventListener("abort", onPrimary);
-      extra.removeEventListener("abort", onExtra);
-    },
-  };
-}
-
-// Only the delta-seconds form is honored; HTTP-date values are ignored.
-function parseRetryAfterMs(value: string | null): number | undefined {
-  if (value === null) return undefined;
-  const seconds = Number(value.trim());
-  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
-  return Math.round(seconds * 1000);
-}
-
 export class LivespaceClient {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
@@ -107,14 +71,13 @@ export class LivespaceClient {
   ) => Promise<T>;
 
   constructor(
-    private readonly config: LivespaceConfig,
+    private readonly config: LivespaceV1Config,
     options: LivespaceClientOptions = {},
   ) {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.maxAttempts = options.maxAttempts ?? 3;
-    this.sleep =
-      options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    this.sleep = options.sleep ?? defaultSleep;
     this.random = options.random ?? Math.random;
     this.withSlot = createThrottle({
       maxConcurrent: 2,
@@ -216,17 +179,6 @@ export class LivespaceClient {
       );
     }
     return { token: data.token, sessionId: data.session_id };
-  }
-
-  // Full jitter (AWS style): a random fraction of the capped exponential
-  // backoff, or the upstream Retry-After when one was provided
-  // (docs/security.md par. 3 requires jitter, no hot retry loops).
-  private retryDelayMs(attempt: number, retryAfterMs: number | undefined): number {
-    if (retryAfterMs !== undefined) {
-      return Math.min(retryAfterMs, MAX_RETRY_AFTER_MS);
-    }
-    const cap = Math.min(BASE_RETRY_DELAY_MS * 2 ** (attempt - 1), MAX_RETRY_DELAY_MS);
-    return Math.floor(this.random() * cap);
   }
 
   /**
@@ -344,7 +296,7 @@ export class LivespaceClient {
         lastError = error;
       }
       if (attempt < this.maxAttempts) {
-        await this.sleep(this.retryDelayMs(attempt, lastError?.retryAfterMs));
+        await this.sleep(retryDelayMs(attempt, lastError?.retryAfterMs, this.random));
       }
     }
     throw (

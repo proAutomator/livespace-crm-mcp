@@ -23,6 +23,7 @@ const BASE_CONFIG: ServerConfig = {
   maxQueuedRequests: 32,
   requestIngressTimeoutMs: 10_000,
   requestExecutionTimeoutMs: 90_000,
+  v2SharedAccessAcknowledged: false,
   // 44 ASCII bytes, invented: it keeps the write codec off its per-process
   // random fallback so nothing here depends on a startup warning.
   requestStateKey: "synthetic-request-state-key-0123456789-abcd",

@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { LivespaceClient, TOKEN_TIMEOUT_MS } from "../../src/livespace/client.js";
 import { LivespaceError } from "../../src/livespace/errors.js";
-import type { LivespaceConfig } from "../../src/config/env.js";
+import type { LivespaceV1Config } from "../../src/config/env.js";
 
-const CONFIG: LivespaceConfig = {
+const CONFIG: LivespaceV1Config = {
   subdomain: "acme-test",
   apiKey: "synthetic-key",
   apiSecret: "synthetic-secret",

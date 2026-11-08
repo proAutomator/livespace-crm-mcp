@@ -161,6 +161,7 @@ function packagedEnvironment(port: number, readOnly: boolean): Record<string, st
     NO_COLOR: "1",
     MCP_PORT: String(port),
     LIVESPACE_SUBDOMAIN: "synthetic-workspace",
+    LIVESPACE_API_V2_KEY: "ls_synthetic" + "0".repeat(34),
     LIVESPACE_API_KEY: "synthetic-key-package-test",
     LIVESPACE_API_SECRET: "synthetic-secret-package-test",
     MCP_AUTH_TOKEN: PACKAGE_AUTH_TOKEN,

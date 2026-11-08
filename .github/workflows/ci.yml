@@ -48,8 +48,9 @@ jobs:
         # High rate limits: this job tests protocol conformance, not the
         # limiter (the limiter has its own unit and HTTP tests).
         run: |
-          LIVESPACE_SUBDOMAIN=synthetic-ci LIVESPACE_API_KEY=synthetic-ci-key \
-          LIVESPACE_API_SECRET=synthetic-ci-secret \
+          LIVESPACE_SUBDOMAIN=synthetic-ci \
+          LIVESPACE_API_V2_KEY=ls_synthetic0000000000000000000000000000000000 \
+          LIVESPACE_API_KEY=synthetic-ci-key LIVESPACE_API_SECRET=synthetic-ci-secret \
           MCP_RATE_LIMIT_PER_MINUTE=100000 MCP_RATE_LIMIT_BURST=10000 \
           MCP_MAX_CONCURRENT_REQUESTS=64 MCP_MAX_QUEUED_REQUESTS=256 \
           bun run src/index.ts &

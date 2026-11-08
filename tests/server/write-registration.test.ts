@@ -37,6 +37,7 @@ const BASE_CONFIG: ServerConfig = {
   maxQueuedRequests: 32,
   requestIngressTimeoutMs: 10_000,
   requestExecutionTimeoutMs: 90_000,
+  v2SharedAccessAcknowledged: false,
   requestStateKey: REQUEST_STATE_KEY,
 };
 
