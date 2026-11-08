@@ -66,13 +66,13 @@ describe("errorFromProblem mapping", () => {
 
   test("403 insufficient-scope names a well-formed scope from WWW-Authenticate", () => {
     const error = map(403, "insufficient-scope", {}, {
-      "www-authenticate": 'Bearer error="insufficient_scope", scope="crm:deals:write"',
+      "www-authenticate": 'Bearer error="insufficient_scope", scope="crm:deal:write"',
     });
-    expect(error.hint).toContain("crm:deals:write");
+    expect(error.hint).toContain("crm:deal:write");
   });
 
   test("403 insufficient-scope never echoes a malformed scope", () => {
-    for (const scope of ["crm:deals:write<script>", "SYNTHETIC injected", "crm:deals:admin"]) {
+    for (const scope of ["crm:deal:write<script>", "SYNTHETIC injected", "crm:deal:admin"]) {
       const error = map(403, "insufficient-scope", {}, {
         "www-authenticate": `Bearer error="insufficient_scope", scope="${scope}"`,
       });
@@ -225,10 +225,10 @@ describe("problem hygiene", () => {
     const scope = errorFromProblem(
       403,
       null,
-      new Headers({ "www-authenticate": 'Bearer error="insufficient_scope", scope="crm:people:read"' }),
+      new Headers({ "www-authenticate": 'Bearer error="insufficient_scope", scope="crm:person:read"' }),
     );
     expect(scope.code).toBe("INSUFFICIENT_SCOPE");
-    expect(scope.hint).toContain("crm:people:read");
+    expect(scope.hint).toContain("crm:person:read");
     expect(errorFromProblem(403, null, new Headers()).code).toBe("PERMISSION_DENIED");
   });
 });
