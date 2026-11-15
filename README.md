@@ -359,7 +359,7 @@ bun test                 # complete offline suite
 bun run test:security    # focused security contract from docs/security.md
 bun run typecheck
 bun run smoke            # live test-account check via .env or macOS Keychain
-bun run smoke:v2         # read-only API v2 check via .env (from 0.2.0)
+bun run smoke:v2         # read-only API v2 check: the client, then health and crm_metadata through a local read-only server
 bun run dev
 ```
 
