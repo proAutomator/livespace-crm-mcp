@@ -863,9 +863,11 @@ Execution notes.
 ## PR3: search_crm and get_records on v2 (stage 1)
 
 **Status (2026-11-15):** Tasks 1-4 are built on `feat/api-v2-search` and the
-smoke of Task 5 is written. The signatures below are the ones that were
-built; where they differ from the first draft of this section, "Execution
-notes -> PR3" says why.
+live smoke of Task 5 passed on the demo account. The signatures below are
+the ones that were built; where they differ from the first draft of this
+section, "Execution notes -> PR3" says why. Still open from Task 5: the
+comparison of one stage count with the Livespace UI, which needs the
+maintainer.
 
 ### Task 1: filter builder
 
@@ -1823,10 +1825,11 @@ For later PRs:
   `NextStepContext.hasMore` means "no include was asked" for `get_records`;
   an e-mail subject is cut at 200 characters without a flag and `from` is
   not capped; the tasks include returns the five most recently changed
-  tasks, completed ones included; the task sorts `endsAt`, `completedAt` and
-  `createdAt` are in the contract's prose but not flagged sortable in its
-  field table (the smoke sends all seven); `scripts/smoke-v2.ts` still has no
-  offline test and no test boots `src/index.ts` (both carried over).
+  tasks, completed ones included; `scripts/smoke-v2.ts` still has no
+  offline test and no test boots `src/index.ts` (both carried over). The
+  task sorts `endsAt`, `completedAt` and `createdAt`, which the contract
+  names in prose but does not flag sortable in its field table, were
+  accepted live, so they stay.
 
 Gate (on `3ad7682`, clean tree): `bun install --frozen-lockfile`, `bun audit`
 (no vulnerabilities), `bun run typecheck`, `bun test` (1437 pass),
@@ -1840,6 +1843,69 @@ next-step hints, the untrimmed phrase, a missing search total, day bounds in
 zones that switch at midnight and a request id reused for records that sent
 no request.
 
-Live smoke (Task 5): not run yet. `scripts/smoke-v2.ts` part 3 is written and
-read-only; the secret runner refuses an agent session, so the maintainer runs
-it. Its result and the request counts go here.
+Live smoke (Task 5): passed on 2026-11-15 on the demo account, read-only, on
+`8d6baec` with a clean tree. The maintainer ran it in his own terminal with
+the key injected by the secret manager (the runner refuses an agent
+session); the output was kept and read afterwards. It ended with
+`smoke-v2: OK`. No v1 pair and no `LIVESPACE_ACTING_USER_EMAIL` were set.
+
+- The server listed `health`, `crm_metadata`, `search_crm` and `get_records`.
+  `crm_metadata` cost 18 requests on a cold cache and 0 on the second read,
+  as in PR2.
+- Counts add up, which is the check that the filters mean what the tool
+  says: deals 163 open + 9 won + 131 lost + 0 outdated = 303, the total of
+  the unfiltered search; created this year 208 + created before 95 = 303
+  (day bounds in the account's zone leave no gap and no overlap); one
+  process holds 50 open deals and its five stages hold 25, 11, 7, 5 and 2;
+  stages 1 and 2 together 36, so `stageIds` is any-of; tasks 150 open + 49
+  completed = 199.
+- Accepted with 200 and one request each: every filter the demo has data
+  for (status, process, stages, owner, assignee, company on deals and
+  persons, person, name fragment on deals and persons, tag on all three
+  kinds, person and company group, source on persons and deals, task type,
+  completed, overdue, linked deal), the datetime ranges on `createdAt`,
+  `updatedAt` and `statusChangedAt`, bare days on `expectedCloseDate` and on
+  the task `startsAt` (`gte` and `lte`), `page` 2, minimal and full detail.
+- Sorts accepted: all seven task fields (`title`, `priority`, `startsAt`,
+  `updatedAt`, `endsAt`, `completedAt`, `createdAt`), four person fields,
+  and deals by `name`, `createdAt`, `updatedAt`, `expectedCloseDate` and
+  `statusChangedAt`. Companies were sorted by `name` only.
+- Custom-field filters accepted: `isNotEmpty`, `contains` and `eq` on a
+  person text field; `anyOf`, `noneOf` and `isEmpty` on a company choice
+  field (77 + 193 = 270, every company).
+- Phrase search: one request for four kinds, hits in persons, companies,
+  deals and notes; a word of a deal name finds the deal.
+- `mine` without an acting user: refused with `NO_ACTING_USER`, 0 requests.
+- `get_records` on the SYNTHETIC deal with every include: 8 requests (the
+  record and seven includes; `wall` is reported unavailable and costs
+  nothing). The process came back with 5 stages, exactly 1 current, 17
+  steps, 1 required and 2 completed; the budget summary was present; 4
+  notes, 1 call and 2 tasks, each with its total. Five deals at minimal
+  detail: 5 requests. A person and a company with the four activity
+  includes: 5 requests each. A task: 1. A random id: `not_found`, 1 request.
+- Refused before any request (0 requests each): a deal filter on persons, a
+  sort field the kind does not have, an id of the old API, 25 ids with two
+  includes.
+- Request counts: every `search_crm` call is 1 request per kind, a phrase
+  search 1 for all kinds, `get_records` 1 per record plus 1 per record and
+  include. The record tools part spent 96 requests; the whole run 216
+  (49866 before, 49650 after), about half of them the `health` calls that
+  measure the cost of each step.
+
+Not covered by this run, because the demo has no data for it or the
+environment did not set it:
+
+- `mine` with a resolved acting user (deals and tasks were checked in Q5;
+  persons and companies never were). Rerun with
+  `LIVESPACE_ACTING_USER_EMAIL` set.
+- Deal groups (the dictionary is empty), `taxId` (no listed company has
+  one), the `outdated` status (no such deal), checkbox custom fields and any
+  deal or task custom field (the demo has none).
+- The product-line and e-mail mappers: the SYNTHETIC deal has no line and no
+  e-mail, so both lists came back empty. They follow the draft alone.
+- The task type filter was accepted but matched 0 tasks for the first type
+  of the dictionary, so its meaning is not confirmed by a count.
+- The comparison of one stage count with the Livespace UI (Task 5): the
+  maintainer compares the line `stages: [25, 11, 7, 5, 2]` (open deals per
+  stage of the default process, or of the first selectable one when the
+  default is switched off) with the UI.
