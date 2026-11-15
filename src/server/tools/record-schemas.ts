@@ -152,3 +152,145 @@ export const wallEntrySchema = z.strictObject({
   objectName: z.string(),
   objectType: z.string(),
 });
+
+// --- API v2 records (`src/livespace/v2/records.ts`) -------------------------
+//
+// The same rules as above: strict, per kind, only the identifying core
+// required. A nested reference is `{id, name}` or null; null means this
+// answer supplies no value.
+
+export const refSchema = z.strictObject({ id: z.string(), name: z.string() });
+
+const nullableRef = refSchema.nullable();
+
+const customFieldValueSchema = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  type: z.string(),
+  value: z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]).nullable(),
+});
+
+const addressSchema = z.strictObject({
+  name: z.string().nullable(),
+  street: z.string().nullable(),
+  city: z.string().nullable(),
+  postcode: z.string().nullable(),
+  region: z.string().nullable(),
+  country: z.string().nullable(),
+  isMain: z.boolean(),
+});
+
+export const personV2Schema = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  firstName: z.string().optional(),
+  lastName: z.string().optional(),
+  company: nullableRef.optional(),
+  position: nullableRef.optional(),
+  owner: nullableRef.optional(),
+  owners: z.array(refSchema).optional(),
+  emails: z.array(z.string()).optional(),
+  phones: z.array(z.string()).optional(),
+  tags: z.array(z.string()).optional(),
+  groups: z.array(refSchema).optional(),
+  source: nullableRef.optional(),
+  description: z.string().nullable().optional(),
+  visibility: z.string().optional(),
+  lastActivity: z.string().nullable().optional(),
+  createdAt: z.string().nullable().optional(),
+  updatedAt: z.string().nullable().optional(),
+  addresses: z.array(addressSchema).optional(),
+  customFields: z.array(customFieldValueSchema).optional(),
+  url: z.string().optional(),
+});
+
+export const companyV2Schema = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  taxId: z.string().nullable().optional(),
+  regon: z.string().nullable().optional(),
+  owner: nullableRef.optional(),
+  owners: z.array(refSchema).optional(),
+  emails: z.array(z.string()).optional(),
+  phones: z.array(z.string()).optional(),
+  websites: z.array(z.string()).optional(),
+  tags: z.array(z.string()).optional(),
+  groups: z.array(refSchema).optional(),
+  source: nullableRef.optional(),
+  description: z.string().nullable().optional(),
+  visibility: z.string().optional(),
+  lastActivity: z.string().nullable().optional(),
+  createdAt: z.string().nullable().optional(),
+  updatedAt: z.string().nullable().optional(),
+  addresses: z.array(addressSchema).optional(),
+  customFields: z.array(customFieldValueSchema).optional(),
+  url: z.string().optional(),
+});
+
+export const dealV2Schema = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  number: z.string().nullable().optional(),
+  status: z.string().nullable().optional(),
+  value: z.number().nullable().optional(),
+  currency: z.string().nullable().optional(),
+  process: nullableRef.optional(),
+  stage: nullableRef.optional(),
+  owner: nullableRef.optional(),
+  owners: z.array(refSchema).optional(),
+  company: nullableRef.optional(),
+  person: nullableRef.optional(),
+  expectedCloseDate: z.string().nullable().optional(),
+  statusChangedAt: z.string().nullable().optional(),
+  stageChangedAt: z.string().nullable().optional(),
+  lastActivity: z.string().nullable().optional(),
+  createdAt: z.string().nullable().optional(),
+  updatedAt: z.string().nullable().optional(),
+  tags: z.array(z.string()).optional(),
+  groups: z.array(refSchema).optional(),
+  source: nullableRef.optional(),
+  description: z.string().nullable().optional(),
+  visibility: z.string().optional(),
+  reason: z
+    .strictObject({
+      kind: z.enum(["won", "lost", "outdated"]),
+      name: z.string(),
+      note: z.string().nullable(),
+    })
+    .nullable()
+    .optional(),
+  probability: z.number().nullable().optional(),
+  customFields: z.array(customFieldValueSchema).optional(),
+  url: z.string().optional(),
+});
+
+export const taskV2Schema = z.strictObject({
+  id: z.string(),
+  title: z.string(),
+  description: z.string().nullable().optional(),
+  completed: z.boolean().optional(),
+  completedAt: z.string().nullable().optional(),
+  priority: z.enum(["normal", "high"]).optional(),
+  dueType: z.string().optional(),
+  startsAt: z.string().nullable().optional(),
+  endsAt: z.string().nullable().optional(),
+  allDay: z.boolean().nullable().optional(),
+  type: nullableRef.optional(),
+  status: nullableRef.optional(),
+  private: z.boolean().optional(),
+  recurring: z.boolean().optional(),
+  assignees: z.array(refSchema).optional(),
+  links: z
+    .array(
+      z.strictObject({
+        kind: z.enum(["person", "company", "deal"]),
+        id: z.string(),
+        name: z.string(),
+      }),
+    )
+    .optional(),
+  createdAt: z.string().nullable().optional(),
+  updatedAt: z.string().nullable().optional(),
+  customFields: z.array(customFieldValueSchema).optional(),
+  url: z.string().optional(),
+});

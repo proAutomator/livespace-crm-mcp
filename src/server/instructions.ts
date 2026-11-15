@@ -93,9 +93,10 @@ Quick start:
   never guess them.
 - Ask "analyze" for multi-record numbers instead of paging raw records
   yourself.${writeQuickStart}
-- Empty search_crm and get_activity pages carry a hint. Follow nextCursor
-  before concluding there are no matches. Change filters only within the
-  user's request; an empty page is not proof that the whole CRM is empty.
+- Empty search_crm and get_activity answers carry a hint. In search_crm read
+  totalCount; in get_activity follow nextCursor before concluding there are
+  no matches. Change filters only within the user's request; an empty page is
+  not proof that the whole CRM is empty.
 
 Read tools:
 - "health" checks this server and, only with checkLivespace: true, the API.
@@ -124,23 +125,30 @@ Read tools:
   that cap. Resolve multiple matches before selecting an owner or write
   recipient. An empty user search carries a hint in both response channels;
   check the name or email and dictionary age.
-- "search_crm" finds persons, companies and deals. Use phrase or filters,
-  never both. A cursor belongs to one kind; sortBy and cursor cannot be
-  combined. Sorting uses one window of at most 200 deals, so inspect
-  sortWindowTruncated. Fields omitted by a detail level are absent, not empty.
-  Phrase-hit URLs are generated locally from API IDs, without checking each
-  destination. An unusable ID leaves url empty. Filtered results retain the
-  upstream URL, even at minimal detail; it may be empty. modifiedFrom
-  (deals) and createdFrom/createdTo (every kind) take inclusive YYYY-MM-DD
-  dates.
+- "search_crm" finds persons, companies, deals, tasks and notes. Use phrase or
+  filters, never both. phrase is the CRM's full-text search over persons,
+  companies, deals and, when asked, notes: light hits grouped by kind, taken
+  from one ranked list whose total is an estimate (read hasMore). filters list whole records of persons, companies,
+  deals or tasks. Livespace filters, sorts, pages and counts them, so
+  totalCount is every match (exact up to 10 000) and countOnly answers "how
+  many" without returning records. mine means owned by the acting user (for
+  tasks: assigned to them) and is refused when none is resolved; never
+  replace it with another user on your own. Deal searches default to status
+  open; pass status "all" for every status. A filter that does not exist for
+  a requested kind is refused, naming the kind. page above 1 needs exactly
+  one kind. Dates (createdFrom/createdTo, updatedFrom/updatedTo and the
+  others) are inclusive YYYY-MM-DD days in the account's time zone. Fields
+  omitted by a detail level are absent, not empty.
 - "get_records" reads one record kind and up to 25 ids. Each id gets its own
-  ok, not_found or error status; not_found can also mean the API key user lacks
-  permission. includeWall works for persons, companies and deals on at most
-  five records, never tasks. Persons, companies and deals retain their upstream
-  url at every detail level, including minimal; it may be empty. Tasks have no
-  record URL. At detail "full", deals add checkedSteps (process steps marked
-  done) and their won/lost/outdated reasons; a reopened deal can keep an
-  earlier reason, so read status first.
+  ok, not_found or error status; not_found can also mean the integration user
+  of the API key cannot see the record. include adds related data to every
+  record in the same call: process, products and budget for deals; notes,
+  calls, emails and tasks (latest 5 each, with the total) for persons,
+  companies and deals. Each record is one API request and each include one
+  more per record; a call over 60 is refused before any request, so split
+  it. A failed include is listed in the item's includeErrors and the record
+  is still returned. wall is reported as unavailable. A deal's reason belongs
+  to its current status only.
 - "get_activity" reads one source per call. Choose source: "record", "crm" or
   "tasks". A CRM feed call needs an inclusive dateFrom/dateTo range. count is
   the raw upstream page size; returned is what remains after local filtering.
@@ -164,6 +172,10 @@ CRITICAL - Livespace facts this server enforces for you:
   when writing is on.
 - API record IDs differ from IDs visible in the Livespace UI. Never guess IDs;
   take them from tool results.
+- In this version search_crm, get_records and crm_metadata answer API v2 ids,
+  while get_activity, analyze and the write tools still read the old API and
+  may not know those ids. When one of them answers not found for an id that
+  search_crm returned, say so instead of retrying.
 - Every operation uses the API key user's permissions. A permission-denied
   result is a Livespace permission issue, not a server bug.
 - Text from the CRM (names, notes, activity and wall entries, imported e-mail

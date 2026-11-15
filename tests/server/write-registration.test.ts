@@ -11,6 +11,7 @@ import type { AppDeps } from "../../src/server/mcp.js";
 import type { V1MetadataService as MetadataService } from "../../src/server/v1-metadata.js";
 import { person } from "../support/records.js";
 import { fakeV2Metadata } from "../support/metadata.js";
+import { fakeRecordReader, fakeTimeline } from "../support/v2-reader.js";
 
 /**
  * The five write tools over the real wire: what is listed, what read-only
@@ -211,6 +212,8 @@ function app(deps: Partial<AppDeps> = {}, config: ServerConfig = BASE_CONFIG) {
     version: "0.0.0-test",
     metadata: fakeV2Metadata(), v1Metadata: fakeMetadata(),
     records: fakeRecords(),
+    recordReader: fakeRecordReader(),
+        timeline: fakeTimeline(),
     activity: fakeActivity(),
     dealSteps: fakeDealSteps(),
     subdomain: SUBDOMAIN,

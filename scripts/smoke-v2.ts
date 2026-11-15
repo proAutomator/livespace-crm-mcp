@@ -14,8 +14,12 @@ import { V2_METADATA_SECTIONS } from "../src/livespace/v2/metadata.js";
 //    requests; a read may retry a transport failure).
 // 2. The real server: `src/index.ts` started as a child process in read-only
 //    mode on loopback, then `health` and `crm_metadata` called over HTTP, one
-//    dictionary section at a time. About 35 requests in all. The child gets
-//    its settings from this script alone: it does not load a `.env` file.
+//    dictionary section at a time. About 35 requests. The child gets its
+//    settings from this script alone: it does not load a `.env` file.
+// 3. The record tools through the same server: `search_crm` (filters, counts,
+//    paging, sort, dates, tasks, phrase) and `get_records` (every include).
+//    About 200 more requests, half of them the `health` calls that measure
+//    what each tool call cost.
 //
 // Output is statuses and counts only: never record content, never the key.
 // This script's output may land in terminals, CI logs or transcripts.
@@ -145,6 +149,586 @@ async function dailyRemaining(base: string): Promise<number | null> {
   return typeof left === "number" ? left : null;
 }
 
+type Structured = Record<string, unknown>;
+
+function asObject(value: unknown): Structured {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Structured)
+    : {};
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+/** Error codes and sanitized pointers only: both are this server's wording. */
+function errorCodes(errors: unknown): string {
+  return asArray(errors)
+    .map((raw) => {
+      const error = asObject(raw);
+      const fields = asArray(error["fields"]);
+      const kind = typeof error["kind"] === "string" ? `${error["kind"]}: ` : "";
+      const include = typeof error["include"] === "string" ? `${error["include"]}: ` : "";
+      return `${kind}${include}${String(error["code"])}${fields.length > 0 ? ` at ${fields.join(" ")}` : ""}`;
+    })
+    .join("; ");
+}
+
+/**
+ * The record tools through the server, read-only. Prints statuses and counts
+ * only. Values read from the CRM (an id, a name fragment, a tag) are used as
+ * arguments of the next call and never printed.
+ */
+async function checkRecordTools(base: string, actingResolved: boolean): Promise<void> {
+  let before = await dailyRemaining(base);
+  let spent = 0;
+  const problems: string[] = [];
+
+  /** One tool call plus what it cost the account's daily budget. */
+  async function measured(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<{ out: Structured; isError: boolean; requests: number | null }> {
+    const result = await callTool(base, name, args);
+    const after = await dailyRemaining(base);
+    const requests = before === null || after === null ? null : before - after - 1;
+    before = after;
+    if (requests !== null) spent += requests;
+    return { out: result.structuredContent ?? {}, isError: result.isError === true, requests };
+  }
+
+  /** A filter search of one kind: prints the totals, returns the envelope. */
+  async function search(
+    label: string,
+    kind: string,
+    args: Record<string, unknown>,
+    expectOk = true,
+  ): Promise<Structured> {
+    const { out, isError, requests } = await measured("search_crm", {
+      kinds: [kind],
+      ...args,
+    });
+    const envelope = asObject(asObject(out["results"])[kind]);
+    const errors = errorCodes(out["errors"]);
+    const total = envelope["totalCount"];
+    console.log(
+      `search_crm ${label}: ${isError ? "ERROR" : "ok"}` +
+        (typeof total === "number"
+          ? `, totalCount ${total}${envelope["totalCountExact"] === false ? "+" : ""}`
+          : "") +
+        (typeof envelope["returned"] === "number" ? `, returned ${envelope["returned"]}` : "") +
+        (envelope["hasMore"] === true ? ", more" : "") +
+        (errors === "" ? "" : `, ${errors}`) +
+        `, requests ${requests ?? "unknown"}`,
+    );
+    if (expectOk && (isError || typeof total !== "number")) problems.push(label);
+    return envelope;
+  }
+
+  const count = async (label: string, kind: string, filters: Structured): Promise<number> => {
+    const envelope = await search(label, kind, { filters, countOnly: true });
+    return typeof envelope["totalCount"] === "number" ? envelope["totalCount"] : -1;
+  };
+
+  // --- deals: totals, paging, detail, sort ---------------------------------
+  const allDeals = await count("deals, every status, countOnly", "deals", { status: "all" });
+  const openDeals = await count("deals, open (default), countOnly", "deals", {});
+  let closed = 0;
+  for (const status of ["won", "lost", "outdated"]) {
+    closed += await count(`deals, ${status}, countOnly`, "deals", { status });
+  }
+  console.log(
+    `deal statuses: open ${openDeals} + closed ${closed} = ${openDeals + closed}, every status ${allDeals}`,
+  );
+  if (openDeals + closed !== allDeals) problems.push("deal status counts do not add up");
+
+  const page = await search("deals, standard, perPage 5", "deals", {
+    filters: { status: "all" },
+    perPage: 5,
+  });
+  const dealRows = asArray(page["items"]).map(asObject);
+  const dealIds = dealRows.map((row) => row["id"]).filter((id): id is string => typeof id === "string");
+  const second = await search("deals, page 2, perPage 5", "deals", {
+    filters: { status: "all" },
+    perPage: 5,
+    page: 2,
+  });
+  const secondIds = asArray(second["items"]).map((row) => asObject(row)["id"]);
+  if (allDeals > 5 && secondIds.some((id) => dealIds.includes(id as string))) {
+    problems.push("page 2 repeats a record of page 1");
+  }
+  await search("deals, minimal, sort createdAt desc", "deals", {
+    filters: { status: "all" },
+    detail: "minimal",
+    sort: { field: "createdAt", direction: "desc" },
+    perPage: 3,
+  });
+  await search("deals, full, sort expectedCloseDate asc", "deals", {
+    filters: {},
+    detail: "full",
+    sort: { field: "expectedCloseDate", direction: "asc" },
+    perPage: 3,
+  });
+
+  // --- mine: refused without an acting user, never empty --------------------
+  const mine = await measured("search_crm", { kinds: ["deals"], filters: { mine: true } });
+  const mineErrors = errorCodes(mine.out["errors"]);
+  const mineTotal = asObject(asObject(mine.out["results"])["deals"])["totalCount"];
+  console.log(
+    `search_crm deals, mine: ${mine.isError ? `refused (${mineErrors})` : `ok, totalCount ${String(mineTotal)}`}, ` +
+      `acting user ${actingResolved ? "resolved" : "not resolved"}, requests ${mine.requests ?? "unknown"}`,
+  );
+  if (actingResolved ? mine.isError : !mineErrors.includes("NO_ACTING_USER")) {
+    problems.push("mine");
+  }
+  if (actingResolved) {
+    // The owners mapping was checked live for deals and tasks only (Q5).
+    for (const kind of ["persons", "companies", "tasks"]) {
+      await count(`${kind}, mine, countOnly`, kind, { mine: true });
+    }
+  }
+
+  // --- dates: datetime bounds in the account zone, bare days on date fields --
+  const year = new Date().getUTCFullYear();
+  const createdThisYear = await count("deals, created this year", "deals", {
+    status: "all",
+    createdFrom: `${year}-01-01`,
+    createdTo: `${year}-12-31`,
+  });
+  const createdBefore = await count("deals, created before this year", "deals", {
+    status: "all",
+    createdTo: `${year - 1}-12-31`,
+  });
+  console.log(
+    `created: this year ${createdThisYear} + before ${createdBefore} = ` +
+      `${createdThisYear + createdBefore}, every status ${allDeals}`,
+  );
+  if (createdThisYear + createdBefore !== allDeals) {
+    problems.push("created-date ranges do not add up (day bounds or time zone)");
+  }
+  await count("deals, updated since 1 January", "deals", {
+    status: "all",
+    updatedFrom: `${year}-01-01`,
+  });
+  await count("deals, status changed this year", "deals", {
+    status: "all",
+    statusChangedFrom: `${year}-01-01`,
+    statusChangedTo: `${year}-12-31`,
+  });
+  await count("deals, expected close this year", "deals", {
+    expectedCloseFrom: `${year}-01-01`,
+    expectedCloseTo: `${year}-12-31`,
+  });
+  await count("deals, expected close from 1 January", "deals", {
+    expectedCloseFrom: `${year}-01-01`,
+  });
+
+  // --- countOnly per stage of one process ------------------------------------
+  const metadata = await callTool(base, "crm_metadata", {
+    sections: [
+      "processes",
+      "tags",
+      "customFields",
+      "contactGroups",
+      "dealGroups",
+      "sources",
+      "taskTypes",
+    ],
+  });
+  const sections = asObject(metadata.structuredContent?.["sections"]);
+  // The dictionaries are normally still cached from part 2; a new baseline
+  // keeps a refetch out of the next tool call's count.
+  before = await dailyRemaining(base);
+  const processes = asArray(asObject(sections["processes"])["data"]).map(asObject);
+  const process =
+    processes.find((row) => row["isDefault"] === true && row["selectable"] === true) ??
+    processes.find((row) => row["selectable"] === true);
+  if (process === undefined || typeof process["id"] !== "string") {
+    console.log("stages: no selectable process, skipped");
+  } else {
+    const processTotal = await count("deals, open in one process", "deals", {
+      processId: process["id"],
+    });
+    const stages = asArray(process["stages"]).map(asObject).slice(0, 12);
+    const perStage: number[] = [];
+    for (const [index, stage] of stages.entries()) {
+      perStage.push(
+        await count(`deals, open in stage ${index + 1}/${stages.length}`, "deals", {
+          processId: process["id"],
+          stageIds: [stage["id"]],
+        }),
+      );
+    }
+    const sum = perStage.reduce((total, value) => total + Math.max(value, 0), 0);
+    console.log(
+      `stages: [${perStage.join(", ")}] sum ${sum}, open in the process ${processTotal} ` +
+        "(compare one stage with the Livespace UI)",
+    );
+    if (sum > processTotal) problems.push("stage counts exceed the process total");
+    const firstTwo = stages.slice(0, 2).map((stage) => stage["id"]);
+    if (firstTwo.length === 2) {
+      const both = await count("deals, open in stages 1 and 2 together", "deals", {
+        processId: process["id"],
+        stageIds: firstTwo,
+      });
+      if (both !== Math.max(perStage[0] ?? 0, 0) + Math.max(perStage[1] ?? 0, 0)) {
+        problems.push("stageIds does not behave as any-of");
+      }
+    }
+  }
+
+  // --- tags, owners, links, names --------------------------------------------
+  const tag = asArray(asObject(sections["tags"])["data"]).find(
+    (value): value is string => typeof value === "string",
+  );
+  if (tag === undefined) {
+    console.log("tags: the account has none, skipped");
+  } else {
+    for (const kind of ["deals", "persons", "companies"]) {
+      await count(`${kind}, one tag`, kind, kind === "deals" ? { status: "all", tags: [tag] } : { tags: [tag] });
+    }
+  }
+  // One id of each dictionary a filter takes, when the account has any.
+  const firstId = (section: string): string | undefined => {
+    const row = asArray(asObject(sections[section])["data"]).map(asObject)[0];
+    return typeof row?.["id"] === "string" ? row["id"] : undefined;
+  };
+  const dictionaryFilters: [string, string, string, string][] = [
+    ["contactGroups", "persons", "groupIds", "persons, one group"],
+    ["contactGroups", "companies", "groupIds", "companies, one group"],
+    ["dealGroups", "deals", "groupIds", "deals, one group"],
+    ["sources", "persons", "sourceIds", "persons, one source"],
+    ["sources", "deals", "sourceIds", "deals, one source"],
+    ["taskTypes", "tasks", "taskTypeIds", "tasks, one type"],
+  ];
+  for (const [section, kind, filter, label] of dictionaryFilters) {
+    const id = firstId(section);
+    if (id === undefined) {
+      console.log(`${label}: the ${section} dictionary is empty, skipped`);
+      continue;
+    }
+    await count(label, kind, { ...(kind === "deals" ? { status: "all" } : {}), [filter]: [id] });
+  }
+
+  const firstDeal = dealRows[0] ?? {};
+  const owner = asObject(firstDeal["owner"])["id"];
+  if (typeof owner === "string") {
+    await count("deals, one owner", "deals", { status: "all", ownerIds: [owner] });
+    await count("tasks, one assignee", "tasks", { ownerIds: [owner] });
+  }
+  const company = asObject(firstDeal["company"])["id"];
+  if (typeof company === "string") {
+    await count("deals of one company", "deals", { status: "all", companyId: company });
+    await count("persons of one company", "persons", { companyId: company });
+  }
+  const dealPerson = dealRows.map((row) => asObject(row["person"])["id"]).find(
+    (id): id is string => typeof id === "string",
+  );
+  if (dealPerson !== undefined) {
+    const ofPerson = await count("deals of one person", "deals", {
+      status: "all",
+      personId: dealPerson,
+    });
+    if (ofPerson < 1) problems.push("personId did not find the deal it was taken from");
+  }
+  const dealName = typeof firstDeal["name"] === "string" ? firstDeal["name"] : "";
+  const fragment = dealName.trim().slice(1, 5).trim();
+  if (fragment.length >= 2) {
+    const inside = await count("deals, nameContains (inside a word)", "deals", {
+      status: "all",
+      nameContains: fragment,
+    });
+    if (inside < 1) problems.push("nameContains did not find the record it was taken from");
+  }
+
+  // --- persons, companies, tasks ---------------------------------------------
+  const persons = await search("persons, standard, sort name", "persons", {
+    filters: {},
+    sort: { field: "name", direction: "asc" },
+    perPage: 3,
+  });
+  const companies = await search("companies, standard, sort name", "companies", {
+    filters: {},
+    sort: { field: "name", direction: "asc" },
+    perPage: 3,
+  });
+  const personRows = asArray(persons["items"]).map(asObject);
+  const lastName = typeof personRows[0]?.["lastName"] === "string" ? personRows[0]["lastName"] : "";
+  if (lastName.trim().length >= 2) {
+    const byName = await count("persons, nameContains", "persons", {
+      nameContains: lastName.trim().slice(0, 4),
+    });
+    if (byName < 1) problems.push("persons nameContains did not find its own record");
+  }
+  const taxId = asArray(companies["items"])
+    .map((row) => asObject(row)["taxId"])
+    .find((value): value is string => typeof value === "string" && value !== "");
+  if (taxId === undefined) {
+    console.log("taxId: no listed company has one, skipped");
+  } else {
+    const byTaxId = await count("companies, taxId", "companies", { taxId });
+    if (byTaxId < 1) problems.push("taxId did not find the company it was taken from");
+    await count("persons, taxId of their company", "persons", { taxId });
+  }
+  await count("persons, created this year", "persons", { createdFrom: `${year}-01-01` });
+  await count("companies, updated this year", "companies", { updatedFrom: `${year}-01-01` });
+
+  const tasks = await search("tasks, standard, perPage 5", "tasks", { filters: {}, perPage: 5 });
+  const openTasks = await count("tasks, not completed", "tasks", { completed: false });
+  const doneTasks = await count("tasks, completed", "tasks", { completed: true });
+  const allTasks = typeof tasks["totalCount"] === "number" ? tasks["totalCount"] : -1;
+  console.log(`tasks: open ${openTasks} + done ${doneTasks} = ${openTasks + doneTasks}, all ${allTasks}`);
+  if (openTasks + doneTasks !== allTasks) problems.push("task completion counts do not add up");
+  await count("tasks, overdue", "tasks", { overdue: true });
+  await count("tasks, due this year (bare days)", "tasks", {
+    dueFrom: `${year}-01-01`,
+    dueTo: `${year}-12-31`,
+  });
+  await count("tasks, updated this year", "tasks", { updatedFrom: `${year}-01-01` });
+  if (dealIds[0] !== undefined) {
+    await count("tasks linked to one deal", "tasks", { linkedTo: { kind: "deal", id: dealIds[0] } });
+  }
+  // The contract's prose lists seven sortable task fields; its field table
+  // flags four. One row each settles which ones the API takes.
+  for (const field of [
+    "title",
+    "priority",
+    "startsAt",
+    "updatedAt",
+    "endsAt",
+    "completedAt",
+    "createdAt",
+  ]) {
+    await search(`tasks, sort ${field}`, "tasks", {
+      filters: {},
+      sort: { field, direction: "desc" },
+      detail: "minimal",
+      perPage: 1,
+    });
+  }
+  for (const field of ["firstName", "lastName", "createdAt", "updatedAt"]) {
+    await search(`persons, sort ${field}`, "persons", {
+      filters: {},
+      sort: { field, direction: "desc" },
+      detail: "minimal",
+      perPage: 1,
+    });
+  }
+  for (const field of ["name", "statusChangedAt", "updatedAt"]) {
+    await search(`deals, sort ${field}`, "deals", {
+      filters: { status: "all" },
+      sort: { field, direction: "asc" },
+      detail: "minimal",
+      perPage: 1,
+    });
+  }
+
+  // --- custom fields ----------------------------------------------------------
+  const customFields = asObject(asObject(sections["customFields"])["data"]);
+  // One condition per field type the contract can filter by.
+  const TEXT_TYPES = ["text", "textarea"];
+  const CHOICE_TYPES = ["select", "radio", "multiselect", "multicheckbox"];
+  let customFieldChecks = 0;
+  for (const [argKind, kind] of [
+    ["persons", "person"],
+    ["companies", "company"],
+    ["deals", "deal"],
+    ["tasks", "task"],
+  ] as const) {
+    const fields = asArray(customFields[kind])
+      .map(asObject)
+      .filter((field) => field["filterable"] === true && typeof field["id"] === "string");
+    const everyStatus = argKind === "deals" ? { status: "all" } : {};
+    const one = async (label: string, condition: Structured): Promise<void> => {
+      customFieldChecks += 1;
+      await count(`${argKind}, custom field ${label}`, argKind, {
+        ...everyStatus,
+        customFields: [condition],
+      });
+    };
+    const textField = fields.find((field) => TEXT_TYPES.includes(String(field["type"])));
+    if (textField !== undefined) {
+      await one("text isNotEmpty", { fieldId: textField["id"], operator: "isNotEmpty" });
+      await one("text contains", { fieldId: textField["id"], operator: "contains", value: "a" });
+      await one("text eq", { fieldId: textField["id"], operator: "eq", value: "a" });
+    }
+    const checkbox = fields.find((field) => field["type"] === "checkbox");
+    if (checkbox !== undefined) {
+      await one("checkbox eq true", { fieldId: checkbox["id"], operator: "eq", value: true });
+      await one("checkbox eq false", { fieldId: checkbox["id"], operator: "eq", value: false });
+    }
+    const choice = fields.find(
+      (field) => CHOICE_TYPES.includes(String(field["type"])) && asArray(field["options"]).length > 0,
+    );
+    if (choice !== undefined) {
+      const option = asObject(asArray(choice["options"])[0])["id"];
+      await one("choice anyOf", { fieldId: choice["id"], operator: "anyOf", value: [option] });
+      await one("choice noneOf", { fieldId: choice["id"], operator: "noneOf", value: [option] });
+      await one("choice isEmpty", { fieldId: choice["id"], operator: "isEmpty" });
+    }
+  }
+  if (customFieldChecks === 0) {
+    console.log("custom fields: the account has no filterable field, skipped");
+  }
+
+  // --- phrase ------------------------------------------------------------------
+  // A run of letters is a word the full-text index certainly holds.
+  const word = /\p{L}{3,}/u.exec(dealName)?.[0] ?? "";
+  if (word === "") {
+    console.log("phrase: no deal name to take a word from, skipped");
+  } else {
+    const q = word.slice(0, 20);
+    const phrase = await measured("search_crm", {
+      phrase: q,
+      kinds: ["persons", "companies", "deals", "notes"],
+    });
+    const block = asObject(phrase.out["phrase"]);
+    const results = asObject(phrase.out["results"]);
+    const perKind = ["persons", "companies", "deals", "notes"]
+      .map((kind) => `${kind} ${String(asObject(results[kind])["returned"])}`)
+      .join(", ");
+    console.log(
+      `search_crm phrase, four kinds: ${phrase.isError ? `ERROR ${errorCodes(phrase.out["errors"])}` : "ok"}, ` +
+        `about ${String(block["totalCount"])}, ${perKind}, more ${block["hasMore"] === true}, ` +
+        `requests ${phrase.requests ?? "unknown"}`,
+    );
+    if (phrase.isError) problems.push("phrase over four kinds");
+    // Deals alone, so other kinds cannot crowd the deal out of the page.
+    const deals = await measured("search_crm", { phrase: q, kinds: ["deals"], perPage: 50 });
+    const dealHits = asObject(asObject(deals.out["results"])["deals"])["returned"];
+    console.log(
+      `search_crm phrase, deals: ${deals.isError ? `ERROR ${errorCodes(deals.out["errors"])}` : "ok"}, ` +
+        `hits ${String(dealHits)}, requests ${deals.requests ?? "unknown"}`,
+    );
+    if (deals.isError || typeof dealHits !== "number" || dealHits < 1) {
+      problems.push("phrase did not find a deal by a word of a deal name");
+    }
+  }
+
+  // --- get_records ---------------------------------------------------------------
+  const synthetic = await search("deals, nameContains SYNTHETIC", "deals", {
+    filters: { status: "all", nameContains: "SYNTHETIC" },
+    perPage: 1,
+  });
+  const syntheticId = asObject(asArray(synthetic["items"])[0])["id"];
+  const target = typeof syntheticId === "string" ? syntheticId : dealIds[0];
+  console.log(`get_records target: ${typeof syntheticId === "string" ? "the SYNTHETIC deal" : "the first listed deal"}`);
+
+  async function records(label: string, args: Record<string, unknown>): Promise<Structured[]> {
+    const { out, isError, requests } = await measured("get_records", args);
+    const summary = asObject(out["summary"]);
+    const items = asArray(out["items"]).map(asObject);
+    const includeErrors = items.flatMap((item) => asArray(item["includeErrors"]));
+    const unavailable = asArray(out["unavailable"])
+      .map((entry) => String(asObject(entry)["include"]))
+      .join(", ");
+    console.log(
+      `get_records ${label}: ${isError ? "ERROR" : "ok"}, ok ${String(summary["ok"])}, ` +
+        `not_found ${String(summary["notFound"])}, failed ${String(summary["failed"])}` +
+        (includeErrors.length === 0 ? "" : `, include errors: ${errorCodes(includeErrors)}`) +
+        (unavailable === "" ? "" : `, unavailable: ${unavailable}`) +
+        (errorCodes(out["errors"]) === "" ? "" : `, ${errorCodes(out["errors"])}`) +
+        `, requests ${requests ?? "unknown"}`,
+    );
+    if (isError) problems.push(`get_records ${label}`);
+    return items;
+  }
+
+  if (target === undefined) {
+    console.log("get_records: the account has no deal, skipped");
+  } else {
+    const [deal] = await records("deal, full, every include", {
+      kind: "deal",
+      ids: [target],
+      detail: "full",
+      include: ["process", "products", "budget", "notes", "calls", "emails", "tasks", "wall"],
+    });
+    const item = deal ?? {};
+    const process = asObject(item["process"]);
+    const stages = asArray(process["stages"]).map(asObject);
+    const steps = stages.flatMap((stage) => asArray(stage["steps"]).map(asObject));
+    const list = (key: string, inner: string): string => {
+      const block = asObject(item[key]);
+      return key in item
+        ? `${key} ${asArray(block[inner]).length}/${String(block["totalCount"])}`
+        : `${key} absent`;
+    };
+    console.log(
+      `  includes: process ${"process" in item ? `${stages.length} stages, ` +
+        `${stages.filter((stage) => stage["state"] === "current").length} current, ` +
+        `${steps.length} steps (${steps.filter((step) => step["required"] === true).length} required, ` +
+        `${steps.filter((step) => step["completed"] === true).length} completed)` : "absent"}; ` +
+        `${list("products", "lines")}; budget ${"budget" in item ? (item["budget"] === null ? "null" : "present") : "absent"}; ` +
+        `${list("notes", "entries")}; ${list("calls", "entries")}; ${list("emails", "entries")}; ${list("tasks", "items")}`,
+    );
+    if (item["status"] !== "ok" || !("process" in item)) problems.push("deal with includes");
+    // A deal without a process has no stages to check.
+    if (stages.length > 0 && stages.filter((stage) => stage["state"] === "current").length !== 1) {
+      problems.push("the process does not have exactly one current stage");
+    }
+  }
+  if (dealIds.length > 0) {
+    await records(`${dealIds.length} deals, minimal`, { kind: "deal", ids: dealIds, detail: "minimal" });
+  }
+  const personId = personRows[0]?.["id"];
+  if (typeof personId === "string") {
+    await records("person, activity includes", {
+      kind: "person",
+      ids: [personId],
+      include: ["notes", "calls", "emails", "tasks"],
+    });
+  }
+  const companyId = asObject(asArray(companies["items"])[0])["id"];
+  if (typeof companyId === "string") {
+    await records("company, activity includes", {
+      kind: "company",
+      ids: [companyId],
+      include: ["notes", "calls", "emails", "tasks"],
+    });
+  }
+  const taskId = asObject(asArray(tasks["items"])[0])["id"];
+  if (typeof taskId === "string") {
+    await records("task, full", { kind: "task", ids: [taskId], detail: "full" });
+  }
+  const [unknown] = await records("an id that does not exist", {
+    kind: "deal",
+    ids: [crypto.randomUUID()],
+  });
+  if (unknown?.["status"] !== "not_found") problems.push("an unknown id is not reported as not_found");
+
+  // --- refusals that must cost nothing ---------------------------------------------
+  const refusals: [string, string, Record<string, unknown>][] = [
+    ["search_crm, a deal filter on persons", "search_crm", { kinds: ["persons"], filters: { status: "won" } }],
+    ["search_crm, a sort the kind does not have", "search_crm", { kinds: ["deals"], filters: {}, sort: { field: "value", direction: "desc" } }],
+    ["search_crm, an id of the old API", "search_crm", { kinds: ["deals"], filters: { processId: "12345" } }],
+    [
+      "get_records, 25 ids with two includes",
+      "get_records",
+      {
+        kind: "deal",
+        ids: Array.from({ length: 25 }, () => crypto.randomUUID()),
+        include: ["process", "notes"],
+      },
+    ],
+  ];
+  for (const [label, name, args] of refusals) {
+    const refused = await measured(name, args);
+    console.log(
+      `refusal ${label}: ${refused.isError ? errorCodes(refused.out["errors"]) : "NOT REFUSED"}, ` +
+        `requests ${refused.requests ?? "unknown"}`,
+    );
+    if (!refused.isError || (refused.requests !== null && refused.requests !== 0)) {
+      problems.push(`refusal: ${label}`);
+    }
+  }
+
+  console.log(`record tools: ${spent} requests (plus one health call after each tool call)`);
+  console.log(`dailyRemaining: ${before ?? "unknown"}`);
+  if (problems.length > 0) {
+    throw new SmokeFailure(`record tools: ${problems.length} check(s) failed: ${problems.join("; ")}`);
+  }
+}
+
 async function waitUntilUp(base: string, child: { exitCode: number | null }): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (child.exitCode !== null) throw new SmokeFailure("the server exited during startup");
@@ -169,9 +753,9 @@ async function checkServer(): Promise<void> {
     LIVESPACE_MCP_READ_ONLY: "true",
     MCP_BIND_HOST: "127.0.0.1",
     MCP_PORT: port,
-    // The run makes about 35 MCP calls in a row; the defaults allow a burst of 30.
-    MCP_RATE_LIMIT_PER_MINUTE: "600",
-    MCP_RATE_LIMIT_BURST: "100",
+    // The run makes about 250 MCP calls in a row; the defaults allow a burst of 30.
+    MCP_RATE_LIMIT_PER_MINUTE: "1200",
+    MCP_RATE_LIMIT_BURST: "400",
   };
   for (const name of [
     "LIVESPACE_SUBDOMAIN",
@@ -219,8 +803,8 @@ async function checkServer(): Promise<void> {
       ? listed["tools"].map((tool) => String((tool as { name?: unknown }).name))
       : [];
     console.log(`server tools (read-only, no v1 pair): ${tools.join(", ")}`);
-    if (!tools.includes("health") || !tools.includes("crm_metadata")) {
-      throw new SmokeFailure("health and crm_metadata must be listed");
+    for (const tool of ["health", "crm_metadata", "search_crm", "get_records"]) {
+      if (!tools.includes(tool)) throw new SmokeFailure(`${tool} must be listed`);
     }
     if (tools.some((tool) => WRITE_TOOLS.includes(tool))) {
       throw new SmokeFailure("a write tool is listed in read-only mode");
@@ -305,6 +889,9 @@ async function checkServer(): Promise<void> {
     if (failed > 0 || allSections !== V2_METADATA_SECTIONS.length) {
       throw new SmokeFailure(`${failed} section(s) failed`);
     }
+
+    await checkRecordTools(base, acting === "resolved");
+    ownServer();
   } finally {
     for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
       process.off(signal, stopOnSignal);

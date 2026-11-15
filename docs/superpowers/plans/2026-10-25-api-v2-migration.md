@@ -243,7 +243,7 @@ only accepted value is `acknowledged`), `LIVESPACE_NOTE_FOOTER` (D3-A,
 | `src/livespace/v2/metadata.ts` | Dictionary fetchers (processes, users, reasons, tags, custom fields...) | 2 |
 | `src/livespace/v2/filters.ts` | Filter tree builder, contract limits, day ranges in a time zone | 3 |
 | `src/livespace/v2/records.ts` | v2 record shapes, mappers, search and get | 3 |
-| `src/livespace/v2/timeline.ts` | Notes, calls, e-mails and tasks of a record; CRM-wide notes | 4 |
+| `src/livespace/v2/timeline.ts` | Notes, calls, e-mails and tasks of a record; CRM-wide notes | 3 (record lists), 4 |
 | `src/livespace/fallback.ts` | Optional v1 fallback: wall, feed, probability, stage reach | 4 |
 | `src/livespace/v2/deal-sweep.ts` | Counting by `totalCount` and bounded deal sweeps for analyses | 5 |
 | `src/livespace/process-audit.ts` | Pure process-audit and stalled-deal rules | 5 |
@@ -862,6 +862,13 @@ Execution notes.
 
 ## PR3: search_crm and get_records on v2 (stage 1)
 
+**Status (2026-11-15):** Tasks 1-4 are built on `feat/api-v2-search` and the
+live smoke of Task 5 passed on the demo account. The signatures below are
+the ones that were built; where they differ from the first draft of this
+section, "Execution notes -> PR3" says why. Still open from Task 5: the
+comparison of one stage count with the Livespace UI, which needs the
+maintainer.
+
 ### Task 1: filter builder
 
 **Files:** create `src/livespace/v2/filters.ts`; test
@@ -879,6 +886,8 @@ export function or(...nodes: FilterNode[]): FilterNode | undefined;
 export function assertFilterLimits(node: FilterNode): void; // 5 levels, 50 conditions, 10 additionalFields.*, 200 values, 255 chars
 export function dayRange(fromDay: string | undefined, toDay: string | undefined,
   timeZone: string): { from?: string; to?: string }; // inclusive days -> RFC 3339 with the zone's offset
+export function dayBounds(field: string, fromDay: string | undefined, toDay: string | undefined,
+  timeZone?: string): FilterNode | undefined; // between, gte or lte; no zone = a date field, bare days
 ```
 
 Tests: limits (each one at the edge and one over), `dayRange` around a DST
@@ -929,28 +938,39 @@ export interface DealProcessV2 { process: Ref | null; currentStage: Ref | null;
   stages: { id: string; name: string; position: number; state: "completed" | "current" | "pending";
     completedAt: string | null; steps: { id: string; name: string; required: boolean; completed: boolean }[] }[] }
 export interface BudgetLineV2 { id: string; product: Ref | null; quantity: number | null;
-  unitPrice: number | null; value: number; currency: string; description: string | null }
-export interface PhraseHit { kind: "person" | "company" | "deal" | "note"; id: string; name: string; url: string | null }
+  unitPrice: number | null; value: number; currency: string; forecast: boolean; description: string | null }
+export interface BudgetSummaryV2 { currency: string | null; revenue: MoneyPair; cost: MoneyPair;
+  margin: MoneyPair; quantity: MoneyPair } // MoneyPair = { forecast: number; executed: number }
+export interface PhraseHit { kind: "person" | "company" | "deal" | "note"; id: string; name: string; url: string | null;
+  status?: string | null; company?: Ref | null; person?: Ref | null; taxId?: string | null;
+  createdAt?: string | null; parent?: { kind: string; id: string; name: string } | null; textTruncated?: boolean }
+export interface ReadOptions { signal?: AbortSignal; budget: CallBudget }
 export interface RecordReader {
   search<K extends V2Kind>(kind: K, query: { filter?: FilterNode; sort?: { field: string; direction: "asc" | "desc" };
-    page: number; perPage: number; media: V2MediaType }, opts: { signal?: AbortSignal; budget: CallBudget }):
+    page: number; perPage: number; media: V2MediaType }, opts: ReadOptions):
     Promise<{ items: RecordV2Map[K][]; totalCount: number; totalCountExact: boolean }>;
-  phrase(q: string, kinds: PhraseHit["kind"][], page: number, opts: { signal?: AbortSignal; budget: CallBudget }):
-    Promise<{ hits: PhraseHit[]; totalCount: number }>;
-  get<K extends V2Kind>(kind: K, id: string, opts: { signal?: AbortSignal; budget: CallBudget }):
+  phrase(query: { q: string; kinds: readonly PhraseHit["kind"][]; page: number; perPage: number }, opts: ReadOptions):
+    Promise<{ hits: PhraseHit[]; totalCount: number; rowCount: number }>; // totalCount is the API's estimate
+  get<K extends V2Kind>(kind: K, id: string, opts: ReadOptions & { media?: V2MediaType }):
     Promise<RecordV2Map[K] | null>; // NOT_FOUND -> null
-  dealProcess(id: string, opts: { signal?: AbortSignal; budget: CallBudget }): Promise<DealProcessV2 | null>;
-  dealLines(id: string, opts: { signal?: AbortSignal; budget: CallBudget }): Promise<BudgetLineV2[]>;
+  dealProcess(id: string, opts: ReadOptions): Promise<DealProcessV2 | null>;
+  dealLines(id: string, opts: ReadOptions): Promise<{ lines: BudgetLineV2[]; totalCount: number }>;
+  dealBudget(id: string, opts: ReadOptions): Promise<BudgetSummaryV2 | null>; // null at basic access level
 }
 export function createV2RecordReader(client: Pick<LivespaceV2Client, "request">): RecordReader;
+export function isV2Id(value: string): boolean; // 8-4-4-4-12 hex, checked before an id is sent
 ```
+
+`PersonV2`, `CompanyV2` and `DealV2` also carry `owners: Ref[]`; persons and
+companies `addresses`; `TaskV2` `customFields`.
 
 Mapping rules: `phones` = `phoneMobile` then `phoneLandline`; `emails` =
 `communication.email`; `value` = `budget.value`; `reason` is the reason of the
 current status only (a reopened deal reports none); `probability` is null
 unless the fallback filled it; minimal media type rows map to the same
-interfaces with absent fields omitted by `projectRecord`, which moves here
-from the v1 `records.ts` with v2 field lists per detail level. Custom-field values
+interfaces with absent fields omitted by `projectRecord`, which has its own
+v2 copy here with field lists per detail level (the v1 one stays in the v1
+`records.ts` until `get_activity` moves). Custom-field values
 keep option names, not ids, for select types. The breaking output change is
 listed for the 0.2.0 release notes.
 
@@ -983,14 +1003,19 @@ Input (strict):
   detail?: "minimal"|"standard"|"full"; page?: number; perPage?: number; // 1-100, default 20
   countOnly?: boolean }
 ```
-Output per kind: `{ items, totalCount, totalCountExact, page, perPage,
-hasMore, hint?, nextSteps? }`. `countOnly` sends `perPage: 1` and returns no
-items. `minimal` detail uses `MEDIA_MINIMAL`; `standard` and `full` use
+Output per kind (filter search): `{ items, returned, totalCount,
+totalCountExact, page, perPage, hasMore, hint? }`; (phrase search):
+`{ hits, returned }` plus one top-level `phrase { totalCount, page, perPage,
+hasMore, hint? }`. `nextSteps` is one top-level list. `countOnly` sends
+`perPage: 1` and returns no items. `minimal` detail uses `MEDIA_MINIMAL`; `standard` and `full` use
 `MEDIA_JSON` (Q6 could not show a difference for `MEDIA_EXTENDED`; revisit on
 an account with deal custom fields). `mine` maps to `owners anyOf
 [actingUser.id]` (tasks: `assignees anyOf`), per Q5. Filters that do not
 apply to a kind are `BAD_PARAMS` naming the kind. `page > 1` needs exactly one
-kind. Dates use `dayRange` with the integration user's time zone (Q3).
+kind in a filter search. Dates use `dayRange` with the integration user's
+time zone (Q3). `SearchCrmDeps` is `{ records, metadata, writesEnabled }`:
+the dictionary service answers the acting user, the time zone and the
+custom-field list.
 
 Tests: `mine without an acting user is refused, not empty` (Review Focus 1),
 `mine maps to owners anyOf the acting user`, `each filter maps to its v2
@@ -1009,10 +1034,13 @@ deals and all includes outdated`.
 Input: `{ kind, ids (1-25), detail?, include?: ("process"|"products"|"budget"|"notes"|"calls"|"emails"|"tasks"|"wall")[] }`.
 Includes are per record and capped: activity includes return the latest 5
 entries each. `wall` needs the v1 fallback (PR4) and otherwise reports
-`unavailable`. Request plan = `ids.length * (1 + includes.length)`; above
+`unavailable`. Request plan = `ids.length * (1 + includes.length)`, counting
+the ids and includes that send a request; above
 `CALL_BUDGETS.read` (60) the call is refused before any request with a hint to
 split it. Per-id status stays `ok | not_found | error`; `not_found` says
-"unknown or not visible to the integration user".
+"unknown or not visible to the integration user". `GetRecordsDeps` is
+`{ records, timeline, writesEnabled }`; a failed include goes to the item's
+`includeErrors`.
 
 `next-steps.ts`: `export function nextSteps(tool: string, context: NextStepContext): string[]`
 with `interface NextStepContext { kind?: V2Kind; empty: boolean; writesEnabled: boolean; hasMore: boolean }`
@@ -1030,7 +1058,9 @@ contain record text`.
 
 `search_crm` (deals with `mine`, a tag, `countOnly` per stage), `get_records`
 with all includes on the SYNTHETIC deal. Compare counts with the UI for one
-stage. Record request counts.
+stage. Record request counts. `scripts/smoke-v2.ts` part 3 does this through
+the read-only server and also sends every filter, every sortable field and
+every custom-field operator once, because no live probe ran before the code.
 
 ---
 
@@ -1038,8 +1068,11 @@ stage. Record request counts.
 
 ### Task 1: timeline fetchers
 
-**Files:** create `src/livespace/v2/timeline.ts`; test
-`tests/livespace/v2/timeline.test.ts`.
+**Files:** extend `src/livespace/v2/timeline.ts` and
+`tests/livespace/v2/timeline.test.ts`. PR3 created both with
+`TimelineEntry` and `recordEntries(kind, id, type, {limit, signal, budget})`,
+which reads the notes, calls or e-mails of one record; `recordTimeline` below
+builds on it.
 
 ```ts
 export type TimelineEntryType = "note" | "call" | "email" | "task" | "system";
@@ -1654,3 +1687,225 @@ truncated or stale, `customFields` in 4 requests and every other section in
 1, 18 for a cold cache; the second pass over all sections cost 0 requests.
 The whole run spent 36 requests of the daily budget (49904 before, 49868
 after) and ended with `smoke-v2: OK`.
+
+### PR3, 2026-11-15 (branch `feat/api-v2-search` into `feat/api-v2`)
+
+Starts at `feat/api-v2` 671f0c1 (PR1 and PR2 merged). Q1, Q2, Q8 and Q10 are
+still open; PR3 does not depend on them.
+
+No live probe ran before the code: the shapes come from the vendor draft
+(`x-filter-fields` of the four searches, the record, hit, process, line,
+budget, note, call and e-mail schemas) and from the Stage 0 answers Q3, Q5
+and Q6. The reviewer compared every field, operator, sortable list, media
+type and paging limit in the code with the draft again. Mappers read
+leniently and fail with fixed wording only on a row without a string id or a
+search answer without a total, so a renamed optional field shows up as a
+missing value, not as a crash.
+
+Deviations and decisions:
+
+- `filters.ts` also exports `dayBounds(field, from, to, zone?)`, which picks
+  `between`, `gte` or `lte`. With a zone the bounds are RFC 3339 instants
+  (datetime fields); without one they are the bare days (`expectedCloseDate`).
+  `and` and `or` flatten a nested group of the same kind. A lone condition
+  counts as one level of the five.
+- `RecordReader`: `phrase` takes `{q, kinds, page, perPage}` and also answers
+  `rowCount`; `get` takes the media type in its options; `dealLines` answers
+  `{lines, totalCount}` from one page of 100; `dealBudget` was added
+  (`GET /deals/{id}/budget`), because the plan's interface had no source for
+  the `budget` include. `budget` is required in every reader option.
+- Records carry more than the plan's interfaces: `owners` (every owner user;
+  `mine` and `ownerIds` match these, `owner` is the one the API singles out),
+  `addresses` on persons and companies, and `customFields` on tasks, all at
+  `full` detail. A custom field without an answer is left out; `false` and
+  `0` are answers. A budget line has `forecast`.
+- The v1 `projectRecord` stays in `src/livespace/records.ts` for
+  `get_activity`; the v2 one lives in `v2/records.ts`. Detail levels:
+  `minimal` is exactly what the minimal media type sends, `standard` adds the
+  working fields, `full` adds description, groups, source, owners, addresses,
+  custom fields and (deals) `probability`, which is null until the fallback
+  fills it.
+- `AppDeps.recordReader` and `AppDeps.timeline` are the API v2 readers.
+  `AppDeps.records` stays the v1 fetchers for `get_activity`, `analyze` and
+  the write tools. `search_crm` is listed with the reader and the dictionary
+  service, `get_records` with the reader and the timeline lists, both without
+  the v1 pair.
+- `search_crm`:
+  - Exactly one of `phrase` and `filters`, as before. A phrase search covers
+    persons, companies, deals and notes (no tasks: `GET /search` has no task
+    type) and refuses `sort` and `countOnly`. A filter search covers persons,
+    companies, deals and tasks. The default kinds are persons, companies and
+    deals in both modes.
+  - A phrase search is one request for every kind. The hits are grouped by
+    kind and the top-level `phrase` block carries the total, page and
+    `hasMore` of the one ranked list. The contract calls that total
+    approximate, so `hasMore` is "the page came back full" (rows of dropped
+    hit types included, up to page 200), never a comparison with the total.
+    The phrase is trimmed before it is sent. The "page above 1 needs one
+    kind" rule applies to filter searches only.
+  - `nextSteps` is one top-level list per call, not one per kind.
+  - `mine` plus `ownerIds` is the union. A refused `mine` answers the code
+    `NO_ACTING_USER` with the acting-user hint and searches nothing.
+  - `sort.field` takes the contract's field names; `name` is also accepted
+    for persons (`lastName`) and tasks (`title`), so a mixed search can sort
+    by name.
+  - A person has no `name` filter field: `nameContains` is
+    `firstName contains` or `lastName contains`.
+  - Custom-field filters need exactly one kind and are checked against the
+    cached `customFields` section: the field must exist for the kind and be
+    filterable, the operator must fit the type, and an option id must belong
+    to the field unless its option list was cut at 200. A checkbox takes
+    `eq` only, as the contract lists it; `eq false` also matches a record
+    without an answer.
+  - Every id in a filter must have the API v2 id shape (8-4-4-4-12 hex
+    digits). Anything else is refused before a request: Livespace would
+    answer 400 and still count it against the daily budget (Q7).
+  - Task due dates (`dueFrom`, `dueTo`) are sent as bare days with `gte` and
+    `lte`, as the contract describes for `startsAt`; tasks have no
+    `createdAt` filter in the contract.
+  - Dictionary reads happen only when a filter needs them: the acting user
+    for `mine`, `currentUser` for the time zone of datetime day filters,
+    `customFields` for custom-field filters. They share the call's budget of
+    60 with the searches.
+- `get_records`:
+  - `src/livespace/v2/timeline.ts` was created here, with `recordEntries`
+    (notes, calls or e-mails of one record) only, because the includes need
+    it. PR4 Task 1 extends the file. `TimelineEntry` gained `subject` and
+    `from` (e-mails) and `durationSeconds` (calls).
+  - The tasks include is `POST /tasks/searches` on `people.id`,
+    `companies.id` or `deals.id`, five minimal rows in the default order
+    (last change, newest first), plus the total.
+  - The request plan counts one request per record and one per record and
+    include that sends a request. `wall` sends none: it is reported once, in
+    a top-level `unavailable` list, until the PR4 fallback exists.
+  - Records are read by two workers (the client allows two requests in
+    flight) and the includes of a record in a fixed order. An include refused
+    with `INSUFFICIENT_SCOPE` is not asked again for the remaining records;
+    they get the same error without a request.
+  - A failed include is listed in the item's `includeErrors` and the record
+    stays `ok`. `includeWall` is gone; the strict input schema refuses it.
+  - An id without the API v2 id shape fails its own item with
+    `VALIDATION_ERROR` and sends nothing; such ids are left out of the
+    request plan.
+  - `nextSteps`: `hasMore` means "no include was asked".
+- `next-steps.ts` carries `writesEnabled` but names no write tool, and no
+  `get_activity` or `analyze`, yet: those tools still take ids of the old
+  API. Add the hints back as each tool moves.
+- `dayRange` tries both offsets a zone uses around the wall time and keeps
+  the one that round-trips, so a day also starts and ends correctly in zones
+  that change their clock at midnight (Santiago, Havana).
+- Server instructions say that `search_crm`, `get_records` and `crm_metadata`
+  answer API v2 ids while `get_activity`, `analyze` and the write tools still
+  read the old API. Remove the sentence tool by tool as they move (PR4-PR7).
+- `scripts/host-check.ts` serves its marker through a synthetic v2 reader, in
+  `person.description`.
+- The 0.2.0 release notes must list the breaking output change of both
+  tools: nested `{id, name}` references instead of `ownerId`/`ownerName`
+  pairs, `createdAt`/`updatedAt` instead of `created`/`modified`, `reason`
+  instead of six reason fields, the `process` include instead of
+  `checkedSteps`, `page`/`perPage` instead of `limit`/`cursor`,
+  `sort {field, direction}` instead of `sortBy`/`sortDir`, `include` instead
+  of `includeWall`.
+
+For later PRs:
+
+- PR4: extend `v2/timeline.ts` (see PR4 Task 1). `get_records` reports `wall`
+  as unavailable; wire it to the fallback or keep the answer. When
+  `get_activity` moves, restore its next-step hint, drop it from the
+  instructions' sentence about old-API ids, and delete the v1 `projectRecord`
+  if nothing else uses it.
+- PR4-PR7: each tool that moves should check ids with `isV2Id` before
+  sending them.
+- PR5: `analyze` still applies the `value_final` rule of the old API; the
+  README says so in one paragraph that goes away with it.
+- PR9: release notes list the breaking output changes above.
+- Deferred review minors: a task link whose record the caller may not view
+  has a null name upstream and maps to `""`; a `get_records` call planned at
+  exactly 60 requests has no room for a retry inside its budget of 60;
+  `NextStepContext.hasMore` means "no include was asked" for `get_records`;
+  an e-mail subject is cut at 200 characters without a flag and `from` is
+  not capped; the tasks include returns the five most recently changed
+  tasks, completed ones included; `scripts/smoke-v2.ts` still has no
+  offline test and no test boots `src/index.ts` (both carried over). The
+  task sorts `endsAt`, `completedAt` and `createdAt`, which the contract
+  names in prose but does not flag sortable in its field table, were
+  accepted live, so they stay.
+
+Gate (on `3ad7682`, clean tree): `bun install --frozen-lockfile`, `bun audit`
+(no vulnerabilities), `bun run typecheck`, `bun test` (1437 pass),
+`bun run test:security` (1208 pass), `git diff --check`, MCP conformance
+against the baseline. A fresh reviewer checked `671f0c1..7be137a` against
+this plan, `docs/security.md` and the vendor draft: nothing critical. Its
+four Important findings are fixed with tests (this file did not record PR3;
+the phrase total was treated as exact; `isEmpty` on a checkbox field went
+upstream; ids were sent without a shape check), and so are the minors on the
+next-step hints, the untrimmed phrase, a missing search total, day bounds in
+zones that switch at midnight and a request id reused for records that sent
+no request.
+
+Live smoke (Task 5): passed on 2026-11-15 on the demo account, read-only, on
+`8d6baec` with a clean tree. The maintainer ran it in his own terminal with
+the key injected by the secret manager (the runner refuses an agent
+session); the output was kept and read afterwards. It ended with
+`smoke-v2: OK`. No v1 pair and no `LIVESPACE_ACTING_USER_EMAIL` were set.
+
+- The server listed `health`, `crm_metadata`, `search_crm` and `get_records`.
+  `crm_metadata` cost 18 requests on a cold cache and 0 on the second read,
+  as in PR2.
+- Counts add up, which is the check that the filters mean what the tool
+  says: deals 163 open + 9 won + 131 lost + 0 outdated = 303, the total of
+  the unfiltered search; created this year 208 + created before 95 = 303
+  (day bounds in the account's zone leave no gap and no overlap); one
+  process holds 50 open deals and its five stages hold 25, 11, 7, 5 and 2;
+  stages 1 and 2 together 36, so `stageIds` is any-of; tasks 150 open + 49
+  completed = 199.
+- Accepted with 200 and one request each: every filter the demo has data
+  for (status, process, stages, owner, assignee, company on deals and
+  persons, person, name fragment on deals and persons, tag on all three
+  kinds, person and company group, source on persons and deals, task type,
+  completed, overdue, linked deal), the datetime ranges on `createdAt`,
+  `updatedAt` and `statusChangedAt`, bare days on `expectedCloseDate` and on
+  the task `startsAt` (`gte` and `lte`), `page` 2, minimal and full detail.
+- Sorts accepted: all seven task fields (`title`, `priority`, `startsAt`,
+  `updatedAt`, `endsAt`, `completedAt`, `createdAt`), four person fields,
+  and deals by `name`, `createdAt`, `updatedAt`, `expectedCloseDate` and
+  `statusChangedAt`. Companies were sorted by `name` only.
+- Custom-field filters accepted: `isNotEmpty`, `contains` and `eq` on a
+  person text field; `anyOf`, `noneOf` and `isEmpty` on a company choice
+  field (77 + 193 = 270, every company).
+- Phrase search: one request for four kinds, hits in persons, companies,
+  deals and notes; a word of a deal name finds the deal.
+- `mine` without an acting user: refused with `NO_ACTING_USER`, 0 requests.
+- `get_records` on the SYNTHETIC deal with every include: 8 requests (the
+  record and seven includes; `wall` is reported unavailable and costs
+  nothing). The process came back with 5 stages, exactly 1 current, 17
+  steps, 1 required and 2 completed; the budget summary was present; 4
+  notes, 1 call and 2 tasks, each with its total. Five deals at minimal
+  detail: 5 requests. A person and a company with the four activity
+  includes: 5 requests each. A task: 1. A random id: `not_found`, 1 request.
+- Refused before any request (0 requests each): a deal filter on persons, a
+  sort field the kind does not have, an id of the old API, 25 ids with two
+  includes.
+- Request counts: every `search_crm` call is 1 request per kind, a phrase
+  search 1 for all kinds, `get_records` 1 per record plus 1 per record and
+  include. The record tools part spent 96 requests; the whole run 216
+  (49866 before, 49650 after), about half of them the `health` calls that
+  measure the cost of each step.
+
+Not covered by this run, because the demo has no data for it or the
+environment did not set it:
+
+- `mine` with a resolved acting user (deals and tasks were checked in Q5;
+  persons and companies never were). Rerun with
+  `LIVESPACE_ACTING_USER_EMAIL` set.
+- Deal groups (the dictionary is empty), `taxId` (no listed company has
+  one), the `outdated` status (no such deal), checkbox custom fields and any
+  deal or task custom field (the demo has none).
+- The product-line and e-mail mappers: the SYNTHETIC deal has no line and no
+  e-mail, so both lists came back empty. They follow the draft alone.
+- The task type filter was accepted but matched 0 tasks for the first type
+  of the dictionary, so its meaning is not confirmed by a count.
+- The comparison of one stage count with the Livespace UI (Task 5): the
+  maintainer compares the line `stages: [25, 11, 7, 5, 2]` (open deals per
+  stage of the default process, or of the first selectable one when the
+  default is switched off) with the UI.

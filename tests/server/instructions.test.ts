@@ -25,10 +25,12 @@ describe("buildInstructions", () => {
     expect(text).not.toContain("More tools (metadata,");
   });
 
-  test("tells the model where full deal detail and creation dates live", () => {
+  test("tells the model where deal steps and creation dates live", () => {
     const text = buildInstructions({ readOnly: true }).replace(/\s+/gu, " ");
     expect(text).toContain("createdFrom/createdTo");
-    expect(text).toContain("checkedSteps");
+    expect(text).toContain("process, products and budget for deals");
+    // The old API's step list is gone from the record tools.
+    expect(text).not.toContain("checkedSteps");
   });
 
   test("declares CRM text as data, never as instructions", () => {
@@ -53,16 +55,31 @@ describe("buildInstructions", () => {
     expect(text).toContain("currentUser.actingUser");
     expect(text).not.toContain("Custom-field datasets are not available");
     expect(text).toContain("Use phrase or filters, never both");
-    expect(text).toContain("sortWindowTruncated");
-    expect(text).toContain("sortBy and cursor cannot be combined");
+    expect(text).toContain("totalCount is every match");
+    expect(text).toContain("countOnly");
+    expect(text).toContain("refused when none is resolved");
+    expect(text).toContain("default to status open");
+    expect(text).not.toContain("sortWindowTruncated");
+    expect(text).not.toContain("sortBy");
     expect(text).toContain("one record kind and up to 25 ids");
-    expect(text).toContain("includeWall");
-    expect(text).toContain("at most five records");
+    expect(text).toContain("latest 5 each");
+    expect(text).toContain("a call over 60 is refused before any request");
+    expect(text).toContain("includeErrors");
+    expect(text).not.toContain("includeWall");
     expect(text).toContain("not_found can also mean");
     expect(text).toContain('source: "record", "crm" or "tasks"');
     expect(text).toContain("count is the raw upstream page size");
     expect(text).toContain("returned is what remains");
     expect(text).toContain("Fields omitted by a detail level are absent");
+  });
+
+  test("says which tools still take ids of the old API", () => {
+    // Interim state of the API v2 migration: the tools move one area per PR.
+    const text = buildInstructions({ readOnly: false }).replace(/\s+/gu, " ");
+    expect(text).toContain(
+      "search_crm, get_records and crm_metadata answer API v2 ids",
+    );
+    expect(text).toContain("get_activity, analyze and the write tools still read the old API");
   });
 
   test("names analyze, its four analyses and the window caveat", () => {

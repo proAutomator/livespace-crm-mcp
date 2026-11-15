@@ -5,11 +5,14 @@ import { MAX_TOOL_INPUT_ELEMENTS, type AppDeps } from "../../src/server/mcp.js";
 import type { V1MetadataService as MetadataService } from "../../src/server/v1-metadata.js";
 import type { ActivityFetchers } from "../../src/livespace/activity.js";
 import type { RecordFetchers } from "../../src/livespace/records.js";
+import type { RecordReader } from "../../src/livespace/v2/records.js";
 import type { DealStepReader } from "../../src/livespace/stage-moves.js";
 import type { WriteFetchers } from "../../src/livespace/writes.js";
 import { person, wallEntry } from "../support/records.js";
 import { healthPing } from "../support/health.js";
 import { fakeV2Metadata } from "../support/metadata.js";
+import { personV2 } from "../support/v2-records.js";
+import { fakeRecordReader, fakeTimeline } from "../support/v2-reader.js";
 
 const BASE_CONFIG: ServerConfig = {
   port: 3020,
@@ -451,6 +454,8 @@ describe("crm_metadata wiring", () => {
         metadata: fakeV2Metadata(syntheticSection),
       v1Metadata: fakeV1Metadata(),
         records: fakeRecords(),
+        recordReader: fakeRecordReader(),
+        timeline: fakeTimeline(),
         activity: fakeActivity(),
         writes: fakeWrites(),
         dealSteps: fakeDealSteps(),
@@ -517,6 +522,8 @@ describe("crm_metadata wiring", () => {
         metadata: fakeV2Metadata(syntheticSection),
       v1Metadata: fakeV1Metadata(),
         records: fakeRecords(),
+        recordReader: fakeRecordReader(),
+        timeline: fakeTimeline(),
         activity: fakeActivity(),
         writes: fakeWrites(),
         dealSteps: fakeDealSteps(),
@@ -541,6 +548,8 @@ describe("crm_metadata wiring", () => {
         metadata: fakeV2Metadata(syntheticSection),
       v1Metadata: fakeV1Metadata(),
         records: fakeRecords(),
+        recordReader: fakeRecordReader(),
+        timeline: fakeTimeline(),
         activity: fakeActivity(),
         writes: fakeWrites(),
       }).request(
@@ -592,6 +601,8 @@ describe("read tool wiring", () => {
       metadata: fakeV2Metadata(syntheticSection),
       v1Metadata: fakeV1Metadata(),
       records: fakeRecords(),
+        recordReader: fakeRecordReader(),
+        timeline: fakeTimeline(),
       activity: fakeActivity(),
       ...overrides,
     });
@@ -627,10 +638,29 @@ describe("read tool wiring", () => {
     expect(names).toEqual(["health", "crm_metadata"]);
   });
 
+  test("the API v2 deps alone list search_crm and get_records", async () => {
+    // No v1 key pair: the two record tools read API v2 and need nothing else.
+    const names = await listNames(
+      app({
+        metadata: fakeV2Metadata(syntheticSection),
+        recordReader: fakeRecordReader(),
+        timeline: fakeTimeline(),
+      }),
+    );
+    expect(names).toEqual(["health", "crm_metadata", "search_crm", "get_records"]);
+  });
+
+  test("search_crm needs the dictionaries and get_records the timeline lists", async () => {
+    expect(await listNames(app({ recordReader: fakeRecordReader() }))).toEqual(["health"]);
+    expect(
+      await listNames(app({ recordReader: fakeRecordReader(), timeline: fakeTimeline() })),
+    ).toEqual(["health", "get_records"]);
+  });
+
   test("records without activity keep get_records but drop get_activity", async () => {
     const names = await listNames(
       app({ metadata: fakeV2Metadata(syntheticSection),
-      v1Metadata: fakeV1Metadata(), records: fakeRecords() }),
+      v1Metadata: fakeV1Metadata(), records: fakeRecords(), recordReader: fakeRecordReader(), timeline: fakeTimeline() }),
     );
     expect(names).toEqual([
       "health",
@@ -642,18 +672,19 @@ describe("read tool wiring", () => {
 
   test("search_crm answers a phrase call end to end", async () => {
     const instance = fullApp({
-      records: fakeRecords({
-        searchPhrase: async () => ({
+      recordReader: fakeRecordReader({
+        phrase: async () => ({
           hits: [
             {
-              id: "person-synthetic-1",
-              name: "Synthetic Person",
-              description: "Synthetic Company",
-              modified: "2025-01-03 03:04:05+02",
-              url: "https://synthetic.livespace.io/Contact/contact/details/api_id/person-synthetic-1",
+              kind: "person",
+              id: "00000000-0000-4000-8000-000000000101",
+              name: "SYNTHETIC Person",
+              url: null,
+              company: null,
             },
           ],
-          rawCount: 1,
+          totalCount: 1,
+          rowCount: 1,
         }),
       }),
     });
@@ -672,7 +703,10 @@ describe("read tool wiring", () => {
     );
     expect(payload.result.resultType).toBe("complete");
     expect(payload.result.structuredContent.results.persons.returned).toBe(1);
+    expect(payload.result.structuredContent.phrase.totalCount).toBe(1);
     expect(payload.result.structuredContent.errors).toEqual([]);
+    // CRM text stays in the structured channel.
+    expect(payload.result.content[0].text).not.toContain("SYNTHETIC");
   });
 
   // GHSA-jm63-cq47-j5jp: a shared server or transport matched responses to
@@ -685,22 +719,15 @@ describe("read tool wiring", () => {
       releaseBoth = resolve;
     });
     const instance = fullApp({
-      records: fakeRecords({
-        searchPhrase: async ({ q }) => {
+      recordReader: fakeRecordReader({
+        phrase: async ({ q }) => {
           arrived += 1;
           if (arrived === 2) releaseBoth();
           await bothArrived;
           return {
-            hits: [
-              {
-                id: `person-${q}`,
-                name: q,
-                description: "Synthetic Company",
-                modified: "2025-01-03 03:04:05+02",
-                url: `https://synthetic.livespace.io/Contact/contact/details/api_id/person-${q}`,
-              },
-            ],
-            rawCount: 1,
+            hits: [{ kind: "person", id: `person-${q}`, name: q, url: null, company: null }],
+            totalCount: 1,
+            rowCount: 1,
           };
         },
       }),
@@ -728,9 +755,8 @@ describe("read tool wiring", () => {
 
   test("get_records answers a batch call end to end", async () => {
     const instance = fullApp({
-      records: fakeRecords({
-        getRecord: (async (_kind: string, id: string) =>
-          person({ id })) as RecordFetchers["getRecord"],
+      recordReader: fakeRecordReader({
+        get: (async (_kind: string, id: string) => personV2({ id })) as RecordReader["get"],
       }),
     });
     const payload = await jsonFromResponse(
@@ -740,7 +766,7 @@ describe("read tool wiring", () => {
           name: "get_records",
           params: {
             name: "get_records",
-            arguments: { kind: "person", ids: ["person-synthetic-1"] },
+            arguments: { kind: "person", ids: ["00000000-0000-4000-8000-000000000101"] },
           },
           id: 11,
         }),
@@ -788,8 +814,8 @@ describe("read tool wiring", () => {
 
   test("an upstream failure in search_crm never leaks its text over the wire", async () => {
     const instance = fullApp({
-      records: fakeRecords({
-        searchPhrase: async () => {
+      recordReader: fakeRecordReader({
+        phrase: async () => {
           throw new Error("SENSITIVE-synthetic upstream body");
         },
       }),
@@ -811,11 +837,13 @@ describe("read tool wiring", () => {
   });
 
   test("an upstream failure in get_records never leaks its text over the wire", async () => {
+    let reached = 0;
     const instance = fullApp({
-      records: fakeRecords({
-        getRecord: (async () => {
+      recordReader: fakeRecordReader({
+        get: (async () => {
+          reached += 1;
           throw new Error("SENSITIVE-synthetic upstream body");
-        }) as RecordFetchers["getRecord"],
+        }) as RecordReader["get"],
       }),
     });
     const raw = await (
@@ -825,12 +853,13 @@ describe("read tool wiring", () => {
           name: "get_records",
           params: {
             name: "get_records",
-            arguments: { kind: "person", ids: ["person-synthetic-1"] },
+            arguments: { kind: "person", ids: ["00000000-0000-4000-8000-000000000101"] },
           },
           id: 14,
         }),
       )
     ).text();
+    expect(reached).toBe(1);
     expect(raw).not.toContain("SENSITIVE-synthetic");
   });
 
@@ -861,14 +890,13 @@ describe("read tool wiring", () => {
     expect(raw).not.toContain("SENSITIVE-synthetic");
   });
 
-  test("a wall failure degrades to a sanitized wallError, record still ok", async () => {
+  test("a failing include degrades to a sanitized includeError, record still ok", async () => {
     const instance = fullApp({
-      records: fakeRecords({
-        getRecord: (async (_kind: string, id: string) =>
-          person({ id })) as RecordFetchers["getRecord"],
+      recordReader: fakeRecordReader({
+        get: (async (_kind: string, id: string) => personV2({ id })) as RecordReader["get"],
       }),
-      activity: fakeActivity({
-        recordWall: async () => {
+      timeline: fakeTimeline({
+        recordEntries: async () => {
           throw new Error("SENSITIVE-synthetic upstream body");
         },
       }),
@@ -881,8 +909,8 @@ describe("read tool wiring", () => {
           name: "get_records",
           arguments: {
             kind: "person",
-            ids: ["person-synthetic-1"],
-            includeWall: true,
+            ids: ["00000000-0000-4000-8000-000000000101"],
+            include: ["notes"],
           },
         },
         id: 16,
@@ -894,18 +922,35 @@ describe("read tool wiring", () => {
     const payload = JSON.parse(dataLine ? dataLine.slice(6) : raw);
     const item = payload.result.structuredContent.items[0];
     expect(item.status).toBe("ok");
-    expect(item.wallError.code).toBe("UPSTREAM_ERROR");
+    expect(item.includeErrors[0]).toMatchObject({ include: "notes", code: "UPSTREAM_ERROR" });
     expect(payload.result.isError).toBeUndefined();
+  });
+
+  test("the removed includeWall argument is refused by the strict input schema", async () => {
+    const payload = await jsonFromResponse(
+      await fullApp().request(
+        modernRequest({
+          method: "tools/call",
+          name: "get_records",
+          params: {
+            name: "get_records",
+            arguments: { kind: "person", ids: ["00000000-0000-4000-8000-000000000101"], includeWall: true },
+          },
+          id: 18,
+        }),
+      ),
+    );
+    expect(payload.result?.isError ?? payload.error !== undefined).toBe(true);
   });
 
   test("record data is never cached: two identical calls hit upstream twice", async () => {
     const calls: string[] = [];
     const instance = fullApp({
-      records: fakeRecords({
-        getRecord: (async (_kind: string, id: string) => {
+      recordReader: fakeRecordReader({
+        get: (async (_kind: string, id: string) => {
           calls.push(id);
-          return person({ id });
-        }) as RecordFetchers["getRecord"],
+          return personV2({ id });
+        }) as RecordReader["get"],
       }),
     });
     const request = () =>
@@ -915,20 +960,26 @@ describe("read tool wiring", () => {
           name: "get_records",
           params: {
             name: "get_records",
-            arguments: { kind: "person", ids: ["person-synthetic-1"] },
+            arguments: { kind: "person", ids: ["00000000-0000-4000-8000-000000000101"] },
           },
           id: 17,
         }),
       );
     await request();
     await request();
-    expect(calls).toEqual(["person-synthetic-1", "person-synthetic-1"]);
+    expect(calls).toEqual(["00000000-0000-4000-8000-000000000101", "00000000-0000-4000-8000-000000000101"]);
   });
 
   test("the record and activity modules never reach for the cache", async () => {
     // docs/security.md par. 8: the only cache is dictionary data. A stray
     // import here would be the first step to persisting record content.
-    for (const path of ["../../src/livespace/records.ts", "../../src/livespace/activity.ts"]) {
+    for (const path of [
+      "../../src/livespace/records.ts",
+      "../../src/livespace/activity.ts",
+      "../../src/livespace/v2/records.ts",
+      "../../src/livespace/v2/timeline.ts",
+      "../../src/livespace/v2/filters.ts",
+    ]) {
       const source = await Bun.file(new URL(path, import.meta.url)).text();
       expect(source).not.toContain("server/cache");
     }
@@ -969,6 +1020,8 @@ describe("tool input bounds", () => {
       metadata: fakeV2Metadata(syntheticSection),
       v1Metadata: fakeV1Metadata(),
       records: fakeRecords(),
+        recordReader: fakeRecordReader(),
+        timeline: fakeTimeline(),
       activity: fakeActivity(),
       writes: fakeWrites(),
       dealSteps: fakeDealSteps(),
@@ -997,10 +1050,10 @@ describe("tool input bounds", () => {
   test("a call over the input element cap is refused before validation and tool work", async () => {
     let calls = 0;
     const instance = everyToolApp({
-      records: fakeRecords({
-        searchPhrase: async () => {
+      recordReader: fakeRecordReader({
+        phrase: async () => {
           calls += 1;
-          return { hits: [], rawCount: 0 };
+          return { hits: [], totalCount: 0, rowCount: 0 };
         },
       }),
     });

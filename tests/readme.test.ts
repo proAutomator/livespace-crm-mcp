@@ -29,18 +29,24 @@ describe("README v1 contract", () => {
     const prose = text.replace(/\s+/gu, " ");
     expect(prose).toContain("fifteen dictionary sections");
     expect(prose).toContain("`crm:product-catalog:read`");
-    expect(prose).toContain("200-record sort window");
-    expect(prose).toContain("25 ids; walls for at most 5");
+    expect(prose).toContain("Up to 100 records per kind and page");
+    expect(prose).toContain("up to 25 ids");
+    expect(prose).toContain("At most 60 Livespace requests per call");
+    expect(prose).not.toContain("200-record sort window");
     expect(prose).toContain("Up to 10 items");
     expect(prose).toContain("Up to 15 notes or calls");
     expect(prose).toContain("5 per 10 minutes and 1 per recipient per minute");
   });
 
-  test("documents the deal value source, checked steps and the created-date filter", async () => {
+  test("documents the deal value source, the process include and the date filters", async () => {
     const prose = (await readme()).replace(/\s+/gu, " ");
+    // analyze still reads the old API and its value rule.
     expect(prose).toContain("value_final");
-    expect(prose).toContain("checkedSteps");
+    expect(prose).toContain("`include: [\"process\"]`");
     expect(prose).toContain("createdFrom");
+    expect(prose).toContain("`countOnly`");
+    expect(prose).toContain("`mine`");
+    expect(prose).not.toContain("checkedSteps");
   });
 
   test("states the runtime and single-user authentication constraints", async () => {
