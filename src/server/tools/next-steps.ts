@@ -18,7 +18,10 @@ export interface NextStepContext {
    * old API until they move to API v2, so no hint points at them yet.
    */
   writesEnabled: boolean;
-  /** True when further pages exist. */
+  /**
+   * search_crm: further pages exist. get_records: the call asked for no
+   * include, so related data is left to ask for.
+   */
   hasMore: boolean;
 }
 
@@ -47,12 +50,12 @@ function recordSteps(context: NextStepContext): string[] {
     return ['search_crm with kinds ["tasks"] and filters.linkedTo lists the other tasks of a record.'];
   }
   const steps: string[] = [];
-  if (context.kind === "deal") {
+  if (context.hasMore) {
     steps.push(
-      "get_records include adds process, products, budget, notes, calls, emails and tasks in the same call.",
+      context.kind === "deal"
+        ? "get_records include adds process, products, budget, notes, calls, emails and tasks in the same call."
+        : "get_records include adds notes, calls, emails and tasks in the same call.",
     );
-  } else {
-    steps.push("get_records include adds notes, calls, emails and tasks in the same call.");
   }
   steps.push('get_activity with source "record" reads a longer history of one record.');
   return steps;

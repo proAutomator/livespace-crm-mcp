@@ -34,7 +34,7 @@ test("host probe exposes an unpredictable marker only in structured record data"
     kind: "person", ids: ["person-synthetic-001"], detail: "full",
   }));
   const body = await response.json() as any;
-  expect(body.result.structuredContent.items[0].person.note).toBe(probe.marker);
+  expect(body.result.structuredContent.items[0].person.description).toBe(probe.marker);
   expect(JSON.stringify(body.result.content)).not.toContain(probe.marker);
   expect(probe.writeCount()).toBe(0);
 });

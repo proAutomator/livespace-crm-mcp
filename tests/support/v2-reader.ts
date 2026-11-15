@@ -1,4 +1,5 @@
 import type { RecordReader } from "../../src/livespace/v2/records.js";
+import type { TimelineReader } from "../../src/livespace/v2/timeline.js";
 
 function unexpectedCall(): never {
   throw new Error("record reader not configured for this test");
@@ -19,4 +20,9 @@ export function fakeRecordReader(overrides: Partial<RecordReader> = {}): RecordR
     dealBudget: unexpectedCall,
     ...overrides,
   } as RecordReader;
+}
+
+/** The record timeline lists, loud on an unexpected call like the reader. */
+export function fakeTimeline(overrides: Partial<TimelineReader> = {}): TimelineReader {
+  return { recordEntries: unexpectedCall, ...overrides } as TimelineReader;
 }

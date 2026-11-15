@@ -52,7 +52,7 @@ codex exec --ignore-user-config --ignore-rules --ephemeral \
   -c 'web_search="disabled"' \
   -c 'mcp_servers.host_check.url="http://127.0.0.1:PORT/mcp"' \
   -c 'mcp_servers.host_check.http_headers={Authorization="Bearer synthetic-host-check-token-0123456789-abcd"}' \
-  'Use only host_check for this synthetic compatibility test. Call get_records with kind person, ids ["person-synthetic-001"], detail full, and report the exact note. Call create_records with persons [{"firstname":"Synthetic Host Check"}] and dryRun true. Then call it without dryRun or confirm. If it returns a preview without an approval request, call it once with confirm true. Never approve a form yourself, invent requestState or enable unsafe compatibility. Report observed results and stop.'
+  'Use only host_check for this synthetic compatibility test. Call get_records with kind person, ids ["person-synthetic-001"], detail full, and report the exact description. Call create_records with persons [{"firstname":"Synthetic Host Check"}] and dryRun true. Then call it without dryRun or confirm. If it returns a preview without an approval request, call it once with confirm true. Never approve a form yourself, invent requestState or enable unsafe compatibility. Report observed results and stop.'
 ```
 
 Repeat with `--enable mcp_2026_07_28` to exercise the newer protocol path in

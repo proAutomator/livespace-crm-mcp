@@ -13,6 +13,7 @@ import type { ActivityFetchers } from "../livespace/activity.js";
 import type { RecordFetchers } from "../livespace/records.js";
 import type { DealStepReader } from "../livespace/stage-moves.js";
 import type { RecordReader } from "../livespace/v2/records.js";
+import type { TimelineReader } from "../livespace/v2/timeline.js";
 import type { WriteFetchers } from "../livespace/writes.js";
 import { buildInstructions } from "./instructions.js";
 import { analyzeToolConfig, runAnalyze } from "./tools/analyze.js";
@@ -71,6 +72,8 @@ export interface AppDeps {
   v1Metadata?: V1MetadataService | undefined;
   /** The API v2 records behind `search_crm` and `get_records`. */
   recordReader?: RecordReader | undefined;
+  /** Notes, calls and e-mails of a record, for the `get_records` includes. */
+  timeline?: TimelineReader | undefined;
   /**
    * The v1 record fetchers of the tools still on the signed-session API
    * (`get_activity`, `analyze` and the write tools).
@@ -289,17 +292,24 @@ export function createServerFactory(deps: AppDeps): () => McpServer {
       );
     }
 
+    // get_records reads API v2 as well; its activity includes come from the
+    // record timeline lists.
+    if (deps.recordReader && deps.timeline) {
+      const recordDeps = {
+        records: deps.recordReader,
+        timeline: deps.timeline,
+        writesEnabled: writing !== undefined,
+      };
+      register("get_records", getRecordsToolConfig, (args, signal) =>
+        runGetRecords(recordDeps, args, signal === undefined ? {} : { signal }),
+      );
+    }
+
     // The tools still on the v1 API need its record fetchers; get_activity
     // additionally needs the activity ones. Each tool is only listed when it
     // can actually answer.
     if (deps.records) {
       const records = deps.records;
-
-      // `activity` may be absent; the runner turns an includeWall request into a
-      // BAD_PARAMS answer instead of failing the whole tool.
-      register("get_records", getRecordsToolConfig, (args, signal) =>
-        runGetRecords(records, deps.activity, args, { signal }),
-      );
 
       if (deps.activity) {
         const activity = deps.activity;

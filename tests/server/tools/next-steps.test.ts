@@ -53,14 +53,14 @@ describe("nextSteps", () => {
   });
 
   test("a deal read points at the includes and the history", () => {
-    const steps = nextSteps("get_records", {
-      kind: "deal",
-      empty: false,
-      hasMore: false,
-      writesEnabled: false,
-    }).join(" ");
+    const context = { kind: "deal", empty: false, writesEnabled: false } as const;
+    const steps = nextSteps("get_records", { ...context, hasMore: true }).join(" ");
     expect(steps).toContain("include");
     expect(steps).toContain("get_activity");
+    // Includes already asked for: only the history is left to point at.
+    const asked = nextSteps("get_records", { ...context, hasMore: false }).join(" ");
+    expect(asked).not.toContain("include");
+    expect(asked).toContain("get_activity");
   });
 
   test("a task read has no history to point at", () => {

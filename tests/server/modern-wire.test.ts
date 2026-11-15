@@ -5,12 +5,14 @@ import { MAX_TOOL_INPUT_ELEMENTS, type AppDeps } from "../../src/server/mcp.js";
 import type { V1MetadataService as MetadataService } from "../../src/server/v1-metadata.js";
 import type { ActivityFetchers } from "../../src/livespace/activity.js";
 import type { RecordFetchers } from "../../src/livespace/records.js";
+import type { RecordReader } from "../../src/livespace/v2/records.js";
 import type { DealStepReader } from "../../src/livespace/stage-moves.js";
 import type { WriteFetchers } from "../../src/livespace/writes.js";
 import { person, wallEntry } from "../support/records.js";
 import { healthPing } from "../support/health.js";
 import { fakeV2Metadata } from "../support/metadata.js";
-import { fakeRecordReader } from "../support/v2-reader.js";
+import { personV2 } from "../support/v2-records.js";
+import { fakeRecordReader, fakeTimeline } from "../support/v2-reader.js";
 
 const BASE_CONFIG: ServerConfig = {
   port: 3020,
@@ -453,6 +455,7 @@ describe("crm_metadata wiring", () => {
       v1Metadata: fakeV1Metadata(),
         records: fakeRecords(),
         recordReader: fakeRecordReader(),
+        timeline: fakeTimeline(),
         activity: fakeActivity(),
         writes: fakeWrites(),
         dealSteps: fakeDealSteps(),
@@ -520,6 +523,7 @@ describe("crm_metadata wiring", () => {
       v1Metadata: fakeV1Metadata(),
         records: fakeRecords(),
         recordReader: fakeRecordReader(),
+        timeline: fakeTimeline(),
         activity: fakeActivity(),
         writes: fakeWrites(),
         dealSteps: fakeDealSteps(),
@@ -545,6 +549,7 @@ describe("crm_metadata wiring", () => {
       v1Metadata: fakeV1Metadata(),
         records: fakeRecords(),
         recordReader: fakeRecordReader(),
+        timeline: fakeTimeline(),
         activity: fakeActivity(),
         writes: fakeWrites(),
       }).request(
@@ -597,6 +602,7 @@ describe("read tool wiring", () => {
       v1Metadata: fakeV1Metadata(),
       records: fakeRecords(),
         recordReader: fakeRecordReader(),
+        timeline: fakeTimeline(),
       activity: fakeActivity(),
       ...overrides,
     });
@@ -632,10 +638,29 @@ describe("read tool wiring", () => {
     expect(names).toEqual(["health", "crm_metadata"]);
   });
 
+  test("the API v2 deps alone list search_crm and get_records", async () => {
+    // No v1 key pair: the two record tools read API v2 and need nothing else.
+    const names = await listNames(
+      app({
+        metadata: fakeV2Metadata(syntheticSection),
+        recordReader: fakeRecordReader(),
+        timeline: fakeTimeline(),
+      }),
+    );
+    expect(names).toEqual(["health", "crm_metadata", "search_crm", "get_records"]);
+  });
+
+  test("search_crm needs the dictionaries and get_records the timeline lists", async () => {
+    expect(await listNames(app({ recordReader: fakeRecordReader() }))).toEqual(["health"]);
+    expect(
+      await listNames(app({ recordReader: fakeRecordReader(), timeline: fakeTimeline() })),
+    ).toEqual(["health", "get_records"]);
+  });
+
   test("records without activity keep get_records but drop get_activity", async () => {
     const names = await listNames(
       app({ metadata: fakeV2Metadata(syntheticSection),
-      v1Metadata: fakeV1Metadata(), records: fakeRecords(), recordReader: fakeRecordReader() }),
+      v1Metadata: fakeV1Metadata(), records: fakeRecords(), recordReader: fakeRecordReader(), timeline: fakeTimeline() }),
     );
     expect(names).toEqual([
       "health",
@@ -730,9 +755,8 @@ describe("read tool wiring", () => {
 
   test("get_records answers a batch call end to end", async () => {
     const instance = fullApp({
-      records: fakeRecords({
-        getRecord: (async (_kind: string, id: string) =>
-          person({ id })) as RecordFetchers["getRecord"],
+      recordReader: fakeRecordReader({
+        get: (async (_kind: string, id: string) => personV2({ id })) as RecordReader["get"],
       }),
     });
     const payload = await jsonFromResponse(
@@ -814,10 +838,10 @@ describe("read tool wiring", () => {
 
   test("an upstream failure in get_records never leaks its text over the wire", async () => {
     const instance = fullApp({
-      records: fakeRecords({
-        getRecord: (async () => {
+      recordReader: fakeRecordReader({
+        get: (async () => {
           throw new Error("SENSITIVE-synthetic upstream body");
-        }) as RecordFetchers["getRecord"],
+        }) as RecordReader["get"],
       }),
     });
     const raw = await (
@@ -863,14 +887,13 @@ describe("read tool wiring", () => {
     expect(raw).not.toContain("SENSITIVE-synthetic");
   });
 
-  test("a wall failure degrades to a sanitized wallError, record still ok", async () => {
+  test("a failing include degrades to a sanitized includeError, record still ok", async () => {
     const instance = fullApp({
-      records: fakeRecords({
-        getRecord: (async (_kind: string, id: string) =>
-          person({ id })) as RecordFetchers["getRecord"],
+      recordReader: fakeRecordReader({
+        get: (async (_kind: string, id: string) => personV2({ id })) as RecordReader["get"],
       }),
-      activity: fakeActivity({
-        recordWall: async () => {
+      timeline: fakeTimeline({
+        recordEntries: async () => {
           throw new Error("SENSITIVE-synthetic upstream body");
         },
       }),
@@ -884,7 +907,7 @@ describe("read tool wiring", () => {
           arguments: {
             kind: "person",
             ids: ["person-synthetic-1"],
-            includeWall: true,
+            include: ["notes"],
           },
         },
         id: 16,
@@ -896,18 +919,35 @@ describe("read tool wiring", () => {
     const payload = JSON.parse(dataLine ? dataLine.slice(6) : raw);
     const item = payload.result.structuredContent.items[0];
     expect(item.status).toBe("ok");
-    expect(item.wallError.code).toBe("UPSTREAM_ERROR");
+    expect(item.includeErrors[0]).toMatchObject({ include: "notes", code: "UPSTREAM_ERROR" });
     expect(payload.result.isError).toBeUndefined();
+  });
+
+  test("the removed includeWall argument is refused by the strict input schema", async () => {
+    const payload = await jsonFromResponse(
+      await fullApp().request(
+        modernRequest({
+          method: "tools/call",
+          name: "get_records",
+          params: {
+            name: "get_records",
+            arguments: { kind: "person", ids: ["person-synthetic-1"], includeWall: true },
+          },
+          id: 18,
+        }),
+      ),
+    );
+    expect(payload.result?.isError ?? payload.error !== undefined).toBe(true);
   });
 
   test("record data is never cached: two identical calls hit upstream twice", async () => {
     const calls: string[] = [];
     const instance = fullApp({
-      records: fakeRecords({
-        getRecord: (async (_kind: string, id: string) => {
+      recordReader: fakeRecordReader({
+        get: (async (_kind: string, id: string) => {
           calls.push(id);
-          return person({ id });
-        }) as RecordFetchers["getRecord"],
+          return personV2({ id });
+        }) as RecordReader["get"],
       }),
     });
     const request = () =>
@@ -930,7 +970,13 @@ describe("read tool wiring", () => {
   test("the record and activity modules never reach for the cache", async () => {
     // docs/security.md par. 8: the only cache is dictionary data. A stray
     // import here would be the first step to persisting record content.
-    for (const path of ["../../src/livespace/records.ts", "../../src/livespace/activity.ts"]) {
+    for (const path of [
+      "../../src/livespace/records.ts",
+      "../../src/livespace/activity.ts",
+      "../../src/livespace/v2/records.ts",
+      "../../src/livespace/v2/timeline.ts",
+      "../../src/livespace/v2/filters.ts",
+    ]) {
       const source = await Bun.file(new URL(path, import.meta.url)).text();
       expect(source).not.toContain("server/cache");
     }
@@ -972,6 +1018,7 @@ describe("tool input bounds", () => {
       v1Metadata: fakeV1Metadata(),
       records: fakeRecords(),
         recordReader: fakeRecordReader(),
+        timeline: fakeTimeline(),
       activity: fakeActivity(),
       writes: fakeWrites(),
       dealSteps: fakeDealSteps(),
