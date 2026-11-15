@@ -10,6 +10,7 @@ import { createWriteFetchers } from "./livespace/writes.js";
 import { buildApp } from "./server/app.js";
 import { listen } from "./server/listen.js";
 import { createMetadataService } from "./server/tools/crm-metadata.js";
+import { createV1MetadataService } from "./server/v1-metadata.js";
 import packageJson from "../package.json";
 
 const serverConfig = loadServerConfig(process.env);
@@ -21,9 +22,9 @@ const livespaceConfig = loadLivespaceConfig(process.env);
 function v1Deps(v1: LivespaceV1Config) {
   const client = new LivespaceClient(v1);
   return {
-    // Built once per process: the dictionary cache lives here while the MCP
-    // protocol layer stays stateless (docs/security.md par. 8).
-    metadata: createMetadataService(client),
+    // The v1 dictionaries these tools validate ids against, cached like the
+    // v2 ones below.
+    v1Metadata: createV1MetadataService(client),
     // Record and activity data is never cached (docs/security.md par. 8);
     // these fetchers are stateless and only share the client's throttle and
     // auth.
@@ -47,6 +48,12 @@ const v2 = new LivespaceV2Client({
   dailyReserve: livespaceConfig.dailyReserve,
 });
 
+// Built once per process: the dictionary cache lives here while the MCP
+// protocol layer stays stateless (docs/security.md par. 8).
+const metadata = createMetadataService(v2, {
+  actingUserEmail: livespaceConfig.actingUserEmail,
+});
+
 const app = buildApp({
   config: serverConfig,
   version: packageJson.version,
@@ -58,12 +65,9 @@ const app = buildApp({
     v2Ping: (opts) => readIntegrationUser(v2, { ...opts, essential: true }),
     rateLimit: () => v2.rateLimit(),
     dailyReserve: livespaceConfig.dailyReserve,
-    // Matched against the user dictionary once crm_metadata reads API v2.
-    actingUser: async () => ({
-      state: livespaceConfig.actingUserEmail === null ? "not_configured" : "unknown",
-      user: null,
-    }),
+    actingUser: (opts) => metadata.actingUser(opts),
   },
+  metadata,
   ...(livespaceConfig.v1 === null ? {} : v1Deps(livespaceConfig.v1)),
 });
 

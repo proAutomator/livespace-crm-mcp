@@ -5,8 +5,9 @@ import type { ProcessInfo } from "../../src/livespace/metadata.js";
 import type { DealRecord, ListPage, RecordFetchers } from "../../src/livespace/records.js";
 import { buildApp } from "../../src/server/app.js";
 import type { AppDeps } from "../../src/server/mcp.js";
-import type { MetadataService } from "../../src/server/tools/crm-metadata.js";
+import type { V1MetadataService as MetadataService } from "../../src/server/v1-metadata.js";
 import { deal } from "../support/records.js";
+import { fakeV2Metadata } from "../support/metadata.js";
 
 // Every value below is invented. No CRM data, no sandbox values (AGENTS.md).
 
@@ -164,7 +165,7 @@ describe("analyze registration", () => {
   test("is listed last, after the other read tools", async () => {
     const tools = await listNames(
       app({
-        metadata: fakeMetadata(),
+        metadata: fakeV2Metadata(), v1Metadata: fakeMetadata(),
         records: fakeRecords(),
         activity: fakeActivity(),
       }),
@@ -189,7 +190,7 @@ describe("analyze registration", () => {
     expect(withoutMetadata.map((t: any) => t.name)).not.toContain("analyze");
 
     const withoutActivity = await listNames(
-      app({ metadata: fakeMetadata(), records: fakeRecords() }),
+      app({ metadata: fakeV2Metadata(), v1Metadata: fakeMetadata(), records: fakeRecords() }),
     );
     expect(withoutActivity.map((t: any) => t.name)).not.toContain("analyze");
   });
@@ -197,7 +198,7 @@ describe("analyze registration", () => {
   test("answers a pipeline_summary call end to end", async () => {
     const counter = { calls: 0 };
     const instance = app({
-      metadata: fakeMetadata(),
+      metadata: fakeV2Metadata(), v1Metadata: fakeMetadata(),
       records: fakeRecords(dealFetcher(counter)),
       activity: fakeActivity(),
     });
@@ -241,7 +242,7 @@ describe("analyze registration", () => {
     const counter = { calls: 0 };
     const reads = { reads: 0 };
     const instance = app({
-      metadata: fakeMetadata(reads),
+      metadata: fakeV2Metadata(), v1Metadata: fakeMetadata(reads),
       records: fakeRecords(dealFetcher(counter)),
       activity: fakeActivity(),
     });

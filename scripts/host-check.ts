@@ -2,7 +2,7 @@ import { loadServerConfig } from "../src/config/server-env.js";
 import type { RecordFetchers } from "../src/livespace/records.js";
 import type { WriteFetchers } from "../src/livespace/writes.js";
 import { buildApp } from "../src/server/app.js";
-import type { MetadataService } from "../src/server/tools/crm-metadata.js";
+import type { V1MetadataService as MetadataService } from "../src/server/v1-metadata.js";
 import { person } from "../tests/support/records.js";
 
 // Public, synthetic fixture value. Never use it with a real CRM backend.
@@ -62,7 +62,7 @@ export function createHostCheck() {
       MCP_AUTH_TOKEN: SYNTHETIC_HOST_TOKEN,
       MCP_REQUEST_STATE_KEY: `synthetic-${crypto.randomUUID()}`,
     }),
-    records, metadata, writes: writeFetchers,
+    records, v1Metadata: metadata, writes: writeFetchers,
   });
   return { app, marker, writeCount: () => writes };
 }

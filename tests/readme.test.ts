@@ -27,7 +27,8 @@ describe("README v1 contract", () => {
     expect(rows).toEqual([...TOOLS]);
 
     const prose = text.replace(/\s+/gu, " ");
-    expect(prose).toContain("nine dictionary sections");
+    expect(prose).toContain("fifteen dictionary sections");
+    expect(prose).toContain("`crm:product-catalog:read`");
     expect(prose).toContain("200-record sort window");
     expect(prose).toContain("25 ids; walls for at most 5");
     expect(prose).toContain("Up to 10 items");

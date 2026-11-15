@@ -8,8 +8,9 @@ import type { DealStepReader } from "../../src/livespace/stage-moves.js";
 import type { PersonWrite, WriteFetchers } from "../../src/livespace/writes.js";
 import { buildApp } from "../../src/server/app.js";
 import type { AppDeps } from "../../src/server/mcp.js";
-import type { MetadataService } from "../../src/server/tools/crm-metadata.js";
+import type { V1MetadataService as MetadataService } from "../../src/server/v1-metadata.js";
 import { person } from "../support/records.js";
+import { fakeV2Metadata } from "../support/metadata.js";
 
 /**
  * The five write tools over the real wire: what is listed, what read-only
@@ -208,7 +209,7 @@ function app(deps: Partial<AppDeps> = {}, config: ServerConfig = BASE_CONFIG) {
   return buildApp({
     config,
     version: "0.0.0-test",
-    metadata: fakeMetadata(),
+    metadata: fakeV2Metadata(), v1Metadata: fakeMetadata(),
     records: fakeRecords(),
     activity: fakeActivity(),
     dealSteps: fakeDealSteps(),

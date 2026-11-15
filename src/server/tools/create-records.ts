@@ -18,7 +18,7 @@ import {
   type WriteCallOptions,
   type WriteFetchers,
 } from "../../livespace/writes.js";
-import type { MetadataService } from "./crm-metadata.js";
+import type { V1MetadataService as MetadataService } from "../v1-metadata.js";
 import {
   toolErrorSchema,
   toToolError,

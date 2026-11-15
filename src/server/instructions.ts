@@ -103,11 +103,17 @@ Read tools:
   dailyRemaining is the account's daily request budget, shared with its
   other integrations; at or below dailyReserve the other tools refuse work
   until 00:00 UTC.
-- "crm_metadata" returns nine dictionary sections: processes with stages and
-  steps, users and teams, contact/deal groups, sources, task types/statuses,
-  products and the current user. Sources have names but no ids;
-  currentUser.id can be null. Custom-field datasets are not available. Results
-  are cached for a few minutes, so inspect asOf, ageMs and stale.
+- "crm_metadata" returns fifteen dictionary sections: processes with stages
+  and steps (weight, required, requiredItem), users, teams, contact/deal
+  groups, sources, positions, deal reasons, tags, currencies, task
+  types/statuses, custom fields with their options, products and the current
+  user. Tags have names but no ids. A row with selectable: false is retired
+  or switched off: it explains old records and cannot be assigned.
+  currentUser is the integration user of the API key;
+  currentUser.actingUser is the person this server works for and can be
+  null, with a hint saying why. truncated: true means more rows exist than
+  the section returned. Results are cached for a few minutes, so inspect
+  asOf, ageMs and stale.
   Optional userQuery matches part of a user's name or email, ignoring case
   and outer whitespace but preserving accents. It does not search team names.
   With userQuery, omitted sections means users only; explicit sections must

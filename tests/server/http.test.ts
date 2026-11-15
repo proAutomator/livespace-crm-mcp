@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { buildApp } from "../../src/server/app.js";
 import type { ServerConfig } from "../../src/config/server-env.js";
 import { healthPing } from "../support/health.js";
+import { fakeV2Metadata } from "../support/metadata.js";
 
 const BASE_CONFIG: ServerConfig = {
   port: 3020,
@@ -70,7 +71,7 @@ describe("MCP HTTP surface", () => {
     const instance = buildApp({
       config: BASE_CONFIG, version: "0.0.0-test",
       livespace: healthPing(async () => { calls++; return {}; }),
-      metadata: { get: (async () => { calls++; return { data: [], asOf: 0, stale: false }; }) as never },
+      metadata: fakeV2Metadata(() => { calls++; return []; }),
     });
     for (const name of ["health", "crm_metadata"]) {
       const args = name === "health" ? { checkLivespace: true, typo: true } : { sections: ["users"], typo: true };

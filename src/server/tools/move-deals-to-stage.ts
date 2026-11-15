@@ -17,7 +17,7 @@ import {
 } from "../../livespace/stage-moves.js";
 import type { WriteCallOptions, WriteFetchers } from "../../livespace/writes.js";
 import { readWriteState, type WriteToolOptions } from "./create-records.js";
-import type { MetadataService } from "./crm-metadata.js";
+import type { V1MetadataService as MetadataService } from "../v1-metadata.js";
 import {
   toolErrorSchema,
   toToolError,

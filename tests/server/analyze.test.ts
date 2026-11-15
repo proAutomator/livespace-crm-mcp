@@ -28,7 +28,7 @@ import {
   runAnalyze,
   type AnalyzeArgs,
 } from "../../src/server/tools/analyze.js";
-import type { MetadataService } from "../../src/server/tools/crm-metadata.js";
+import type { V1MetadataService as MetadataService } from "../../src/server/v1-metadata.js";
 import type { ToolError, ToolRunResult } from "../../src/server/tools/tool-error.js";
 import { deal, task, wallEntry } from "../support/records.js";
 

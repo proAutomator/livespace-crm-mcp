@@ -2,13 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { buildApp } from "../../src/server/app.js";
 import type { ServerConfig } from "../../src/config/server-env.js";
 import { MAX_TOOL_INPUT_ELEMENTS, type AppDeps } from "../../src/server/mcp.js";
-import type { MetadataService } from "../../src/server/tools/crm-metadata.js";
+import type { V1MetadataService as MetadataService } from "../../src/server/v1-metadata.js";
 import type { ActivityFetchers } from "../../src/livespace/activity.js";
 import type { RecordFetchers } from "../../src/livespace/records.js";
 import type { DealStepReader } from "../../src/livespace/stage-moves.js";
 import type { WriteFetchers } from "../../src/livespace/writes.js";
 import { person, wallEntry } from "../support/records.js";
 import { healthPing } from "../support/health.js";
+import { fakeV2Metadata } from "../support/metadata.js";
 
 const BASE_CONFIG: ServerConfig = {
   port: 3020,
@@ -168,7 +169,7 @@ const SUBDOMAIN = "synthetic";
 
 // Fully synthetic dictionary data; `read` may throw to simulate a section
 // failure.
-function fakeMetadata(read: (section: string) => unknown): MetadataService {
+function fakeV1Metadata(read: (section: string) => unknown = () => []): MetadataService {
   return {
     get: async (section: string) => ({
       data: read(section),
@@ -179,18 +180,22 @@ function fakeMetadata(read: (section: string) => unknown): MetadataService {
 }
 
 const SYNTHETIC_CURRENT_USER = {
-  id: "user-synthetic-1",
-  name: "Synthetic User",
-  email: "synthetic.user@example.invalid",
-  position: "Synthetic Position",
-  permissions: { contact_add: true },
-  teams: [],
+  integrationLogin: "synthetic-integration",
+  timeZone: "Europe/Warsaw",
+  actingUser: {
+    id: "user-synthetic-1",
+    name: "Synthetic User",
+    email: "synthetic.user@example.invalid",
+  },
 };
 
+// API v2 dictionary data for crm_metadata; unnamed sections answer empty.
 function syntheticSection(section: string): unknown {
   if (section === "currentUser") return SYNTHETIC_CURRENT_USER;
-  if (section === "sources") return ["Synthetic Source"];
-  return [];
+  if (section === "sources") {
+    return [{ id: "source-synthetic-1", name: "Synthetic Source", parentId: null }];
+  }
+  return undefined;
 }
 
 describe("modern era (2026-07-28) wire behavior", () => {
@@ -360,7 +365,7 @@ describe("crm_metadata wiring", () => {
     let calls = 0;
     const instance = app({
       livespace: healthPing(async () => { calls++; return {}; }),
-      metadata: fakeMetadata(() => { calls++; return []; }),
+      metadata: fakeV2Metadata(() => { calls++; return []; }),
     });
     const listed = await jsonFromResponse(await instance.request(modernRequest({ method: "tools/list" })));
     for (const name of ["health", "crm_metadata"]) {
@@ -379,11 +384,11 @@ describe("crm_metadata wiring", () => {
 
   test("userQuery reaches metadata and returns only matching users", async () => {
     const sections: string[] = [];
-    const instance = app({ metadata: fakeMetadata((section) => {
+    const instance = app({ metadata: fakeV2Metadata((section) => {
       sections.push(section);
       return [
-        { id: "synthetic-user-1", name: "Synthetic Alice", email: "alice@synthetic.example", teams: [] },
-        { id: "synthetic-user-2", name: "Synthetic Bob", email: "bob@synthetic.example", teams: [] },
+        { id: "synthetic-user-1", name: "Synthetic Alice", email: "alice@synthetic.example", team: null },
+        { id: "synthetic-user-2", name: "Synthetic Bob", email: "bob@synthetic.example", team: null },
       ];
     }) });
     const payload = await jsonFromResponse(await instance.request(modernRequest({
@@ -397,7 +402,8 @@ describe("crm_metadata wiring", () => {
   });
 
   test("is listed and callable when a metadata service is configured", async () => {
-    const instance = app({ metadata: fakeMetadata(syntheticSection) });
+    const instance = app({ metadata: fakeV2Metadata(syntheticSection),
+      v1Metadata: fakeV1Metadata() });
 
     const listed = await jsonFromResponse(
       await instance.request(modernRequest({ method: "tools/list" })),
@@ -426,7 +432,7 @@ describe("crm_metadata wiring", () => {
     expect(response.status).toBe(200);
     const payload = await jsonFromResponse(response);
     expect(payload.result.resultType).toBe("complete");
-    expect(payload.result.structuredContent.sections.currentUser.data.name).toBe(
+    expect(payload.result.structuredContent.sections.currentUser.data.actingUser.name).toBe(
       "Synthetic User",
     );
     expect(payload.result.structuredContent.errors).toEqual([]);
@@ -442,7 +448,8 @@ describe("crm_metadata wiring", () => {
   test("every listed tool carries its exact security annotations", async () => {
     const listed = await jsonFromResponse(
       await app({
-        metadata: fakeMetadata(syntheticSection),
+        metadata: fakeV2Metadata(syntheticSection),
+      v1Metadata: fakeV1Metadata(),
         records: fakeRecords(),
         activity: fakeActivity(),
         writes: fakeWrites(),
@@ -507,7 +514,8 @@ describe("crm_metadata wiring", () => {
       await buildApp({
         config: { ...BASE_CONFIG, readOnly: true },
         version: "0.0.0-test",
-        metadata: fakeMetadata(syntheticSection),
+        metadata: fakeV2Metadata(syntheticSection),
+      v1Metadata: fakeV1Metadata(),
         records: fakeRecords(),
         activity: fakeActivity(),
         writes: fakeWrites(),
@@ -530,7 +538,8 @@ describe("crm_metadata wiring", () => {
     // helper has to be able to declare it.
     const payload = await jsonFromResponse(
       await app({
-        metadata: fakeMetadata(syntheticSection),
+        metadata: fakeV2Metadata(syntheticSection),
+      v1Metadata: fakeV1Metadata(),
         records: fakeRecords(),
         activity: fakeActivity(),
         writes: fakeWrites(),
@@ -553,7 +562,7 @@ describe("crm_metadata wiring", () => {
 
   test("an unexpected upstream failure never leaks its text over the wire", async () => {
     const instance = app({
-      metadata: fakeMetadata(() => {
+      metadata: fakeV2Metadata(() => {
         throw new Error("SENSITIVE-synthetic upstream body");
       }),
     });
@@ -580,7 +589,8 @@ describe("crm_metadata wiring", () => {
 describe("read tool wiring", () => {
   function fullApp(overrides: Partial<AppDeps> = {}) {
     return app({
-      metadata: fakeMetadata(syntheticSection),
+      metadata: fakeV2Metadata(syntheticSection),
+      v1Metadata: fakeV1Metadata(),
       records: fakeRecords(),
       activity: fakeActivity(),
       ...overrides,
@@ -611,14 +621,16 @@ describe("read tool wiring", () => {
 
   test("without record fetchers only health and crm_metadata are listed", async () => {
     const names = await listNames(
-      app({ metadata: fakeMetadata(syntheticSection), activity: fakeActivity() }),
+      app({ metadata: fakeV2Metadata(syntheticSection),
+      v1Metadata: fakeV1Metadata(), activity: fakeActivity() }),
     );
     expect(names).toEqual(["health", "crm_metadata"]);
   });
 
   test("records without activity keep get_records but drop get_activity", async () => {
     const names = await listNames(
-      app({ metadata: fakeMetadata(syntheticSection), records: fakeRecords() }),
+      app({ metadata: fakeV2Metadata(syntheticSection),
+      v1Metadata: fakeV1Metadata(), records: fakeRecords() }),
     );
     expect(names).toEqual([
       "health",
@@ -954,7 +966,8 @@ function maxInputElements(schema: any, path: string): number {
 describe("tool input bounds", () => {
   function everyToolApp(overrides: Partial<AppDeps> = {}) {
     return app({
-      metadata: fakeMetadata(syntheticSection),
+      metadata: fakeV2Metadata(syntheticSection),
+      v1Metadata: fakeV1Metadata(),
       records: fakeRecords(),
       activity: fakeActivity(),
       writes: fakeWrites(),
