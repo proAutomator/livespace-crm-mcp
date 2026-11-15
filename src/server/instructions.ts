@@ -82,9 +82,10 @@ instead of mirroring the raw API, adds the sorting and aggregation the API
 lacks, and returns errors with recovery hints.
 ${readOnlyNote}
 Quick start:
-- Call "health" first. Set checkLivespace: true to make one lightweight API
-  call and verify the configured Livespace connection, the acting user and
-  the daily API budget.
+- Call "health" first. Set checkLivespace: true to verify the configured
+  Livespace connection, the acting user and the daily API budget (one API
+  request, plus the user list once per cache period when an acting user is
+  configured).
 - Call "crm_metadata" before any operation that needs CRM ids. Fetch only the
   sections you need. Never guess ids - always take them from crm_metadata.
 - Find ids with "search_crm", read records with "get_records", and read
@@ -110,8 +111,9 @@ Read tools:
   user. Tags have names but no ids. A row with selectable: false is retired
   or switched off: it explains old records and cannot be assigned.
   currentUser is the integration user of the API key;
-  currentUser.actingUser is the person this server works for and can be
-  null, with a hint saying why. truncated: true means more rows exist than
+  currentUser.actingUser is the person this server works for; it is null
+  when none is configured or matched and absent when that could not be
+  checked, with a hint saying which. truncated: true means more rows exist than
   the section returned. Results are cached for a few minutes, so inspect
   asOf, ageMs and stale.
   Optional userQuery matches part of a user's name or email, ignoring case

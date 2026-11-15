@@ -3,6 +3,7 @@ import { CallBudget } from "../../../src/livespace/v2/budget.js";
 import { LivespaceV2Client } from "../../../src/livespace/v2/client.js";
 import {
   createV2MetadataFetchers,
+  CUSTOM_FIELD_OPTION_CAP,
   DICTIONARY_MAX_PAGES,
   DICTIONARY_PER_PAGE,
   findActingUser,
@@ -456,6 +457,45 @@ describe("section mapping", () => {
     expect(calls.length).toBe(4);
   });
 
+  test("a choice field with a very long option list is cut and says so", async () => {
+    const options = Array.from({ length: CUSTOM_FIELD_OPTION_CAP + 7 }, (_, i) => ({
+      id: syntheticId(9000 + i),
+      name: `SYNTHETIC option ${i}`,
+    }));
+    const { fetchers } = harness({
+      ...emptyRoutes(),
+      "GET /dictionaries/deals/fields": () =>
+        page([
+          {
+            id: syntheticId(1),
+            name: "SYNTHETIC long select",
+            type: "select",
+            group: null,
+            required: false,
+            readOnly: false,
+            selectable: true,
+            options,
+          },
+          {
+            id: syntheticId(2),
+            name: "SYNTHETIC short select",
+            type: "select",
+            group: null,
+            required: false,
+            readOnly: false,
+            selectable: true,
+            options: options.slice(0, CUSTOM_FIELD_OPTION_CAP),
+          },
+        ]),
+    });
+    const [long, short] = (await fetchers.customFields()).data.deal;
+    expect(long?.options.length).toBe(CUSTOM_FIELD_OPTION_CAP);
+    expect(long?.optionsTruncated).toBe(true);
+    expect(short?.options.length).toBe(CUSTOM_FIELD_OPTION_CAP);
+    expect(short && "optionsTruncated" in short).toBe(false);
+    expect(CUSTOM_FIELD_OPTION_CAP).toBe(200);
+  });
+
   test("custom fields of numeric and date type are not filterable", async () => {
     const types = [
       "text", "textarea", "numeric", "integer", "date", "date_time",
@@ -557,11 +597,7 @@ describe("section mapping", () => {
         }),
     });
     expect(await fetchers.currentUser()).toEqual({
-      data: {
-        integrationLogin: "synthetic-integration",
-        timeZone: "Europe/Warsaw",
-        actingUser: null,
-      },
+      data: { integrationLogin: "synthetic-integration", timeZone: "Europe/Warsaw" },
       truncated: false,
     });
   });
@@ -629,12 +665,28 @@ describe("load discipline", () => {
   });
 
   test("without a total the loop goes on only after a full page", async () => {
-    const { fetchers, calls } = harness({
+    const short = harness({
       "GET /dictionaries/positions": () =>
         v2Envelope([{ id: syntheticId(1), name: "SYNTHETIC", selectable: true }]),
     });
-    expect((await fetchers.positions()).truncated).toBe(false);
-    expect(calls.length).toBe(1);
+    expect((await short.fetchers.positions()).truncated).toBe(false);
+    expect(short.calls.length).toBe(1);
+
+    const full = Array.from({ length: 500 }, (_, i) => ({
+      id: syntheticId(5000 + i),
+      name: "SYNTHETIC",
+      selectable: true,
+    }));
+    const long = harness({
+      "GET /dictionaries/positions": [
+        () => v2Envelope(full),
+        () => v2Envelope(full.slice(0, 3)),
+      ],
+    });
+    const result = await long.fetchers.positions();
+    expect(result).toMatchObject({ truncated: false });
+    expect(result.data.length).toBe(503);
+    expect(long.calls.map((call) => query(call)["page"])).toEqual(["1", "2"]);
   });
 
   test("every page spends the call budget, and a spent budget stops the loop", async () => {
@@ -665,6 +717,47 @@ describe("load discipline", () => {
       "GET /sales-processes",
       "GET /dictionaries/processes",
       "GET /dictionaries/processes",
+    ]);
+  });
+
+  test("a fallback that fails too leaves the current route in place", async () => {
+    const { fetchers, calls } = harness({
+      "GET /sales-processes": [
+        () => v2Problem(404, "not-found"),
+        () => page([SYNTHETIC_PROCESS]),
+      ],
+      "GET /dictionaries/processes": () => v2Problem(404, "not-found"),
+    });
+    await expect(fetchers.processes()).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect((await fetchers.processes()).data.length).toBe(1);
+    expect(calls.map((call) => call.route)).toEqual([
+      "GET /sales-processes",
+      "GET /dictionaries/processes",
+      "GET /sales-processes",
+    ]);
+  });
+
+  test("a remembered fallback route that disappears goes back to the current one", async () => {
+    const { fetchers, calls } = harness({
+      "GET /sales-processes": [
+        () => v2Problem(404, "not-found"),
+        () => page([SYNTHETIC_PROCESS]),
+        () => page([SYNTHETIC_PROCESS]),
+      ],
+      "GET /dictionaries/processes": [
+        () => page([SYNTHETIC_PROCESS]),
+        () => v2Problem(404, "not-found"),
+      ],
+    });
+    await fetchers.processes();
+    expect((await fetchers.processes()).data.length).toBe(1);
+    await fetchers.processes();
+    expect(calls.map((call) => call.route)).toEqual([
+      "GET /sales-processes",
+      "GET /dictionaries/processes",
+      "GET /dictionaries/processes",
+      "GET /sales-processes",
+      "GET /sales-processes",
     ]);
   });
 

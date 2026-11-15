@@ -1,6 +1,6 @@
 import * as z from "zod/v4";
 import { LivespaceError } from "../../livespace/errors.js";
-import type { RateLimitSnapshot } from "../../livespace/v2/budget.js";
+import { CALL_BUDGETS, CallBudget, type RateLimitSnapshot } from "../../livespace/v2/budget.js";
 import {
   actingUserHint,
   type ActingUserLookup,
@@ -9,14 +9,20 @@ import {
 
 export const PROTOCOL_VERSION = "2026-07-28";
 
+export interface HealthCallOptions {
+  signal?: AbortSignal;
+  /** The request budget of this `health` call. */
+  budget?: CallBudget;
+}
+
 /** What `checkLivespace` needs; absent when no API v2 client is wired. */
 export interface HealthLivespaceDeps {
   /** `GET /users/me`, exempt from the daily reserve. */
-  v2Ping: (opts?: { signal?: AbortSignal }) => Promise<IntegrationUser>;
+  v2Ping: (opts?: HealthCallOptions) => Promise<IntegrationUser>;
   rateLimit: () => RateLimitSnapshot;
   dailyReserve: number;
   /** Matches the configured e-mail against the cached user dictionary. */
-  actingUser: (opts?: { signal?: AbortSignal }) => Promise<ActingUserLookup>;
+  actingUser: (opts?: HealthCallOptions) => Promise<ActingUserLookup>;
 }
 
 export interface HealthDeps {
@@ -57,10 +63,12 @@ export const healthToolConfig = {
   title: "Server Health",
   description:
     "Check that this MCP server is up. Pass checkLivespace: true to also " +
-    "verify the Livespace API v2 connection (one lightweight call): it reports " +
+    "verify the Livespace API v2 connection (one request, plus the user list " +
+    "once per cache period when an acting user is configured): it reports " +
     "the integration user of the key and its time zone, the user this server " +
-    "acts for (null when none is configured or matched), and how many requests " +
-    "are left in the account's daily API budget next to the configured reserve.",
+    "acts for (null when none is configured or matched, absent when that " +
+    "could not be checked), and how many requests are left in the account's " +
+    "daily API budget next to the configured reserve.",
   inputSchema: z.strictObject({
     checkLivespace: z
       .boolean()
@@ -106,7 +114,12 @@ async function checkLivespace(
   deps: HealthLivespaceDeps,
   signal: AbortSignal | undefined,
 ): Promise<{ health: LivespaceHealth; lines: string[] }> {
-  const callOpts = signal === undefined ? {} : { signal };
+  // One request budget for the whole call (docs/security.md par. 3): the
+  // ping and, on a cold cache, the user list both spend from it.
+  const callOpts: HealthCallOptions = {
+    budget: new CallBudget(CALL_BUDGETS.read),
+    ...(signal === undefined ? {} : { signal }),
+  };
   const { dailyReserve } = deps;
 
   let me: IntegrationUser;
@@ -157,8 +170,10 @@ async function checkLivespace(
       reachable: true,
       ...(me.login === "" ? {} : { integrationUser: me.login }),
       ...(me.timeZone === "" ? {} : { timeZone: me.timeZone }),
-      // Absent when the lookup failed: "no such user" would be a guess.
-      ...(acting.state === "unknown" ? {} : { actingUser: acting.user?.name ?? null }),
+      // Absent when the lookup could not tell: "no such user" would be a guess.
+      ...(acting.state === "unknown" || acting.state === "list_truncated"
+        ? {}
+        : { actingUser: acting.user?.name ?? null }),
       dailyRemaining,
       dailyReserve,
       ...(hints.length === 0 ? {} : { hint: hints.join(" ") }),

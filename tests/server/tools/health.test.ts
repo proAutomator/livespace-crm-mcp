@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { LivespaceError } from "../../../src/livespace/errors.js";
-import type { RateLimitSnapshot } from "../../../src/livespace/v2/budget.js";
+import {
+  CALL_BUDGETS,
+  CallBudget,
+  type RateLimitSnapshot,
+} from "../../../src/livespace/v2/budget.js";
 import { LivespaceV2Client } from "../../../src/livespace/v2/client.js";
 import { readIntegrationUser } from "../../../src/livespace/v2/metadata.js";
 import {
@@ -176,6 +180,44 @@ describe("runHealthCheck", () => {
       expect(result.structured.livespace?.hint).toContain("could not be checked");
       expect(result.text).not.toContain("SYNTHETIC lookup failure");
     }
+  });
+
+  test("a user list cut at the page cap leaves the acting user out with its own hint", async () => {
+    const result = await runHealthCheck(
+      {
+        ...BASE,
+        livespace: livespace({
+          actingUser: async () => ({ state: "list_truncated", user: null }),
+        }),
+      },
+      { checkLivespace: true },
+    );
+    expect("actingUser" in (result.structured.livespace ?? {})).toBe(false);
+    expect(result.structured.livespace?.hint).toContain("more users than this server reads");
+  });
+
+  test("the ping and the acting-user lookup share one request budget", async () => {
+    const budgets: unknown[] = [];
+    await runHealthCheck(
+      {
+        ...BASE,
+        livespace: livespace({
+          v2Ping: async (opts) => {
+            budgets.push(opts?.budget);
+            return { login: "synthetic-integration", timeZone: "Europe/Warsaw" };
+          },
+          actingUser: async (opts) => {
+            budgets.push(opts?.budget);
+            return { state: "not_configured", user: null };
+          },
+        }),
+      },
+      { checkLivespace: true },
+    );
+    expect(budgets.length).toBe(2);
+    expect(budgets[0]).toBeInstanceOf(CallBudget);
+    expect((budgets[0] as CallBudget).max).toBe(CALL_BUDGETS.read);
+    expect(budgets[1]).toBe(budgets[0]);
   });
 
   test("health still answers when the daily budget is low", async () => {

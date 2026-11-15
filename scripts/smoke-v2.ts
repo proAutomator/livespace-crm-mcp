@@ -14,7 +14,8 @@ import { V2_METADATA_SECTIONS } from "../src/livespace/v2/metadata.js";
 //    requests; a read may retry a transport failure).
 // 2. The real server: `src/index.ts` started as a child process in read-only
 //    mode on loopback, then `health` and `crm_metadata` called over HTTP, one
-//    dictionary section at a time. About 35 requests in all.
+//    dictionary section at a time. About 35 requests in all. The child gets
+//    its settings from this script alone: it does not load a `.env` file.
 //
 // Output is statuses and counts only: never record content, never the key.
 // This script's output may land in terminals, CI logs or transcripts.
@@ -161,10 +162,12 @@ async function waitUntilUp(base: string, child: { exitCode: number | null }): Pr
 async function checkServer(): Promise<void> {
   const port = process.env["SMOKE_V2_PORT"]?.trim() || "3049";
   const base = `http://127.0.0.1:${port}`;
-  // Only what the server needs, so nothing in the caller's environment can
-  // switch writes or a network bind on. No v1 pair: the v2 tools stand alone.
+  // Only what the server needs, and `--no-env-file` below, so neither the
+  // caller's environment nor a local `.env` can switch writes, a bearer token
+  // or a network bind on. No v1 pair: the v2 tools stand alone.
   const env: Record<string, string> = {
     LIVESPACE_MCP_READ_ONLY: "true",
+    MCP_BIND_HOST: "127.0.0.1",
     MCP_PORT: port,
     // The run makes about 35 MCP calls in a row; the defaults allow a burst of 30.
     MCP_RATE_LIMIT_PER_MINUTE: "600",
@@ -180,12 +183,36 @@ async function checkServer(): Promise<void> {
     if (value !== undefined) env[name] = value;
   }
   const child = Bun.spawn(
-    [process.execPath, "run", fileURLToPath(new URL("../src/index.ts", import.meta.url))],
+    [
+      process.execPath,
+      "--no-env-file",
+      "run",
+      fileURLToPath(new URL("../src/index.ts", import.meta.url)),
+    ],
     { env, stdout: "ignore", stderr: "ignore" },
   );
+  // `finally` does not run when this process is signalled, and an orphaned
+  // server would keep the port and the key in memory.
+  const stopOnSignal = (): void => {
+    child.kill();
+    process.exit(130);
+  };
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.once(signal, stopOnSignal);
+  }
+  // A server that answers while the child is gone is somebody else's.
+  const ownServer = (): void => {
+    if (child.exitCode !== null) {
+      throw new SmokeFailure(
+        `the server exited; if port ${port} is taken, set SMOKE_V2_PORT to a free one`,
+      );
+    }
+  };
 
   try {
     await waitUntilUp(base, child);
+    await Bun.sleep(300);
+    ownServer();
 
     const listed = await mcp(base, "tools/list");
     const tools = Array.isArray(listed["tools"])
@@ -224,8 +251,10 @@ async function checkServer(): Promise<void> {
     // One section per call on a cold cache. The cost of a section is the drop
     // of the account's daily budget around it, minus the one request the
     // following `health` spends itself. Another integration working on the
-    // account at the same moment would inflate a count.
-    let before = typeof livespace["dailyRemaining"] === "number" ? livespace["dailyRemaining"] : null;
+    // account at the same moment would inflate a count. The baseline is a
+    // second `health`: with an acting user configured the first one also read
+    // the user list, after it took its own count (so `users` then costs 0).
+    let before = await dailyRemaining(base);
     let failed = 0;
     let spent = 0;
     for (const section of V2_METADATA_SECTIONS) {
@@ -272,10 +301,14 @@ async function checkServer(): Promise<void> {
     console.log(`crm_metadata total on a cold cache: ${spent} requests`);
     console.log(`dailyRemaining: ${after ?? "unknown"}`);
 
+    ownServer();
     if (failed > 0 || allSections !== V2_METADATA_SECTIONS.length) {
       throw new SmokeFailure(`${failed} section(s) failed`);
     }
   } finally {
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+      process.off(signal, stopOnSignal);
+    }
     child.kill();
     await child.exited;
   }

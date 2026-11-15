@@ -20,9 +20,11 @@ import { createTtlCache, type CacheHit, type TtlCacheOptions } from "../cache.js
 import { toolErrorSchema, toToolError, type ToolError, type ToolRunResult } from "./tool-error.js";
 
 /**
- * Per-section item cap of the answer. The fetchers already bound what they
- * read upstream (explicit `perPage`, a page cap); this bounds what one tool
- * result puts into the context window (docs/security.md par. 3).
+ * Per-section row cap of the answer. The fetchers already bound what they
+ * read upstream (explicit `perPage`, a page cap, a cap on the options of one
+ * choice field); this bounds how many rows of a section one tool result puts
+ * into the context window. Lists nested in a row - the stages and steps of a
+ * process - are not cut: a process has tens of them.
  */
 const SECTION_ITEM_CAP = 500;
 
@@ -72,12 +74,21 @@ export function createMetadataService(
   cacheOpts?: Partial<TtlCacheOptions>,
 ): MetadataService {
   const fetchers = createV2MetadataFetchers(client);
-  const cache = createTtlCache({ ...CACHE_DEFAULTS, ...cacheOpts });
+  const cache = createTtlCache({
+    ...CACHE_DEFAULTS,
+    // A spent request budget belongs to one tool call, not to the dictionary:
+    // it is not remembered for the cooldown, and a call that had only joined
+    // that fetch runs its own on its own budget.
+    callerScopedFailure: (error) =>
+      error instanceof LivespaceError && error.code === "CALL_BUDGET_EXCEEDED",
+    ...cacheOpts,
+  });
 
   // The shared fetch runs without the caller signal: the cache races the
   // caller against it, so one abandoned request cannot cancel the others. It
   // does carry a request budget, the one of the call that starts it; a call
-  // that joins a fetch already in flight pays nothing.
+  // that joins a fetch already in flight pays nothing unless that fetch runs
+  // out of its starter's budget.
   async function load<S extends V2MetadataSection>(
     section: S,
     opts: MetadataCallOptions | undefined,
@@ -90,13 +101,6 @@ export function createMetadataService(
         opts?.signal === undefined ? undefined : { signal: opts.signal },
       );
     } catch (error) {
-      // A spent budget belongs to one tool call, not to the dictionary: the
-      // failure cooldown must not hand it to the next caller. Nothing is lost
-      // by dropping the key, since a cached value would have been served stale
-      // instead of this error.
-      if (error instanceof LivespaceError && error.code === "CALL_BUDGET_EXCEEDED") {
-        cache.invalidate(section);
-      }
       // The cache rejects an aborted caller with whatever the aborter passed
       // in - a DOMException, a plain Error, or a bare string. Only the signal
       // state is reliable, so that is what decides.
@@ -110,7 +114,8 @@ export function createMetadataService(
   // The acting user lives in the user list, which the `users` section already
   // caches - reading it through the cache keeps `GET /users` at one read per
   // ttl. Losing it must not fail `currentUser` or `health`, so any failure
-  // but the caller's own cancellation resolves to `unknown`.
+  // but the caller's own cancellation resolves to `unknown`. `load` has
+  // already turned an aborted caller's rejection into a CANCELLED error.
   async function actingUser(opts?: MetadataCallOptions): Promise<ActingUserLookup> {
     const email = config.actingUserEmail;
     if (email === null) return { state: "not_configured", user: null };
@@ -118,15 +123,13 @@ export function createMetadataService(
     try {
       users = await load("users", opts);
     } catch (error) {
-      if (opts?.signal?.aborted) {
-        throw error instanceof LivespaceError ? error : cancelledError();
-      }
+      if (opts?.signal?.aborted) throw error;
       return { state: "unknown", user: null };
     }
     const user = findActingUser(users.value.data, email);
     if (user !== null) return { state: "resolved", user };
     // A user list cut at the page cap cannot prove anybody absent.
-    return { state: users.value.truncated ? "unknown" : "not_found", user: null };
+    return { state: users.value.truncated ? "list_truncated" : "not_found", user: null };
   }
 
   return {
@@ -145,10 +148,12 @@ export function createMetadataService(
       if (section !== "currentUser") return base;
       const acting = await actingUser(opts);
       const hint = actingUserHint(acting.state);
-      // Cached values are frozen, so the acting user goes into a copy.
+      const checked = acting.state !== "unknown" && acting.state !== "list_truncated";
+      // Cached values are frozen, so the acting user goes into a copy. It is
+      // left out when the lookup could not tell: null would read as "nobody".
       const data = {
         ...(hit.value.data as CurrentUserV2),
-        actingUser: acting.user,
+        ...(checked ? { actingUser: acting.user } : {}),
       } as V2SectionDataMap[S];
       return { ...base, data, ...(hint === undefined ? {} : { hint }) };
     },
@@ -225,13 +230,17 @@ const customFieldData = z.array(
     filterable: z.boolean(),
     selectable: z.literal(false).optional(),
     options: z.array(idName),
+    optionsTruncated: z.literal(true).optional(),
   }),
 );
 
 const currentUserData = z.object({
   integrationLogin: z.string(),
   timeZone: z.string(),
-  actingUser: z.object({ id: z.string(), name: z.string(), email: z.string() }).nullable(),
+  actingUser: z
+    .object({ id: z.string(), name: z.string(), email: z.string() })
+    .nullable()
+    .optional(),
 });
 
 const sectionsSchema = z.strictObject({
@@ -273,14 +282,15 @@ teams, contactGroups, dealGroups, sources, positions, dealReasons (reasons for
 closing a deal as won, lost or outdated), tags (names only, tags have no ids),
 currencies (the ones switched on for the account), taskTypes, taskStatuses,
 customFields (per record kind: person, company, deal, task; a choice field
-lists its options and takes the option id, not the name), products (id, name,
-sku) and currentUser.
+lists its options and takes the option id, not the name; optionsTruncated
+marks a list cut at 200), products (id, name, sku) and currentUser.
 Notes: deal stage changes happen by completing steps, not by setting a stage
 directly; a required step must be completed before a deal can be closed as
 won. A row with selectable: false is retired or switched off: it explains old
 records and cannot be assigned. currentUser is the integration user of the API
 key (login, time zone) plus actingUser, the person this server works for;
-actingUser is null when none is configured or matched, and hint says which.
+actingUser is null when none is configured or matched and absent when that
+could not be checked, and hint says which.
 truncated: true means more rows exist than the section returns. Results are
 cached server-side for a few minutes (see asOf/ageMs/stale per section).
 userQuery filters users by a case-insensitive name or email substring, without

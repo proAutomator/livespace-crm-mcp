@@ -31,7 +31,7 @@ those lower-level calls into tasks an MCP client can use safely:
 
 | Tool | Mode | Purpose and bound |
 |---|---|---|
-| `health` | Read | Checks the server and names the backend; `checkLivespace: true` also makes one Livespace API v2 call and reports the integration user, the acting user and the daily request budget left. |
+| `health` | Read | Checks the server and names the backend; `checkLivespace: true` also calls Livespace API v2 (one request, plus the user list once per cache period when an acting user is configured) and reports the integration user, the acting user and the daily request budget left. |
 | `crm_metadata` | Read | Returns fifteen dictionary sections from API v2: the full process config with stages and steps, users, teams, groups, sources, positions, deal reasons, tags, currencies, task dictionaries, custom fields with their options, products and the current user. Optional `userQuery` filters users by name or email before the 500-row cap. |
 | `search_crm` | Read | Finds persons, companies or deals, with record links even in lightweight results. Sorted deal searches use one 200-record sort window and report truncation. |
 | `get_records` | Read | Reads one record kind and up to 25 ids; walls for at most 5 persons, companies or deals. |

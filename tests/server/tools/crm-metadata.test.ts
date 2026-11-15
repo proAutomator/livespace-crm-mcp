@@ -742,17 +742,38 @@ describe("createMetadataService", () => {
     );
     const current = await service.get("currentUser");
     expect(current.data.integrationLogin).toBe("synthetic-integration");
-    expect(current.data.actingUser).toBeNull();
+    // Absent, not null: "nobody" would be a guess.
+    expect("actingUser" in current.data).toBe(false);
     expect(current.hint).toContain("could not be checked");
     expect(await service.actingUser()).toEqual({ state: "unknown", user: null });
+    const result = await runCrmMetadata(service, { sections: ["currentUser"] });
+    expect(crmMetadataToolConfig.outputSchema.safeParse(result.structured).success).toBe(true);
+    expect("actingUser" in (sectionsOf(result)["currentUser"]?.["data"] as object)).toBe(false);
   });
 
-  test("no match in a page-capped user list is unknown, not absent", async () => {
+  test("no match in a page-capped user list says the list was cut, not that nobody matched", async () => {
     const { service } = realService(
-      { "GET /users": () => page(API_USERS, 5000) },
+      { "GET /users/me": ME, "GET /users": () => page(API_USERS, 5000) },
       { actingUserEmail: "nobody@synthetic.example" },
     );
-    expect(await service.actingUser()).toEqual({ state: "unknown", user: null });
+    expect(await service.actingUser()).toEqual({ state: "list_truncated", user: null });
+    const current = await service.get("currentUser");
+    expect("actingUser" in current.data).toBe(false);
+    expect(current.hint).toContain("more users than this server reads");
+    expect(current.hint).not.toContain("Retry");
+  });
+
+  test("a cancelled caller's acting-user lookup rejects as CANCELLED, not unknown", async () => {
+    const { service } = realService(
+      { "GET /users": () => new Promise<Response>(() => {}) },
+      { actingUserEmail: "first@synthetic.example" },
+    );
+    const controller = new AbortController();
+    const pending = service.actingUser({ signal: controller.signal });
+    controller.abort("synthetic-cancel-reason");
+    const error = await rejection(pending);
+    expect(error).toBeInstanceOf(LivespaceError);
+    expect((error as LivespaceError).code).toBe("CANCELLED");
   });
 
   test("actingUser resolves through the same cached user list", async () => {
@@ -819,6 +840,63 @@ describe("createMetadataService", () => {
     const next = await service.get("positions", { budget: new CallBudget(10) });
     expect(next.data.length).toBe(1000);
     expect(calls.length).toBe(3);
+  });
+
+  test("a call that joined a fetch whose starter ran out of budget fetches on its own", async () => {
+    const full = Array.from({ length: 500 }, (_, i) => ({
+      id: syntheticId(i + 1),
+      name: "SYNTHETIC",
+      selectable: true,
+    }));
+    const firstPage = Promise.withResolvers<Response>();
+    const { service, calls } = realService({
+      "GET /dictionaries/positions": [
+        () => firstPage.promise,
+        () => page(full, 1000),
+        () => page(full, 1000),
+      ],
+    });
+    const starter = service.get("positions", { budget: new CallBudget(1) });
+    const joinerBudget = new CallBudget(10);
+    const joiner = service.get("positions", { budget: joinerBudget });
+    firstPage.resolve(page(full, 1000));
+
+    expect(((await rejection(starter)) as LivespaceError).code).toBe("CALL_BUDGET_EXCEEDED");
+    expect((await joiner).data.length).toBe(1000);
+    expect(joinerBudget.used).toBe(2);
+    expect(calls.length).toBe(3);
+  });
+
+  test("a spent budget during a refresh serves stale once and sets no cooldown", async () => {
+    const clock = fixedClock();
+    const full = Array.from({ length: 500 }, (_, i) => ({
+      id: syntheticId(i + 1),
+      name: "SYNTHETIC",
+      selectable: true,
+    }));
+    const { service, calls } = realService(
+      {
+        "GET /dictionaries/positions": [
+          () => page(full.slice(0, 1)),
+          () => page(full, 1000),
+          () => page(full, 1000),
+          () => page(full, 1000),
+        ],
+      },
+      { now: clock.now },
+    );
+    await service.get("positions");
+    clock.advance(5 * 60_000 + 1);
+
+    const stale = await service.get("positions", { budget: new CallBudget(1) });
+    expect(stale.stale).toBe(true);
+    expect(stale.data.length).toBe(1);
+
+    clock.advance(1_000);
+    const fresh = await service.get("positions", { budget: new CallBudget(10) });
+    expect(fresh.stale).toBe(false);
+    expect(fresh.data.length).toBe(1000);
+    expect(calls.length).toBe(4);
   });
 
   test("an upstream failure is not refetched during the cooldown", async () => {

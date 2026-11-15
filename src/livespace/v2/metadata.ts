@@ -35,9 +35,16 @@ export interface ActingUser {
 
 /**
  * `not_configured`: no e-mail is set. `not_found`: it matches no user the API
- * lists. `unknown`: the user list itself did not load, so nothing is known.
+ * lists. `list_truncated`: no match among the users read, and the account has
+ * more than the page cap lets through. `unknown`: the user list itself did
+ * not load. Only `not_configured` and `not_found` mean "nobody".
  */
-export type ActingUserState = "resolved" | "not_configured" | "not_found" | "unknown";
+export type ActingUserState =
+  | "resolved"
+  | "not_configured"
+  | "not_found"
+  | "list_truncated"
+  | "unknown";
 
 export interface ActingUserLookup {
   state: ActingUserState;
@@ -108,6 +115,12 @@ export function actingUserHint(state: ActingUserState): string | undefined {
       return (
         "LIVESPACE_ACTING_USER_EMAIL matches no user Livespace lists as a possible " +
         "record owner. Compare it with the users section of crm_metadata."
+      );
+    case "list_truncated":
+      return (
+        "The acting user could not be checked: the account has more users than " +
+        "this server reads, and LIVESPACE_ACTING_USER_EMAIL matches none of those " +
+        "it read."
       );
     case "unknown":
       return (
@@ -221,6 +234,8 @@ export interface CustomFieldInfo {
   selectable?: false;
   /** Answers of a choice field: a write takes the option id, not its name. */
   options: IdName[];
+  /** Present when the field has more options than `CUSTOM_FIELD_OPTION_CAP`. */
+  optionsTruncated?: true;
 }
 
 export interface ProductInfo extends IdName {
@@ -230,8 +245,12 @@ export interface ProductInfo extends IdName {
 export interface CurrentUserV2 {
   integrationLogin: string;
   timeZone: string;
-  /** Filled in by the metadata service from the cached user dictionary. */
-  actingUser: ActingUser | null;
+  /**
+   * Filled in by the metadata service from the cached user dictionary: null
+   * when nobody is configured or matched, absent when that could not be
+   * checked.
+   */
+  actingUser?: ActingUser | null;
 }
 
 export interface V2SectionDataMap {
@@ -267,6 +286,12 @@ export const DICTIONARY_PER_PAGE = 500;
 /** 2000 rows: past that a dictionary is reported as truncated. */
 export const DICTIONARY_MAX_PAGES = 4;
 const PRODUCT_MAX_PAGES = 2;
+/** Options kept per choice field; a longer list is cut and marked. */
+export const CUSTOM_FIELD_OPTION_CAP = 200;
+
+const PROCESS_PATH = "/sales-processes";
+/** The deprecated route, with the same body, for accounts without the new one. */
+const PROCESS_PATH_FALLBACK = "/dictionaries/processes";
 
 const FILTERABLE_FIELD_TYPES: ReadonlySet<string> = new Set([
   "text",
@@ -359,7 +384,8 @@ function mapReason(raw: unknown): ReasonInfo {
 function mapCustomField(raw: unknown): CustomFieldInfo {
   const row = asObject(raw);
   const type = asText(row["type"]);
-  const options = row["options"];
+  const options =
+    row["options"] === null || row["options"] === undefined ? [] : asList(row["options"]);
   return {
     id: readId(row),
     name: asText(row["name"]),
@@ -369,13 +395,11 @@ function mapCustomField(raw: unknown): CustomFieldInfo {
     readOnly: row["readOnly"] === true,
     filterable: FILTERABLE_FIELD_TYPES.has(type),
     ...retired(row),
-    options:
-      options === null || options === undefined
-        ? []
-        : asList(options).map((option) => {
-            const item = asObject(option);
-            return { id: readId(item), name: asText(item["name"]) };
-          }),
+    options: options.slice(0, CUSTOM_FIELD_OPTION_CAP).map((option) => {
+      const item = asObject(option);
+      return { id: readId(item), name: asText(item["name"]) };
+    }),
+    ...(options.length > CUSTOM_FIELD_OPTION_CAP ? { optionsTruncated: true as const } : {}),
   };
 }
 
@@ -516,18 +540,21 @@ export function createV2MetadataFetchers(client: V2Requester): V2MetadataFetcher
 
   // `/sales-processes` is the current route. An account that does not have it
   // yet answers 404, and the deprecated dictionary route carries the same
-  // body; the switch is remembered for the life of the process.
-  let processPath = "/sales-processes";
+  // body. Whichever route answered last is tried first; a 404 on it tries the
+  // other one, and only a route that answered is remembered.
+  let processPath = PROCESS_PATH;
 
   return {
     processes: async (opts) => {
+      const first = processPath;
       try {
-        return await mapped(processPath, mapProcess, opts);
+        return await mapped(first, mapProcess, opts);
       } catch (error) {
-        const absent = error instanceof LivespaceError && error.code === "NOT_FOUND";
-        if (!absent || processPath !== "/sales-processes") throw error;
-        processPath = "/dictionaries/processes";
-        return await mapped(processPath, mapProcess, opts);
+        if (!(error instanceof LivespaceError) || error.code !== "NOT_FOUND") throw error;
+        const other = first === PROCESS_PATH ? PROCESS_PATH_FALLBACK : PROCESS_PATH;
+        const result = await mapped(other, mapProcess, opts);
+        processPath = other;
+        return result;
       }
     },
     users: (opts) => mapped("/users", mapUser, opts),
@@ -598,7 +625,7 @@ export function createV2MetadataFetchers(client: V2Requester): V2MetadataFetcher
     currentUser: async (opts) => {
       const me = await readIntegrationUser(client, opts);
       return {
-        data: { integrationLogin: me.login, timeZone: me.timeZone, actingUser: null },
+        data: { integrationLogin: me.login, timeZone: me.timeZone },
         truncated: false,
       };
     },

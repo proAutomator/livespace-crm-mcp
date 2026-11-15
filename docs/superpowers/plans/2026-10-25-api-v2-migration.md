@@ -742,11 +742,13 @@ live again before its section is built):
 `tests/server/modern-wire.test.ts`.
 
 `HealthDeps.livespacePing` is replaced by
-`v2Ping(opts) => Promise<{login: string; timeZone: string}>`
-(`GET /users/me` with `essential: true`), `rateLimit() =>
-RateLimitSnapshot` and `actingUser(opts) => Promise<{configured: boolean;
-user: ActingUser | null}>`, which matches `LIVESPACE_ACTING_USER_EMAIL`
-against the cached `users` dictionary. Output schema:
+`HealthDeps.livespace`: `v2Ping(opts) => Promise<{login: string; timeZone:
+string}>` (`GET /users/me` with `essential: true`), `rateLimit() =>
+RateLimitSnapshot`, `dailyReserve` and `actingUser(opts) => Promise<{state:
+"resolved" | "not_configured" | "not_found" | "list_truncated" | "unknown";
+user: ActingUser | null}>`, which matches `LIVESPACE_ACTING_USER_EMAIL` against the cached
+`users` dictionary. `HealthDeps.v1Fallback` says whether the v1 pair is set.
+Output schema:
 
 ```ts
 { ok, version, protocol, readOnly,
@@ -757,9 +759,9 @@ against the cached `users` dictionary. Output schema:
 ```
 
 `actingUser` is the matched user's display name, `null` when no e-mail is
-configured or it matches no user, and absent when the lookup itself failed
+configured or it matches no user, and absent when the lookup could not tell
 (the ping is essential, the user list is not, so a low daily budget leaves
-it unknown). `hint` repeats the acting-user advice in the structured channel,
+it unknown). The ping and the lookup share one `CallBudget` per call. `hint` repeats the acting-user advice in the structured channel,
 because some hosts show the model only that channel.
 
 Tests: `checkLivespace reads users/me and reports the daily budget`,
@@ -787,7 +789,9 @@ export interface CustomFieldInfo { id: string; name: string; type: string; group
   required: boolean; readOnly: boolean; filterable: boolean; selectable?: false; options: IdName[] }
 export interface ReasonInfo extends DictItem { kind: "won" | "lost" | "outdated" }
 export interface ActingUser { id: string; name: string; email: string }
-export interface CurrentUserV2 { integrationLogin: string; timeZone: string; actingUser: ActingUser | null }
+export interface CurrentUserV2 { integrationLogin: string; timeZone: string; actingUser?: ActingUser | null }
+export type ActingUserState = "resolved" | "not_configured" | "not_found" | "list_truncated" | "unknown";
+export interface ActingUserLookup { state: ActingUserState; user: ActingUser | null }
 export type V2MetadataSection = (typeof V2_METADATA_SECTIONS)[number];
 export interface V2SectionDataMap { processes: ProcessConfig[]; users: (IdName & { email: string; team: IdName | null })[];
   teams: (DictItem & { parentId: string | null })[]; contactGroups: DictItem[]; dealGroups: DictItem[];
@@ -800,8 +804,10 @@ export interface V2SectionDataMap { processes: ProcessConfig[]; users: (IdName &
 export interface Fetched<T> { data: T; truncated: boolean }
 export type V2MetadataFetchers = { [S in V2MetadataSection]:
   (opts?: { signal?: AbortSignal; budget?: CallBudget }) => Promise<Fetched<V2SectionDataMap[S]>> };
-export function createV2MetadataFetchers(client: Pick<LivespaceV2Client, "request">,
-  opts: { actingUserEmail: string | null }): V2MetadataFetchers;
+export function createV2MetadataFetchers(client: Pick<LivespaceV2Client, "request">): V2MetadataFetchers;
+export function readIntegrationUser(client, opts?: V2FetchOptions & { essential?: boolean }): Promise<IntegrationUser>;
+export function findActingUser(users: readonly UserInfo[], email: string): ActingUser | null;
+export function actingUserHint(state: ActingUserState): string | undefined;
 ```
 
 Rules: stages and steps sorted by `sort`; `weight` = `scales`; `required` =
@@ -809,12 +815,18 @@ Rules: stages and steps sorted by `sort`; `weight` = `scales`; `required` =
 `duration.days` when `duration.enabled`, else null. `filterable` is true for
 `text`, `textarea`, `checkbox`, `select`, `radio`, `multiselect`,
 `multicheckbox`. Every dictionary request sends `perPage: 500`; loops stop
-at 4 pages (2000 rows) and report `truncated`; tags take one page. Processes:
+at 4 pages (2000 rows) and report `truncated`; tags take one page. A loop
+ends when the rows read reach `extra.totalCount` (without a total: after a
+page that is not full). Currencies keep only the rows switched on, plus the
+default: the catalog lists every ISO currency. Processes:
 `GET /sales-processes`, and on `NOT_FOUND` `GET /dictionaries/processes`,
 remembered for the process lifetime (Q11). `IdName` moves into this file
 from the v1 `metadata.ts`. Products: `POST /products/searches`
-`perPage: 500`, 2 pages max. Acting user: exact, case-insensitive e-mail match
-in the users section.
+`perPage: 500`, 2 pages max, sent with `write: false`. Acting user: exact,
+case-insensitive e-mail match in the users section. The fetcher for
+`currentUser` reads only `/users/me`; the metadata service fills
+`actingUser` from the cached `users` section, so the user list is read once
+per cache TTL, and the same lookup serves `health`.
 
 Tests: one mapping test per section from synthetic payloads,
 `every dictionary request carries perPage 500`, `page loops stop at four
@@ -832,13 +844,19 @@ still use. `src/livespace/metadata.ts` and its test are deleted by the PR that
 moves the last v1 tool off them (PR7), not here. Tests in
 `tests/server/tools/crm-metadata.test.ts`: section selection, cache TTL
 unchanged, `userQuery` over the new users shape, each section's output
-validates against the schema.
+validates against the schema. `MetadataService.get(section, {signal,
+budget})` answers `{data, asOf, stale, truncated, hint?}`;
+`MetadataService.actingUser(opts)` answers an `ActingUserLookup`. The v1
+service tests move to `tests/server/v1-metadata.test.ts`.
 
 ### Task 4: live smoke and commit
 
 `scripts/smoke-v2.ts` gains `health` and `crm_metadata` (all sections) through
-the HTTP server with `LIVESPACE_MCP_READ_ONLY=true`. Record request counts per
-section in Execution notes.
+the HTTP server with `LIVESPACE_MCP_READ_ONLY=true`: it starts `src/index.ts`
+as a child process on loopback without the v1 pair, calls one section per
+`crm_metadata` call and reads the cost of each from the drop of
+`dailyRemaining` that `health` reports. Record request counts per section in
+Execution notes.
 
 ---
 
@@ -1512,3 +1530,101 @@ Live smoke (Task 5 Step 5): passed on 2026-11-15 on the demo account, run by
 the maintainer with the key injected from the secret manager:
 `GET /users/me` 200, `POST /deals/searches` 200, `smoke-v2: OK`. PR #11 is
 merged into `feat/api-v2`.
+
+### PR2, 2026-11-15 (branch `feat/api-v2-metadata` into `feat/api-v2`)
+
+Starts at `feat/api-v2` e6c59b0: PR1 plus `main` with release 0.1.4, so the
+pins are SDK 2.3.1, hono 4.13.18 and zod 4.6.6. Q1, Q2, Q8 and Q10 are still
+open and PR2 does not depend on them.
+
+Live shapes (demo account, 2026-11-15, 21 read requests; key names and value
+types only, no record content):
+
+- `GET /users/me`: `id`, `login`, `firstName`, `lastName`, `email`,
+  `timeZone`, `language`, `tenantLanguage`. It is a counted request.
+- `GET /users`: `id`, `firstName`, `lastName`, `email`, `createdAt`,
+  `team {id, name}`; 33 rows.
+- `GET /sales-processes`: 200 with the fields of the draft. Four processes,
+  two of them `selectable`, one default. On the demo every
+  `mandatory.item` is `none`, every `fieldBindings` list is empty and
+  `autoclose` is null, so `note`, `file`, bound fields and autoclose are
+  mapped from the draft alone.
+- Dictionaries as the draft: teams (the root is not selectable, `parent` is
+  an object or null), person groups, sources, positions, deal reasons (all
+  three kinds), tags (bare strings), currencies (162 rows, 3 switched on,
+  1 default), task types, people and company fields (a `select` field
+  carries `options` of `{id, name}`), products (`sku` and `defaultPrice`
+  nullable).
+- Empty on the demo, mapped from the draft alone: deal groups, task
+  statuses, deal fields, task fields. No retired row was seen anywhere but
+  in teams and currencies.
+- `perPage=501` is 400. A page past the end is 200 with an empty list and the
+  same `totalCount`.
+
+Request counts (live smoke through the HTTP server in read-only mode, cold
+cache, one section per call): every section costs 1 request, `customFields`
+costs 4, so all fifteen cost 18. A second full read costs 0 (cache, 5 minute
+TTL). `health` with `checkLivespace` costs 1, plus the user list once per TTL
+when `LIVESPACE_ACTING_USER_EMAIL` is set. The smoke run itself spends about
+35 requests.
+
+Deviations and decisions:
+
+- The v1 dictionary service stays for `analyze`, `create_records`,
+  `move_deals_to_stage` and `notify_user` (`src/server/v1-metadata.ts`,
+  `AppDeps.v1Metadata`); `src/livespace/metadata.ts` is not deleted here.
+  `crm_metadata` needs only the v2 key, so it is listed without the v1 pair.
+  Until those tools move, `crm_metadata` answers v2 ids and they take v1 ids.
+- Fetchers answer `{data, truncated}`. `createV2MetadataFetchers` takes no
+  acting user: the service resolves it from the cached `users` section, and
+  `service.actingUser()` serves `health`. The lookup has five states:
+  `resolved`, `not_configured`, `not_found`, `list_truncated` (no match and
+  more users than the page cap reads) and `unknown` (the list did not load).
+  In the last two `actingUser` is left out of `health` and of
+  `currentUser`, because null would read as "nobody".
+- `health`: `livespace.hint` was added (fixed wording, both channels),
+  `actingUser` is the user's display name, and it is left out, not null,
+  when the lookup failed. The login, the time zone and the name stay out of
+  the text channel. Only a `LivespaceError` hint is shown; the text of any
+  other failure is dropped.
+- Rows carry `selectable: false` only when retired. Processes keep a plain
+  boolean. Currencies keep the rows switched on plus the default. Teams and
+  sources answer `parentId`. Custom fields answer `required`, `readOnly` and
+  the group name. Products answer `sku` only.
+- Every mapper requires a non-empty string id and fails the section with
+  fixed wording otherwise; other fields are read leniently. An unknown
+  reason `kind` fails the section; an unknown field type is not filterable.
+- Request budget: one `CallBudget` of 60 per `crm_metadata` call and per
+  `health` call. The call that starts a dictionary fetch pays for it. The
+  cache got `callerScopedFailure`: a `CALL_BUDGET_EXCEEDED` is not kept in the
+  failure cooldown, and a call that had only joined the failing fetch runs
+  its own once, on its own budget.
+- Processes: the route that answered last is tried first, a 404 on it tries
+  the other one, and only a route that answered is remembered.
+- A choice field keeps at most 200 options and marks a longer list with
+  `optionsTruncated`. Stages and steps of a process are not capped.
+- The `products` section is a catalog search and needs
+  `crm:product-catalog:read`; the scope table in `docs/security.md` and the
+  README say so. A key without it gets an error for that section only.
+- The output cap stays 500 rows per section; `customFields` is capped per
+  record kind and counted together.
+- The smoke script starts the server with `--no-env-file`, a loopback bind
+  and only the variables it needs, so neither the caller's environment nor a
+  local `.env` can enable writes, a bearer token or a network bind. It stops
+  the child on SIGINT, SIGTERM and SIGHUP and fails when the child is gone
+  while something else answers on the port.
+
+For later PRs:
+
+- PR3: take the acting user for `mine` from `MetadataService.actingUser()`;
+  refuse on every state but `resolved`. `timeZone` for day ranges is in the
+  `currentUser` section.
+- PR5-PR7: each tool that moves switches from `v1Metadata` to `metadata`.
+  The last one deletes `src/server/v1-metadata.ts`,
+  `src/livespace/metadata.ts`, their tests and `AppDeps.v1Metadata`.
+- PR9: the README still describes the `next` dist-tag for 0.2.0.
+- Open for the maintainer: `health` is exempt from the daily reserve by
+  design (`docs/security.md` par. 3), and nothing limits how often that
+  exempt request runs once the budget is under the reserve. The MCP rate
+  limit bounds it per client; a floor or a minimum interval is a possible
+  hardening.

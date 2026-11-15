@@ -422,4 +422,127 @@ describe("createTtlCache", () => {
     controller.abort();
     expect((await rejection(pending) as Error).name).toBe("AbortError");
   });
+
+  describe("caller-scoped failures", () => {
+    class ScopedFailure extends Error {}
+    const callerScopedFailure = (error: unknown) => error instanceof ScopedFailure;
+
+    test("a caller-scoped failure is not remembered: the next get fetches at once", async () => {
+      const clock = fixedClock();
+      const cache = makeCache(clock, { callerScopedFailure });
+      let calls = 0;
+      const failing = async () => {
+        calls += 1;
+        throw new ScopedFailure("synthetic spent budget");
+      };
+      const working = async () => {
+        calls += 1;
+        return "v";
+      };
+
+      expect(await rejection(cache.get("k", failing))).toBeInstanceOf(ScopedFailure);
+      // No cooldown: the failure belonged to that caller, not to the key.
+      expect((await cache.get("k", working)).value).toBe("v");
+      expect(calls).toBe(2);
+    });
+
+    test("a caller that joined a fetch failing for its starter runs its own", async () => {
+      const clock = fixedClock();
+      const cache = makeCache(clock, { callerScopedFailure });
+      const first = deferred<string>();
+      let joinerFetches = 0;
+
+      const starter = cache.get("k", () => first.promise);
+      const joiner = cache.get("k", async () => {
+        joinerFetches += 1;
+        return "own";
+      });
+      first.reject(new ScopedFailure("synthetic spent budget"));
+
+      expect(await rejection(starter)).toBeInstanceOf(ScopedFailure);
+      expect(await joiner).toEqual({ value: "own", asOf: 0, stale: false });
+      expect(joinerFetches).toBe(1);
+    });
+
+    test("the starter itself is not retried", async () => {
+      const clock = fixedClock();
+      const cache = makeCache(clock, { callerScopedFailure });
+      let calls = 0;
+      const error = await rejection(
+        cache.get("k", async () => {
+          calls += 1;
+          throw new ScopedFailure("synthetic spent budget");
+        }),
+      );
+      expect(error).toBeInstanceOf(ScopedFailure);
+      expect(calls).toBe(1);
+    });
+
+    test("with a stale value the starter gets it, and no cooldown follows", async () => {
+      const clock = fixedClock();
+      const cache = makeCache(clock, { callerScopedFailure });
+      let calls = 0;
+      await cache.get("k", async () => "v1");
+      clock.advance(2000);
+
+      const stale = await cache.get<string>("k", async () => {
+        calls += 1;
+        throw new ScopedFailure("synthetic spent budget");
+      });
+      expect(stale).toEqual({ value: "v1", asOf: 0, stale: true });
+
+      // One second later, well inside the cooldown a shared failure would set.
+      clock.advance(1);
+      const fresh = await cache.get("k", async () => {
+        calls += 1;
+        return "v2";
+      });
+      expect(fresh).toEqual({ value: "v2", asOf: 2001, stale: false });
+      expect(calls).toBe(2);
+    });
+
+    test("an ordinary failure still reaches every joiner and is remembered", async () => {
+      const clock = fixedClock();
+      const cache = makeCache(clock, { callerScopedFailure });
+      const first = deferred<string>();
+      const failure = new Error("synthetic upstream failure");
+      let joinerFetches = 0;
+
+      const starter = cache.get("k", () => first.promise);
+      const joiner = cache.get("k", async () => {
+        joinerFetches += 1;
+        return "own";
+      });
+      first.reject(failure);
+
+      expect(await rejection(starter)).toBe(failure);
+      expect(await rejection(joiner)).toBe(failure);
+      expect(joinerFetches).toBe(0);
+      expect(await rejection(cache.get("k", async () => "late"))).toBe(failure);
+    });
+
+    test("an aborted joiner is not handed a second fetch", async () => {
+      const clock = fixedClock();
+      const cache = makeCache(clock, { callerScopedFailure });
+      const first = deferred<string>();
+      const controller = new AbortController();
+      let joinerFetches = 0;
+
+      const starter = cache.get("k", () => first.promise);
+      const joiner = cache.get(
+        "k",
+        async () => {
+          joinerFetches += 1;
+          return "own";
+        },
+        { signal: controller.signal },
+      );
+      controller.abort();
+      first.reject(new ScopedFailure("synthetic spent budget"));
+
+      await rejection(starter);
+      expect((await rejection(joiner) as Error).name).toBe("AbortError");
+      expect(joinerFetches).toBe(0);
+    });
+  });
 });
