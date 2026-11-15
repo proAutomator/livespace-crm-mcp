@@ -125,6 +125,31 @@ describe("MCP HTTP surface", () => {
     expect(response.status).toBeGreaterThanOrEqual(400);
   });
 
+  test("the Host guard covers every path, including encoded line terminators", async () => {
+    // GHSA-h7mg-cq63-vhpq: Hono's RegExpRouter matched no wildcard middleware
+    // for such paths, so the request reached the not-found handler unguarded.
+    const app = buildApp({ config: BASE_CONFIG, version: "0.0.0-test" });
+    const fromUnknownHost = (path: string) =>
+      app.request(
+        new Request(`http://127.0.0.1:3020${path}`, {
+          headers: { host: "evil.example.com" },
+        }),
+      );
+
+    const baseline = await fromUnknownHost("/unknown");
+    expect(baseline.status).toBe(403);
+    for (const path of [
+      "/mcp%0A",
+      "/health%0D",
+      "/unknown%0A",
+      "/%E2%80%A8",
+      "/%E2%80%A9",
+    ]) {
+      const response = await fromUnknownHost(path);
+      expect(`${path} ${response.status}`).toBe(`${path} 403`);
+    }
+  });
+
   test("localhost Origin passes", async () => {
     const app = buildApp({ config: BASE_CONFIG, version: "0.0.0-test" });
     const response = await app.request(

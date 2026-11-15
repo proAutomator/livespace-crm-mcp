@@ -267,7 +267,7 @@ describe("public npm package contract", () => {
     expect(packageJson.scripts.prepack).toBe("bun run build");
     expect(packageJson.dependencies).toEqual({
       "@modelcontextprotocol/server": "2.3.1",
-      hono: "4.13.11",
+      hono: "4.13.18",
       zod: "4.6.6",
     });
     expect(packageJson.devDependencies).toEqual({
