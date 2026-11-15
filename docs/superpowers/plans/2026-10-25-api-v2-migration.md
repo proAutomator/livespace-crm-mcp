@@ -1643,7 +1643,14 @@ reaching other callers through the shared cache) and the minors on the
 process route, the `health` budget, the acting user states and option lists
 are fixed with tests.
 
-Live smoke (Task 4): passed on 2026-11-15 on the demo account before the
-review fixes (`smoke-v2: OK`, 15 of 15 sections, only `health` and
-`crm_metadata` listed). The rerun after the review fixes waits for the
-maintainer: the secret manager's approval timed out.
+Live smoke (Task 4): passed on 2026-11-15 on the demo account, read-only,
+twice. The first run was before the review fixes (`51a3c82`). The rerun on
+the reviewed code (`e4af16f`) was run by the maintainer in his own terminal
+and reported back: `GET /users/me` 200 and `POST /deals/searches` 200, both
+with a request id; the server listed only `health` and `crm_metadata`;
+`health` answered ok, read-only, backend v2 without the v1 fallback,
+reachable, reserve 5000; `crm_metadata` answered 15 of 15 sections, none
+truncated or stale, `customFields` in 4 requests and every other section in
+1, 18 for a cold cache; the second pass over all sections cost 0 requests.
+The whole run spent 36 requests of the daily budget (49904 before, 49868
+after) and ended with `smoke-v2: OK`.
