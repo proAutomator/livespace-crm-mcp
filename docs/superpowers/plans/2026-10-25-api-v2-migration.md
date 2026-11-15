@@ -681,7 +681,7 @@ The method union has no `DELETE` on purpose (Global Constraints).
   `.env.example`.** Requirement 6 names `v2Path`; requirement 8 names
   `perPage` and page caps.
 - [x] **Step 4: Run the full gate** - `bun run test:security && bun test && bun run typecheck && git diff --check`
-- [ ] **Step 5: Live smoke.** `scripts/smoke-v2.ts` reads
+- [x] **Step 5: Live smoke.** `scripts/smoke-v2.ts` reads
   `LIVESPACE_SUBDOMAIN` and `LIVESPACE_API_V2_KEY` from the environment (Bun
   loads the local `.env`; do not edit it) or from Keychain service
   `livespace-api`, account `api-v2-key`. It calls `GET /users/me` and one
@@ -1455,5 +1455,7 @@ Gate: `bun install --frozen-lockfile`, `bun audit` (no vulnerabilities),
 pass), `git diff --check`, MCP conformance against the baseline. A fresh
 reviewer checked the branch; its Important findings are fixed with tests.
 
-Live smoke (Task 5 Step 5): pending. The demo v2 key is no longer in a local
-`.env`, and running `bun run smoke:v2` waits for the maintainer to inject it.
+Live smoke (Task 5 Step 5): passed on 2026-11-15 on the demo account, run by
+the maintainer with the key injected from the secret manager:
+`GET /users/me` 200, `POST /deals/searches` 200, `smoke-v2: OK`. PR #11 is
+merged into `feat/api-v2`.
