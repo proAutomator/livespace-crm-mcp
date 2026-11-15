@@ -25,6 +25,10 @@ const MAP_FILES = [
   "tests/livespace/v2/problems.test.ts",
   "tests/livespace/v2/budget.test.ts",
   "tests/livespace/v2/metadata.test.ts",
+  "tests/livespace/v2/filters.test.ts",
+  "tests/livespace/v2/records.test.ts",
+  "tests/livespace/v2/timeline.test.ts",
+  "tests/server/tools/get-records.test.ts",
   "tests/server/tools/tool-error.test.ts",
 ] as const;
 

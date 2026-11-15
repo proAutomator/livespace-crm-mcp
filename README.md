@@ -33,8 +33,8 @@ those lower-level calls into tasks an MCP client can use safely:
 |---|---|---|
 | `health` | Read | Checks the server and names the backend; `checkLivespace: true` also calls Livespace API v2 (one request, plus the user list once per cache period when an acting user is configured) and reports the integration user, the acting user and the daily request budget left. |
 | `crm_metadata` | Read | Returns fifteen dictionary sections from API v2: the full process config with stages and steps, users, teams, groups, sources, positions, deal reasons, tags, currencies, task dictionaries, custom fields with their options, products and the current user. Optional `userQuery` filters users by name or email before the 500-row cap. |
-| `search_crm` | Read | Finds persons, companies or deals, with record links even in lightweight results. Sorted deal searches use one 200-record sort window and report truncation. |
-| `get_records` | Read | Reads one record kind and up to 25 ids; walls for at most 5 persons, companies or deals. |
+| `search_crm` | Read | Finds persons, companies, deals and tasks with filters, sorting, paging and totals computed by Livespace, or by phrase (notes included when asked). Up to 100 records per kind and page; `countOnly` returns the totals alone; a phrase search returns at most 50 hits per page. |
+| `get_records` | Read | Reads one record kind and up to 25 ids. `include` adds the deal process, budget lines and budget summary, and the latest 5 notes, calls, e-mails and tasks of each record. At most 60 Livespace requests per call. |
 | `get_activity` | Read | Reads one record wall, one bounded CRM feed range or bounded task pages per call. |
 | `analyze` | Read | Runs one named aggregation over bounded windows and reports whether its source window was truncated. |
 | `create_records` | Write | Creates persons, companies, deals or tasks. Up to 10 items per call, with exact-match contact deduplication by default. |
@@ -119,8 +119,9 @@ rejected before dispatch.
 
 Record data goes in `structuredContent`, with a short text summary. Check that
 your host passes both channels to its model. Empty `search_crm` and
-`get_activity` pages include the same `hint` in both channels; follow a
-returned cursor before concluding that no records match. An empty
+`get_activity` answers include the same `hint` in both channels. In
+`search_crm`, `totalCount` says how many records match; in `get_activity`,
+follow a returned cursor before concluding that no records match. An empty
 `crm_metadata` user search also carries a hint in both channels. See the
 [host compatibility checks](docs/host-compatibility.md) for tested versions,
 confirmation limits and a synthetic fixture you can run without CRM access.
@@ -137,34 +138,57 @@ multiple matches before choosing an owner or write recipient. `totalItems`
 counts matches in the cached dictionary before that cap. Check `asOf`,
 `ageMs` and `stale`, especially when a user is missing from the results.
 
-Phrase-search links are generated locally from the API ID, without a separate
-check of each destination. An unusable ID produces an empty `url`. Record
-reads and filtered searches retain the URL supplied by Livespace, including
-at `detail: "minimal"` for persons, companies and deals; that URL can also be
-empty. Tasks have no record URL.
+`search_crm` has two modes. `phrase` runs the Livespace full-text search over
+persons, companies, deals and, when `kinds` names them, notes. It matches word
+prefixes, ignores accents and also finds e-mail addresses and phone numbers.
+The hits come from one ranked list and are grouped by kind. `filters` lists
+whole records of persons, companies, deals or tasks. Livespace applies the
+filters, the sort and the paging, so `totalCount` is every match (exact up to
+10 000) and `countOnly` answers "how many" without returning records.
 
-Fields excluded by `detail` are omitted. An empty or null returned value means
-the response supplies no value; it does not establish an empty CRM field or
-an access restriction. For deal value and probability, distinguish numeric
-zero from null. A zero budget alone does not show whether someone set it
-intentionally. Some counters and flags normalize missing data to zero or
-false, so those defaults do not prove an explicitly stored value.
+The filters cover owners (`mine`, `ownerIds`), names, tags, groups, sources,
+creation and change dates and custom fields; deals add status, process,
+stages, company, person, status-change and expected-close dates; tasks add
+completion, overdue, due dates, types and the record they are linked to. A
+filter that does not exist for a requested kind is refused with `BAD_PARAMS`
+naming the kind. `mine` means "owned by the acting user" (for tasks: assigned
+to them). It is refused when `LIVESPACE_ACTING_USER_EMAIL` resolves to nobody,
+because the API key is an integration user and would match nothing. Date
+filters such as `createdFrom` and `createdTo` are inclusive `YYYY-MM-DD` days
+in the time zone of the account. The server rejects an invalid date before it
+calls Livespace. The deal `status` filter takes `open` (the default), `won`,
+`lost`, `outdated` or `all`.
 
-Deal `value` comes from whichever field the account fills. Accounts that use
-budget lines keep the line sum in `value`. Other accounts report `value: 0`
-on every deal and keep the value shown in the UI in `value_final`. The server
-returns a non-zero `value_final` when there is one and `value` otherwise, so
-`search_crm`, `get_records` and `analyze` agree with the UI on both kinds of
-account.
+`get_records` takes `include` to read related data in the same call:
+`include: ["process"]` returns a deal's stages with their state and their
+steps (required, completed), `products` its budget lines, `budget` the stored
+revenue, cost and margin summary. `notes`, `calls`, `emails` and `tasks`
+return the latest 5 entries of each record with the total. Every record costs
+one Livespace request and every include one more per record. A call that
+would send more than 60 is refused before the first request, because the
+daily request budget is shared by the whole account. An include that fails
+for one record, for example for a missing `crm:email:read` scope, is listed
+in that item's `includeErrors` and the record is still returned. The record
+wall is not part of API v2; `include: ["wall"]` is reported as unavailable.
 
-At `detail: "full"`, deals also carry `checkedSteps` (the process steps marked
-done, with stage and step ids and names) and the won, lost and outdated reason
-names and notes. A reopened deal can keep an earlier lost reason, so check
-`status` first. `search_crm` filters accept `createdFrom` and `createdTo` for
-persons, companies and deals, and `modifiedFrom` for deals, all as inclusive
-`YYYY-MM-DD` dates. Livespace ignores a date it cannot read and returns every
-record, so the server rejects invalid dates before calling it. The deal
-`status` filter takes `open` (the default), `won`, `lost`, `outdated` or `all`.
+Record links come from Livespace. Tasks have one too. A phrase hit can have a
+null `url`.
+
+Fields excluded by `detail` are omitted. `full` adds the description, groups,
+source, every owner, addresses and the custom fields that carry a value; a
+choice field shows option names. An empty or null returned value means the
+response supplies no value; it does not establish an empty CRM field or an
+access restriction. For deal value, distinguish numeric zero from null. A
+zero budget alone does not show whether someone set it intentionally. A
+deal's `reason` is the reason of its current status only, so a reopened deal
+reports none.
+
+`search_crm` and `get_records` report a deal's `value` from its API v2 budget.
+`analyze` still reads the old API until it moves to API v2: there, accounts
+that use budget lines keep the line sum in `value`, other accounts report
+`value: 0` and keep the value shown in the UI in `value_final`, and the
+server returns a non-zero `value_final` when there is one and `value`
+otherwise.
 
 All tools reject unsupported input parameters. Correct the arguments when
 the client reports an input validation error.
