@@ -27,7 +27,11 @@ import {
 } from "./tools/crm-metadata.js";
 import { getActivityToolConfig, runGetActivity } from "./tools/get-activity.js";
 import { getRecordsToolConfig, runGetRecords } from "./tools/get-records.js";
-import { healthToolConfig, runHealthCheck } from "./tools/health.js";
+import {
+  healthToolConfig,
+  runHealthCheck,
+  type HealthLivespaceDeps,
+} from "./tools/health.js";
 import { logActivitiesToolConfig, runLogActivities } from "./tools/log-activities.js";
 import {
   moveDealsToStageToolConfig,
@@ -52,11 +56,10 @@ export const MAX_TOOL_INPUT_ELEMENTS = 2_000;
 export interface AppDeps {
   config: ServerConfig;
   version: string;
-  livespacePing?:
-    | ((opts?: {
-        signal?: AbortSignal;
-      }) => Promise<{ name?: string; login?: string }>)
-    | undefined;
+  /** The API v2 half of `health`; absent only where no client is wired. */
+  livespace?: HealthLivespaceDeps | undefined;
+  /** True when the optional v1 key pair is configured. */
+  v1Fallback?: boolean | undefined;
   metadata?: MetadataService | undefined;
   records?: RecordFetchers | undefined;
   activity?: ActivityFetchers | undefined;
@@ -168,7 +171,8 @@ export function createServerFactory(deps: AppDeps): () => McpServer {
         {
           version: deps.version,
           readOnly: deps.config.readOnly,
-          ...(deps.livespacePing ? { livespacePing: deps.livespacePing } : {}),
+          v1Fallback: deps.v1Fallback === true,
+          ...(deps.livespace === undefined ? {} : { livespace: deps.livespace }),
         },
         args,
         { signal: requestSignal(ctx) },

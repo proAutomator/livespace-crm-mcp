@@ -8,6 +8,7 @@ import type { RecordFetchers } from "../../src/livespace/records.js";
 import type { DealStepReader } from "../../src/livespace/stage-moves.js";
 import type { WriteFetchers } from "../../src/livespace/writes.js";
 import { person, wallEntry } from "../support/records.js";
+import { healthPing } from "../support/health.js";
 
 const BASE_CONFIG: ServerConfig = {
   port: 3020,
@@ -229,6 +230,38 @@ describe("modern era (2026-07-28) wire behavior", () => {
     const payload = await jsonFromResponse(response);
     expect(payload.result.resultType).toBe("complete");
     expect(payload.result.structuredContent.ok).toBe(true);
+    expect(payload.result.structuredContent.backend).toEqual({ api: "v2", v1Fallback: false });
+    expect(payload.result.structuredContent.livespace).toBeUndefined();
+  });
+
+  test("health with checkLivespace reports the v2 backend over the wire", async () => {
+    const response = await app({
+      v1Fallback: true,
+      livespace: healthPing(async () => ({})),
+    }).request(
+      modernRequest({
+        method: "tools/call",
+        name: "health",
+        params: { name: "health", arguments: { checkLivespace: true } },
+        id: 3,
+      }),
+    );
+    expect(response.status).toBe(200);
+    const payload = await jsonFromResponse(response);
+    expect(payload.result.isError).toBeUndefined();
+    expect(payload.result.structuredContent.backend).toEqual({ api: "v2", v1Fallback: true });
+    expect(payload.result.structuredContent.livespace).toEqual({
+      reachable: true,
+      integrationUser: "synthetic-integration",
+      timeZone: "Europe/Warsaw",
+      actingUser: null,
+      dailyRemaining: null,
+      dailyReserve: 5000,
+      hint: expect.stringContaining("LIVESPACE_ACTING_USER_EMAIL"),
+    });
+    // The login and the time zone are upstream text: structured channel only.
+    expect(payload.result.content[0].text).not.toContain("synthetic-integration");
+    expect(payload.result.content[0].text).not.toContain("Europe/Warsaw");
   });
 
   test("server/discover advertises 2026-07-28 and server identity", async () => {
@@ -277,10 +310,10 @@ describe("modern era (2026-07-28) wire behavior", () => {
   test("missing MCP-Protocol-Version on a modern request is rejected before tool work", async () => {
     let calls = 0;
     const response = await app({
-      livespacePing: async () => {
+      livespace: healthPing(async () => {
         calls += 1;
         return {};
-      },
+      }),
     }).request(
       modernRequest({
         method: "tools/call",
@@ -326,7 +359,7 @@ describe("crm_metadata wiring", () => {
   test("health and metadata reject unknown arguments before any dependency call", async () => {
     let calls = 0;
     const instance = app({
-      livespacePing: async () => { calls++; return {}; },
+      livespace: healthPing(async () => { calls++; return {}; }),
       metadata: fakeMetadata(() => { calls++; return []; }),
     });
     const listed = await jsonFromResponse(await instance.request(modernRequest({ method: "tools/list" })));

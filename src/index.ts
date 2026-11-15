@@ -4,6 +4,8 @@ import { createActivityFetchers } from "./livespace/activity.js";
 import { LivespaceClient } from "./livespace/client.js";
 import { createRecordFetchers } from "./livespace/records.js";
 import { createDealStepReader } from "./livespace/stage-moves.js";
+import { LivespaceV2Client } from "./livespace/v2/client.js";
+import { readIntegrationUser } from "./livespace/v2/metadata.js";
 import { createWriteFetchers } from "./livespace/writes.js";
 import { buildApp } from "./server/app.js";
 import { listen } from "./server/listen.js";
@@ -34,21 +36,34 @@ function v1Deps(v1: LivespaceV1Config) {
     // kill-switch are resolved before anything can write: in read-only mode
     // the write fetchers are not built at all (docs/security.md par. 5).
     ...(serverConfig.readOnly ? {} : { writes: createWriteFetchers(client) }),
-    livespacePing: (opts?: { signal?: AbortSignal }) =>
-      client.call<{ name?: string; login?: string }>(
-        "Default",
-        "User_getInfo",
-        {},
-        opts ?? {},
-      ),
   };
 }
+
+// The API v2 client is the main backend: one per process, so its throttle and
+// what it last heard about the rate limits are shared by every tool call.
+const v2 = new LivespaceV2Client({
+  subdomain: livespaceConfig.subdomain,
+  apiKey: livespaceConfig.v2ApiKey,
+  dailyReserve: livespaceConfig.dailyReserve,
+});
 
 const app = buildApp({
   config: serverConfig,
   version: packageJson.version,
   // Every notification deep link is built from this.
   subdomain: livespaceConfig.subdomain,
+  v1Fallback: livespaceConfig.v1 !== null,
+  livespace: {
+    // `health` must answer while the daily reserve refuses everything else.
+    v2Ping: (opts) => readIntegrationUser(v2, { ...opts, essential: true }),
+    rateLimit: () => v2.rateLimit(),
+    dailyReserve: livespaceConfig.dailyReserve,
+    // Matched against the user dictionary once crm_metadata reads API v2.
+    actingUser: async () => ({
+      state: livespaceConfig.actingUserEmail === null ? "not_configured" : "unknown",
+      user: null,
+    }),
+  },
   ...(livespaceConfig.v1 === null ? {} : v1Deps(livespaceConfig.v1)),
 });
 

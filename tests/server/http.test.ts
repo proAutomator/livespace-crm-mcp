@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildApp } from "../../src/server/app.js";
 import type { ServerConfig } from "../../src/config/server-env.js";
+import { healthPing } from "../support/health.js";
 
 const BASE_CONFIG: ServerConfig = {
   port: 3020,
@@ -68,7 +69,7 @@ describe("MCP HTTP surface", () => {
     let calls = 0;
     const instance = buildApp({
       config: BASE_CONFIG, version: "0.0.0-test",
-      livespacePing: async () => { calls++; return {}; },
+      livespace: healthPing(async () => { calls++; return {}; }),
       metadata: { get: (async () => { calls++; return { data: [], asOf: 0, stale: false }; }) as never },
     });
     for (const name of ["health", "crm_metadata"]) {
@@ -246,10 +247,10 @@ describe("MCP HTTP surface", () => {
         maxConcurrentRequests: 1,
       },
       version: "0.0.0-test",
-      livespacePing: async () => {
+      livespace: healthPing(async () => {
         calls += 1;
         return {};
-      },
+      }),
     });
     const batch = Array.from({ length: 20 }, (_, index) => ({
       jsonrpc: "2.0",
@@ -349,14 +350,14 @@ describe("MCP HTTP surface", () => {
     const app = buildApp({
       config: BASE_CONFIG,
       version: "0.0.0-test",
-      livespacePing: async (opts) => {
+      livespace: healthPing(async (opts) => {
         started.resolve(opts?.signal);
         await releasePing.promise;
         if (opts?.signal?.aborted) {
           throw new DOMException("synthetic client disconnected", "AbortError");
         }
         return {};
-      },
+      }),
     });
     const controller = new AbortController();
     const request = new Request("http://127.0.0.1:3020/mcp", {
@@ -394,7 +395,7 @@ describe("MCP HTTP surface", () => {
     const app = buildApp({
       config: { ...BASE_CONFIG, requestExecutionTimeoutMs: 50 },
       version: "0.0.0-test",
-      livespacePing: async (opts) => {
+      livespace: healthPing(async (opts) => {
         observedSignal = opts?.signal;
         await Promise.race([
           new Promise<void>((resolve) =>
@@ -406,7 +407,7 @@ describe("MCP HTTP surface", () => {
           throw new DOMException("synthetic execution deadline", "TimeoutError");
         }
         return {};
-      },
+      }),
     });
 
     const response = await app.request(
@@ -428,13 +429,13 @@ describe("MCP HTTP surface", () => {
     const app = buildApp({
       config: BASE_CONFIG,
       version: "0.0.0-test",
-      livespacePing: async (opts) => {
+      livespace: healthPing(async (opts) => {
         started.resolve(opts?.signal);
         await new Promise<void>((resolve) =>
           opts?.signal?.addEventListener("abort", () => resolve(), { once: true }),
         );
         throw new DOMException("synthetic response cancelled", "AbortError");
-      },
+      }),
     });
     const response = await app.request(
       mcpRequest({
@@ -460,13 +461,13 @@ describe("MCP HTTP surface", () => {
     const app = buildApp({
       config,
       version: "0.0.0-test",
-      livespacePing: async (opts) => {
+      livespace: healthPing(async (opts) => {
         started.resolve(opts?.signal);
         await new Promise<void>((resolve) =>
           opts?.signal?.addEventListener("abort", () => resolve(), { once: true }),
         );
         throw new DOMException("synthetic response cancelled", "AbortError");
-      },
+      }),
     });
     const first = await app.request(
       mcpRequest({
@@ -500,13 +501,13 @@ describe("MCP HTTP surface", () => {
     const app = buildApp({
       config,
       version: "0.0.0-test",
-      livespacePing: async (opts) => {
+      livespace: healthPing(async (opts) => {
         started.resolve();
         await new Promise<void>((resolve) =>
           opts?.signal?.addEventListener("abort", () => resolve(), { once: true }),
         );
         throw new DOMException("synthetic execution deadline", "TimeoutError");
-      },
+      }),
     });
     const first = await app.request(
       mcpRequest({
@@ -547,9 +548,9 @@ describe("MCP HTTP surface", () => {
     const app = buildApp({
       config: { ...BASE_CONFIG, authToken: bearer },
       version: "0.0.0-test",
-      livespacePing: async () => {
+      livespace: healthPing(async () => {
         throw new Error(`${upstream} ${bearer}`);
-      },
+      }),
     });
 
     const { value, lines } = await captureStderr(async () => {

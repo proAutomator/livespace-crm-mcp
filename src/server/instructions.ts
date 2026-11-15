@@ -83,7 +83,8 @@ lacks, and returns errors with recovery hints.
 ${readOnlyNote}
 Quick start:
 - Call "health" first. Set checkLivespace: true to make one lightweight API
-  call and verify the configured Livespace connection.
+  call and verify the configured Livespace connection, the acting user and
+  the daily API budget.
 - Call "crm_metadata" before any operation that needs CRM ids. Fetch only the
   sections you need. Never guess ids - always take them from crm_metadata.
 - Find ids with "search_crm", read records with "get_records", and read
@@ -97,6 +98,11 @@ Quick start:
 
 Read tools:
 - "health" checks this server and, only with checkLivespace: true, the API.
+  The API key belongs to an integration user, not a person: actingUser is
+  the user this server works for, null when none is configured or matched.
+  dailyRemaining is the account's daily request budget, shared with its
+  other integrations; at or below dailyReserve the other tools refuse work
+  until 00:00 UTC.
 - "crm_metadata" returns nine dictionary sections: processes with stages and
   steps, users and teams, contact/deal groups, sources, task types/statuses,
   products and the current user. Sources have names but no ids;
