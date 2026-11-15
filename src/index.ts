@@ -6,6 +6,7 @@ import { createRecordFetchers } from "./livespace/records.js";
 import { createDealStepReader } from "./livespace/stage-moves.js";
 import { LivespaceV2Client } from "./livespace/v2/client.js";
 import { readIntegrationUser } from "./livespace/v2/metadata.js";
+import { createV2RecordReader } from "./livespace/v2/records.js";
 import { createWriteFetchers } from "./livespace/writes.js";
 import { buildApp } from "./server/app.js";
 import { listen } from "./server/listen.js";
@@ -68,6 +69,9 @@ const app = buildApp({
     actingUser: (opts) => metadata.actingUser(opts),
   },
   metadata,
+  // Record data is never cached (docs/security.md par. 8): the reader is
+  // stateless and only shares the client's throttle and rate-limit state.
+  recordReader: createV2RecordReader(v2),
   ...(livespaceConfig.v1 === null ? {} : v1Deps(livespaceConfig.v1)),
 });
 

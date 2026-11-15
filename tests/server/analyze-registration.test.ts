@@ -8,6 +8,7 @@ import type { AppDeps } from "../../src/server/mcp.js";
 import type { V1MetadataService as MetadataService } from "../../src/server/v1-metadata.js";
 import { deal } from "../support/records.js";
 import { fakeV2Metadata } from "../support/metadata.js";
+import { fakeRecordReader } from "../support/v2-reader.js";
 
 // Every value below is invented. No CRM data, no sandbox values (AGENTS.md).
 
@@ -167,6 +168,7 @@ describe("analyze registration", () => {
       app({
         metadata: fakeV2Metadata(), v1Metadata: fakeMetadata(),
         records: fakeRecords(),
+    recordReader: fakeRecordReader(),
         activity: fakeActivity(),
       }),
     );
@@ -185,12 +187,13 @@ describe("analyze registration", () => {
 
   test("needs both the activity fetchers and the metadata service", async () => {
     const withoutMetadata = await listNames(
-      app({ records: fakeRecords(), activity: fakeActivity() }),
+      app({ records: fakeRecords(),
+    recordReader: fakeRecordReader(), activity: fakeActivity() }),
     );
     expect(withoutMetadata.map((t: any) => t.name)).not.toContain("analyze");
 
     const withoutActivity = await listNames(
-      app({ metadata: fakeV2Metadata(), v1Metadata: fakeMetadata(), records: fakeRecords() }),
+      app({ metadata: fakeV2Metadata(), v1Metadata: fakeMetadata(), records: fakeRecords(), recordReader: fakeRecordReader() }),
     );
     expect(withoutActivity.map((t: any) => t.name)).not.toContain("analyze");
   });

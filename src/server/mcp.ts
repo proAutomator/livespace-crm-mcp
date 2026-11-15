@@ -12,6 +12,7 @@ import type { ServerConfig } from "../config/server-env.js";
 import type { ActivityFetchers } from "../livespace/activity.js";
 import type { RecordFetchers } from "../livespace/records.js";
 import type { DealStepReader } from "../livespace/stage-moves.js";
+import type { RecordReader } from "../livespace/v2/records.js";
 import type { WriteFetchers } from "../livespace/writes.js";
 import { buildInstructions } from "./instructions.js";
 import { analyzeToolConfig, runAnalyze } from "./tools/analyze.js";
@@ -68,6 +69,12 @@ export interface AppDeps {
    * against (`analyze` and the write tools); gone once they move to API v2.
    */
   v1Metadata?: V1MetadataService | undefined;
+  /** The API v2 records behind `search_crm` and `get_records`. */
+  recordReader?: RecordReader | undefined;
+  /**
+   * The v1 record fetchers of the tools still on the signed-session API
+   * (`get_activity`, `analyze` and the write tools).
+   */
   records?: RecordFetchers | undefined;
   activity?: ActivityFetchers | undefined;
   /** Absent in read-only mode: `index.ts` does not even build them there. */
@@ -268,14 +275,25 @@ export function createServerFactory(deps: AppDeps): () => McpServer {
       );
     }
 
-    // The read tools need the record fetchers; get_activity additionally needs
-    // the activity ones. Each tool is only listed when it can actually answer.
+    // search_crm reads API v2. It needs the dictionaries too: the acting user
+    // for `mine`, the account time zone for day filters and the custom-field
+    // list for custom-field filters.
+    if (deps.recordReader && deps.metadata) {
+      const searchDeps = {
+        records: deps.recordReader,
+        metadata: deps.metadata,
+        writesEnabled: writing !== undefined,
+      };
+      register("search_crm", searchCrmToolConfig, (args, signal) =>
+        runSearchCrm(searchDeps, args, signal === undefined ? {} : { signal }),
+      );
+    }
+
+    // The tools still on the v1 API need its record fetchers; get_activity
+    // additionally needs the activity ones. Each tool is only listed when it
+    // can actually answer.
     if (deps.records) {
       const records = deps.records;
-
-      register("search_crm", searchCrmToolConfig, (args, signal) =>
-        runSearchCrm(records, args, { signal }),
-      );
 
       // `activity` may be absent; the runner turns an includeWall request into a
       // BAD_PARAMS answer instead of failing the whole tool.
