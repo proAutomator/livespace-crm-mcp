@@ -697,6 +697,44 @@ The method union has no `DELETE` on purpose (Global Constraints).
 
 ## PR2: health and crm_metadata on v2 (stage 1)
 
+**Changes after the live probe of 2026-11-15** (demo account, reads only; the
+API changed without a `meta.version` bump, so every shape below is checked
+live again before its section is built):
+
+- `GET /users/me` answers camelCase (`firstName`, `lastName`, `timeZone`)
+  plus `language` and `tenantLanguage`; the spec draft has `first_name`,
+  `last_name`, `time_zone`. The mapping follows the live shape and still
+  accepts the draft's snake_case, so neither spelling breaks `health`.
+- `GET /sales-processes` now answers 200 with the fields of the draft (it
+  was 404 on 2026-10-25, Q11). It is the first source; the fallback to the
+  deprecated `/dictionaries/processes` on `NOT_FOUND` stays for accounts
+  that do not have the new route yet.
+- The other dictionaries and the product search matched the draft by field
+  name. Empty lists on the demo (`deal-groups`, `task-statuses`,
+  `deals/fields`, `tasks/fields`) and `/dictionaries/tags` were not compared,
+  so their mappers accept exactly the draft shape and fail the section with
+  fixed wording on anything else.
+
+**Scope decisions made before the code:**
+
+- `analyze`, `create_records`, `move_deals_to_stage` and `notify_user` still
+  run on v1 and read the v1 process and user dictionaries until PR5-PR7. So
+  `src/livespace/metadata.ts` and the v1 `MetadataService` stay (moved out
+  of the tool file into `src/server/v1-metadata.ts`, `AppDeps.v1Metadata`),
+  and only `crm_metadata` itself moves to v2 (`AppDeps.metadata`). Until
+  those tools move, `crm_metadata` returns v2 ids while the v1 tools take
+  v1 ids (Q1 decides whether they are the same); the branch is not released
+  in that state.
+- The dictionary cache shares one fetch between callers and runs it without
+  a caller signal. The request budget of the tool call that starts a fetch
+  pays for it; a caller that joins a fetch already in flight pays nothing.
+- Dictionary rows carry `selectable`. A retired row (`selectable: false`) is
+  kept and marked, because old records still reference it; an assignable row
+  omits the key.
+- `customFields` has four record kinds, read from `/dictionaries/people/fields`,
+  `/dictionaries/companies/fields`, `/dictionaries/deals/fields` and
+  `/dictionaries/tasks/fields`.
+
 ### Task 1: health
 
 **Files:** modify `src/server/tools/health.ts`, `src/server/mcp.ts`,
@@ -705,20 +743,28 @@ The method union has no `DELETE` on purpose (Global Constraints).
 
 `HealthDeps.livespacePing` is replaced by
 `v2Ping(opts) => Promise<{login: string; timeZone: string}>`
-(`GET /users/me` with `essential: true`) and `rateLimit() =>
-RateLimitSnapshot`. Output schema:
+(`GET /users/me` with `essential: true`), `rateLimit() =>
+RateLimitSnapshot` and `actingUser(opts) => Promise<{configured: boolean;
+user: ActingUser | null}>`, which matches `LIVESPACE_ACTING_USER_EMAIL`
+against the cached `users` dictionary. Output schema:
 
 ```ts
 { ok, version, protocol, readOnly,
   backend: { api: "v2", v1Fallback: boolean },
   livespace?: { reachable: boolean; integrationUser?: string; timeZone?: string;
                 actingUser?: string | null; dailyRemaining?: number | null;
-                dailyReserve: number } }
+                dailyReserve: number; hint?: string } }
 ```
 
+`actingUser` is the matched user's display name, `null` when no e-mail is
+configured or it matches no user, and absent when the lookup itself failed
+(the ping is essential, the user list is not, so a low daily budget leaves
+it unknown). `hint` repeats the acting-user advice in the structured channel,
+because some hosts show the model only that channel.
+
 Tests: `checkLivespace reads users/me and reports the daily budget`,
-`snake_case users/me fields map to camelCase output`,
-`an unresolved acting user is reported as null with a hint`,
+`users/me maps from the live camelCase shape and still accepts the draft
+snake_case`, `an unresolved acting user is reported as null with a hint`,
 `health still answers when the daily budget is low`. Annotations unchanged.
 
 ### Task 2: v2 dictionary fetchers
@@ -736,19 +782,24 @@ export interface StageConfig { id: string; name: string; description: string | n
   durationDays: number | null; steps: StepConfig[] }
 export interface ProcessConfig { id: string; name: string; selectable: boolean; isDefault: boolean;
   defaultLengthDays: number | null; productRequired: boolean; autoclose: boolean; stages: StageConfig[] }
-export interface CustomFieldInfo { id: string; name: string; type: string; group: string;
-  filterable: boolean; options: IdName[] }
-export interface ReasonInfo { id: string; name: string; kind: "won" | "lost" | "outdated" }
+export interface DictItem extends IdName { selectable?: false }
+export interface CustomFieldInfo { id: string; name: string; type: string; group: string | null;
+  required: boolean; readOnly: boolean; filterable: boolean; selectable?: false; options: IdName[] }
+export interface ReasonInfo extends DictItem { kind: "won" | "lost" | "outdated" }
 export interface ActingUser { id: string; name: string; email: string }
 export interface CurrentUserV2 { integrationLogin: string; timeZone: string; actingUser: ActingUser | null }
 export type V2MetadataSection = (typeof V2_METADATA_SECTIONS)[number];
 export interface V2SectionDataMap { processes: ProcessConfig[]; users: (IdName & { email: string; team: IdName | null })[];
-  teams: IdName[]; contactGroups: IdName[]; dealGroups: IdName[]; sources: IdName[]; positions: IdName[];
-  dealReasons: ReasonInfo[]; tags: string[]; currencies: IdName[]; taskTypes: IdName[]; taskStatuses: IdName[];
+  teams: (DictItem & { parentId: string | null })[]; contactGroups: DictItem[]; dealGroups: DictItem[];
+  sources: (DictItem & { parentId: string | null })[]; positions: DictItem[];
+  dealReasons: ReasonInfo[]; tags: string[]; currencies: (DictItem & { isDefault: boolean })[];
+  taskTypes: DictItem[]; taskStatuses: DictItem[];
   customFields: Record<"person" | "company" | "deal" | "task", CustomFieldInfo[]>;
   products: (IdName & { sku: string | null })[]; currentUser: CurrentUserV2 }
+/** A list section answers its rows plus whether the page cap cut it short. */
+export interface Fetched<T> { data: T; truncated: boolean }
 export type V2MetadataFetchers = { [S in V2MetadataSection]:
-  (opts?: { signal?: AbortSignal; budget?: CallBudget }) => Promise<V2SectionDataMap[S]> };
+  (opts?: { signal?: AbortSignal; budget?: CallBudget }) => Promise<Fetched<V2SectionDataMap[S]>> };
 export function createV2MetadataFetchers(client: Pick<LivespaceV2Client, "request">,
   opts: { actingUserEmail: string | null }): V2MetadataFetchers;
 ```
@@ -775,8 +826,10 @@ pages and say truncated`, `processes fall back to the deprecated path on
 
 **Files:** modify `src/server/tools/crm-metadata.ts` (sections enum, output
 schema, `MetadataService` over the v2 fetchers, `userQuery` unchanged),
-`src/server/instructions.ts`, README tool section; delete
-`src/livespace/metadata.ts` and its test once nothing imports them. Tests in
+`src/server/mcp.ts`, `src/index.ts`, `src/server/instructions.ts`, README tool
+section; create `src/server/v1-metadata.ts` for the v1 service the v1 tools
+still use. `src/livespace/metadata.ts` and its test are deleted by the PR that
+moves the last v1 tool off them (PR7), not here. Tests in
 `tests/server/tools/crm-metadata.test.ts`: section selection, cache TTL
 unchanged, `userQuery` over the new users shape, each section's output
 validates against the schema.
