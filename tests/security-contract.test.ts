@@ -24,6 +24,7 @@ const MAP_FILES = [
   "tests/livespace/v2/client.test.ts",
   "tests/livespace/v2/problems.test.ts",
   "tests/livespace/v2/budget.test.ts",
+  "tests/livespace/v2/metadata.test.ts",
   "tests/server/tools/tool-error.test.ts",
 ] as const;
 
@@ -90,6 +91,8 @@ describe("docs/security.md section 10 contract", () => {
     }
     // Least privilege: crm:deal:read already grants the process dictionaries.
     expect(security).toContain("| `analyze` | `crm:deal:read` |");
+    // The products section of crm_metadata is a catalog search of its own scope.
+    expect(security).toMatch(/\| `crm_metadata` \|[^|]*`crm:product-catalog:read`/u);
     expect(security).not.toContain("`crm:sales-process:read`");
   });
 
