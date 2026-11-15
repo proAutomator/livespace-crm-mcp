@@ -1628,3 +1628,22 @@ For later PRs:
   exempt request runs once the budget is under the reserve. The MCP rate
   limit bounds it per client; a floor or a minimum interval is a possible
   hardening.
+- Deferred review minors: no test boots `src/index.ts` (carried over from
+  PR1, so nothing pins `essential: true` on the `health` ping at the wiring
+  level); `scripts/smoke-v2.ts` has no offline test; with an acting user
+  configured the smoke reports 0 requests for `users`, because `health` has
+  already read that list.
+
+Gate: `bun install --frozen-lockfile`, `bun audit` (no vulnerabilities),
+`bun run typecheck`, `bun test` (1410 pass), `bun run test:security` (1153
+pass), `git diff --check`, MCP conformance against the baseline. A fresh
+reviewer checked the branch and found nothing critical; its two Important
+findings (the smoke server loading a local `.env`, one call's spent budget
+reaching other callers through the shared cache) and the minors on the
+process route, the `health` budget, the acting user states and option lists
+are fixed with tests.
+
+Live smoke (Task 4): passed on 2026-11-15 on the demo account before the
+review fixes (`smoke-v2: OK`, 15 of 15 sections, only `health` and
+`crm_metadata` listed). The rerun after the review fixes waits for the
+maintainer: the secret manager's approval timed out.
