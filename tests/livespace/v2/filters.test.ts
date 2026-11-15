@@ -189,6 +189,44 @@ describe("dayRange", () => {
     });
   });
 
+  test("a zone that changes its clock at midnight leaves no gap and no overlap", () => {
+    const zone = "America/Santiago";
+    const seconds = (value: string | undefined): number => Date.parse(value ?? "") / 1000;
+    // 2026-09-06: clocks jump from 00:00 to 01:00, so the day starts at the
+    // jump. 2026-04-05: 00:00 falls back to 23:00, so 4 April has two 23:59:59
+    // and ends with the later one.
+    for (const [day, next] of [
+      ["2026-09-05", "2026-09-06"],
+      ["2026-04-04", "2026-04-05"],
+      ["2026-06-30", "2026-07-01"],
+    ] as const) {
+      const end = seconds(dayRange(undefined, day, zone).to);
+      const start = seconds(dayRange(next, undefined, zone).from);
+      expect({ day, gap: start - end }).toEqual({ day, gap: 1 });
+    }
+    expect(dayRange("2026-09-06", "2026-09-06", zone)).toEqual({
+      from: "2026-09-06T00:00:00-04:00",
+      to: "2026-09-06T23:59:59-03:00",
+    });
+    expect(dayRange("2026-04-04", "2026-04-05", zone)).toEqual({
+      from: "2026-04-04T00:00:00-03:00",
+      to: "2026-04-05T23:59:59-04:00",
+    });
+  });
+
+  test("consecutive days of a year meet exactly in several zones", () => {
+    const seconds = (value: string | undefined): number => Date.parse(value ?? "") / 1000;
+    for (const zone of ["Europe/Warsaw", "America/Havana", "Africa/Cairo", "Australia/Lord_Howe"]) {
+      for (let offset = 0; offset < 365; offset += 1) {
+        const day = new Date(Date.UTC(2026, 0, 1 + offset)).toISOString().slice(0, 10);
+        const next = new Date(Date.UTC(2026, 0, 2 + offset)).toISOString().slice(0, 10);
+        const gap =
+          seconds(dayRange(next, undefined, zone).from) - seconds(dayRange(undefined, day, zone).to);
+        expect({ zone, day, gap }).toEqual({ zone, day, gap: 1 });
+      }
+    }
+  });
+
   test("a day that does not exist is refused", () => {
     for (const day of ["2026-02-30", "2026-13-01", "20260101", ""]) {
       const error = refusal(() => dayRange(day, undefined, zone));

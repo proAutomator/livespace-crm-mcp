@@ -18,7 +18,7 @@ import { V2_METADATA_SECTIONS } from "../src/livespace/v2/metadata.js";
 //    settings from this script alone: it does not load a `.env` file.
 // 3. The record tools through the same server: `search_crm` (filters, counts,
 //    paging, sort, dates, tasks, phrase) and `get_records` (every include).
-//    About 110 more requests, half of them the `health` calls that measure
+//    About 200 more requests, half of them the `health` calls that measure
 //    what each tool call cost.
 //
 // Output is statuses and counts only: never record content, never the key.
@@ -282,7 +282,10 @@ async function checkRecordTools(base: string, actingResolved: boolean): Promise<
     problems.push("mine");
   }
   if (actingResolved) {
-    await count("tasks, mine, countOnly", "tasks", { mine: true });
+    // The owners mapping was checked live for deals and tasks only (Q5).
+    for (const kind of ["persons", "companies", "tasks"]) {
+      await count(`${kind}, mine, countOnly`, kind, { mine: true });
+    }
   }
 
   // --- dates: datetime bounds in the account zone, bare days on date fields --
@@ -322,7 +325,15 @@ async function checkRecordTools(base: string, actingResolved: boolean): Promise<
 
   // --- countOnly per stage of one process ------------------------------------
   const metadata = await callTool(base, "crm_metadata", {
-    sections: ["processes", "tags", "customFields"],
+    sections: [
+      "processes",
+      "tags",
+      "customFields",
+      "contactGroups",
+      "dealGroups",
+      "sources",
+      "taskTypes",
+    ],
   });
   const sections = asObject(metadata.structuredContent?.["sections"]);
   // The dictionaries are normally still cached from part 2; a new baseline
@@ -377,6 +388,28 @@ async function checkRecordTools(base: string, actingResolved: boolean): Promise<
       await count(`${kind}, one tag`, kind, kind === "deals" ? { status: "all", tags: [tag] } : { tags: [tag] });
     }
   }
+  // One id of each dictionary a filter takes, when the account has any.
+  const firstId = (section: string): string | undefined => {
+    const row = asArray(asObject(sections[section])["data"]).map(asObject)[0];
+    return typeof row?.["id"] === "string" ? row["id"] : undefined;
+  };
+  const dictionaryFilters: [string, string, string, string][] = [
+    ["contactGroups", "persons", "groupIds", "persons, one group"],
+    ["contactGroups", "companies", "groupIds", "companies, one group"],
+    ["dealGroups", "deals", "groupIds", "deals, one group"],
+    ["sources", "persons", "sourceIds", "persons, one source"],
+    ["sources", "deals", "sourceIds", "deals, one source"],
+    ["taskTypes", "tasks", "taskTypeIds", "tasks, one type"],
+  ];
+  for (const [section, kind, filter, label] of dictionaryFilters) {
+    const id = firstId(section);
+    if (id === undefined) {
+      console.log(`${label}: the ${section} dictionary is empty, skipped`);
+      continue;
+    }
+    await count(label, kind, { ...(kind === "deals" ? { status: "all" } : {}), [filter]: [id] });
+  }
+
   const firstDeal = dealRows[0] ?? {};
   const owner = asObject(firstDeal["owner"])["id"];
   if (typeof owner === "string") {
@@ -387,6 +420,16 @@ async function checkRecordTools(base: string, actingResolved: boolean): Promise<
   if (typeof company === "string") {
     await count("deals of one company", "deals", { status: "all", companyId: company });
     await count("persons of one company", "persons", { companyId: company });
+  }
+  const dealPerson = dealRows.map((row) => asObject(row["person"])["id"]).find(
+    (id): id is string => typeof id === "string",
+  );
+  if (dealPerson !== undefined) {
+    const ofPerson = await count("deals of one person", "deals", {
+      status: "all",
+      personId: dealPerson,
+    });
+    if (ofPerson < 1) problems.push("personId did not find the deal it was taken from");
   }
   const dealName = typeof firstDeal["name"] === "string" ? firstDeal["name"] : "";
   const fragment = dealName.trim().slice(1, 5).trim();
@@ -417,6 +460,16 @@ async function checkRecordTools(base: string, actingResolved: boolean): Promise<
     });
     if (byName < 1) problems.push("persons nameContains did not find its own record");
   }
+  const taxId = asArray(companies["items"])
+    .map((row) => asObject(row)["taxId"])
+    .find((value): value is string => typeof value === "string" && value !== "");
+  if (taxId === undefined) {
+    console.log("taxId: no listed company has one, skipped");
+  } else {
+    const byTaxId = await count("companies, taxId", "companies", { taxId });
+    if (byTaxId < 1) problems.push("taxId did not find the company it was taken from");
+    await count("persons, taxId of their company", "persons", { taxId });
+  }
   await count("persons, created this year", "persons", { createdFrom: `${year}-01-01` });
   await count("companies, updated this year", "companies", { updatedFrom: `${year}-01-01` });
 
@@ -435,39 +488,98 @@ async function checkRecordTools(base: string, actingResolved: boolean): Promise<
   if (dealIds[0] !== undefined) {
     await count("tasks linked to one deal", "tasks", { linkedTo: { kind: "deal", id: dealIds[0] } });
   }
-
-  // --- custom fields ----------------------------------------------------------
-  const customFields = asObject(asObject(sections["customFields"])["data"]);
-  const filterable = (
-    [
-      ["persons", "person"],
-      ["companies", "company"],
-      ["deals", "deal"],
-    ] as const
-  ).flatMap(([argKind, kind]) =>
-    asArray(customFields[kind])
-      .map(asObject)
-      .filter((field) => field["filterable"] === true && typeof field["id"] === "string")
-      .slice(0, 1)
-      .map((field) => ({ argKind, id: field["id"] as string, type: String(field["type"]) })),
-  );
-  if (filterable.length === 0) {
-    console.log("custom fields: no filterable field on persons, companies or deals, skipped");
+  // The contract's prose lists seven sortable task fields; its field table
+  // flags four. One row each settles which ones the API takes.
+  for (const field of [
+    "title",
+    "priority",
+    "startsAt",
+    "updatedAt",
+    "endsAt",
+    "completedAt",
+    "createdAt",
+  ]) {
+    await search(`tasks, sort ${field}`, "tasks", {
+      filters: {},
+      sort: { field, direction: "desc" },
+      detail: "minimal",
+      perPage: 1,
+    });
   }
-  for (const field of filterable) {
-    await count(`${field.argKind}, custom field isNotEmpty`, field.argKind, {
-      ...(field.argKind === "deals" ? { status: "all" } : {}),
-      customFields: [{ fieldId: field.id, operator: "isNotEmpty" }],
+  for (const field of ["firstName", "lastName", "createdAt", "updatedAt"]) {
+    await search(`persons, sort ${field}`, "persons", {
+      filters: {},
+      sort: { field, direction: "desc" },
+      detail: "minimal",
+      perPage: 1,
+    });
+  }
+  for (const field of ["name", "statusChangedAt", "updatedAt"]) {
+    await search(`deals, sort ${field}`, "deals", {
+      filters: { status: "all" },
+      sort: { field, direction: "asc" },
+      detail: "minimal",
+      perPage: 1,
     });
   }
 
+  // --- custom fields ----------------------------------------------------------
+  const customFields = asObject(asObject(sections["customFields"])["data"]);
+  // One condition per field type the contract can filter by.
+  const TEXT_TYPES = ["text", "textarea"];
+  const CHOICE_TYPES = ["select", "radio", "multiselect", "multicheckbox"];
+  let customFieldChecks = 0;
+  for (const [argKind, kind] of [
+    ["persons", "person"],
+    ["companies", "company"],
+    ["deals", "deal"],
+    ["tasks", "task"],
+  ] as const) {
+    const fields = asArray(customFields[kind])
+      .map(asObject)
+      .filter((field) => field["filterable"] === true && typeof field["id"] === "string");
+    const everyStatus = argKind === "deals" ? { status: "all" } : {};
+    const one = async (label: string, condition: Structured): Promise<void> => {
+      customFieldChecks += 1;
+      await count(`${argKind}, custom field ${label}`, argKind, {
+        ...everyStatus,
+        customFields: [condition],
+      });
+    };
+    const textField = fields.find((field) => TEXT_TYPES.includes(String(field["type"])));
+    if (textField !== undefined) {
+      await one("text isNotEmpty", { fieldId: textField["id"], operator: "isNotEmpty" });
+      await one("text contains", { fieldId: textField["id"], operator: "contains", value: "a" });
+      await one("text eq", { fieldId: textField["id"], operator: "eq", value: "a" });
+    }
+    const checkbox = fields.find((field) => field["type"] === "checkbox");
+    if (checkbox !== undefined) {
+      await one("checkbox eq true", { fieldId: checkbox["id"], operator: "eq", value: true });
+      await one("checkbox eq false", { fieldId: checkbox["id"], operator: "eq", value: false });
+    }
+    const choice = fields.find(
+      (field) => CHOICE_TYPES.includes(String(field["type"])) && asArray(field["options"]).length > 0,
+    );
+    if (choice !== undefined) {
+      const option = asObject(asArray(choice["options"])[0])["id"];
+      await one("choice anyOf", { fieldId: choice["id"], operator: "anyOf", value: [option] });
+      await one("choice noneOf", { fieldId: choice["id"], operator: "noneOf", value: [option] });
+      await one("choice isEmpty", { fieldId: choice["id"], operator: "isEmpty" });
+    }
+  }
+  if (customFieldChecks === 0) {
+    console.log("custom fields: the account has no filterable field, skipped");
+  }
+
   // --- phrase ------------------------------------------------------------------
-  const word = dealName.trim().split(/\s+/u)[0] ?? "";
-  if (word.length < 2) {
+  // A run of letters is a word the full-text index certainly holds.
+  const word = /\p{L}{3,}/u.exec(dealName)?.[0] ?? "";
+  if (word === "") {
     console.log("phrase: no deal name to take a word from, skipped");
   } else {
+    const q = word.slice(0, 20);
     const phrase = await measured("search_crm", {
-      phrase: word.slice(0, 20),
+      phrase: q,
       kinds: ["persons", "companies", "deals", "notes"],
     });
     const block = asObject(phrase.out["phrase"]);
@@ -476,12 +588,20 @@ async function checkRecordTools(base: string, actingResolved: boolean): Promise<
       .map((kind) => `${kind} ${String(asObject(results[kind])["returned"])}`)
       .join(", ");
     console.log(
-      `search_crm phrase: ${phrase.isError ? `ERROR ${errorCodes(phrase.out["errors"])}` : "ok"}, ` +
-        `totalCount ${String(block["totalCount"])}, ${perKind}, requests ${phrase.requests ?? "unknown"}`,
+      `search_crm phrase, four kinds: ${phrase.isError ? `ERROR ${errorCodes(phrase.out["errors"])}` : "ok"}, ` +
+        `about ${String(block["totalCount"])}, ${perKind}, more ${block["hasMore"] === true}, ` +
+        `requests ${phrase.requests ?? "unknown"}`,
     );
-    const dealHits = asObject(results["deals"])["returned"];
-    if (phrase.isError || typeof dealHits !== "number" || dealHits < 1) {
-      problems.push("phrase did not find the deal its word was taken from");
+    if (phrase.isError) problems.push("phrase over four kinds");
+    // Deals alone, so other kinds cannot crowd the deal out of the page.
+    const deals = await measured("search_crm", { phrase: q, kinds: ["deals"], perPage: 50 });
+    const dealHits = asObject(asObject(deals.out["results"])["deals"])["returned"];
+    console.log(
+      `search_crm phrase, deals: ${deals.isError ? `ERROR ${errorCodes(deals.out["errors"])}` : "ok"}, ` +
+        `hits ${String(dealHits)}, requests ${deals.requests ?? "unknown"}`,
+    );
+    if (deals.isError || typeof dealHits !== "number" || dealHits < 1) {
+      problems.push("phrase did not find a deal by a word of a deal name");
     }
   }
 
@@ -542,7 +662,8 @@ async function checkRecordTools(base: string, actingResolved: boolean): Promise<
         `${list("notes", "entries")}; ${list("calls", "entries")}; ${list("emails", "entries")}; ${list("tasks", "items")}`,
     );
     if (item["status"] !== "ok" || !("process" in item)) problems.push("deal with includes");
-    if ("process" in item && stages.filter((stage) => stage["state"] === "current").length !== 1) {
+    // A deal without a process has no stages to check.
+    if (stages.length > 0 && stages.filter((stage) => stage["state"] === "current").length !== 1) {
       problems.push("the process does not have exactly one current stage");
     }
   }
@@ -579,6 +700,7 @@ async function checkRecordTools(base: string, actingResolved: boolean): Promise<
   const refusals: [string, string, Record<string, unknown>][] = [
     ["search_crm, a deal filter on persons", "search_crm", { kinds: ["persons"], filters: { status: "won" } }],
     ["search_crm, a sort the kind does not have", "search_crm", { kinds: ["deals"], filters: {}, sort: { field: "value", direction: "desc" } }],
+    ["search_crm, an id of the old API", "search_crm", { kinds: ["deals"], filters: { processId: "12345" } }],
     [
       "get_records, 25 ids with two includes",
       "get_records",
@@ -631,7 +753,7 @@ async function checkServer(): Promise<void> {
     LIVESPACE_MCP_READ_ONLY: "true",
     MCP_BIND_HOST: "127.0.0.1",
     MCP_PORT: port,
-    // The run makes about 150 MCP calls in a row; the defaults allow a burst of 30.
+    // The run makes about 250 MCP calls in a row; the defaults allow a burst of 30.
     MCP_RATE_LIMIT_PER_MINUTE: "1200",
     MCP_RATE_LIMIT_BURST: "400",
   };

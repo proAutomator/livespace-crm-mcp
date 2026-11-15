@@ -219,6 +219,43 @@ describe("get_records reading", () => {
     expect(result.text).toBe("get_records deal (1 ok, 1 not_found, 1 failed)");
   });
 
+  test("an id that is not id-shaped fails its item without a request", async () => {
+    // Livespace answers 400 for a malformed id and a 400 still costs the
+    // shared daily budget, so ids of the old API never reach it.
+    const h = harness();
+    const result = await run(h, {
+      kind: "deal",
+      ids: ["deal-1", DEAL, "12345"],
+      include: ["process"],
+    });
+    expect(result.isError).toBe(false);
+    expect(result.out.summary).toEqual({ requested: 3, ok: 1, notFound: 0, failed: 2 });
+    expect(result.out.items[0]).toMatchObject({
+      id: "deal-1",
+      status: "error",
+      code: "VALIDATION_ERROR",
+    });
+    expect(result.out.items[0]?.hint).toContain("search_crm");
+    expect(result.out.items[1]?.status).toBe("ok");
+    expect(h.ops("get").map((call) => call.id)).toEqual([DEAL]);
+    expect(h.ops("process")).toHaveLength(1);
+
+    // Only malformed ids: an error result, and nothing was sent.
+    const none = harness();
+    const allBad = await run(none, { kind: "person", ids: ["person-synthetic-1"] });
+    expect(allBad.isError).toBe(true);
+    expect(none.calls).toHaveLength(0);
+  });
+
+  test("ids that cannot be sent do not count against the request plan", async () => {
+    const h = harness();
+    const mixed = [...ids(20), "a", "b", "c", "d", "e"];
+    const result = await run(h, { kind: "deal", ids: mixed, include: ["process", "notes"] });
+    expect(result.isError).toBe(false);
+    expect(h.calls).toHaveLength(60);
+    expect(result.out.summary).toMatchObject({ requested: 25, ok: 20, failed: 5 });
+  });
+
   test("the record sits under the key of its kind, cut to the detail level", async () => {
     for (const kind of ["person", "company", "deal", "task"] as const) {
       const h = harness();
@@ -417,6 +454,10 @@ describe("get_records includes", () => {
         "INSUFFICIENT_SCOPE",
         "SYNTHETIC scope",
         "SYNTHETIC add crm:email:read",
+        undefined,
+        undefined,
+        false,
+        { requestId: "0123456789abcdef0123456789abcdef" },
       );
     const h = harness({ entries: { email: scope } });
     const result = await run(h, { kind: "deal", ids: ids(5, 301), include: ["notes", "emails"] });
@@ -427,15 +468,20 @@ describe("get_records includes", () => {
       expect(item.status).toBe("ok");
       expect(item.notes?.entries).toHaveLength(1);
       expect(item.emails).toBeUndefined();
-      expect(item.includeErrors).toEqual([
-        {
-          include: "emails",
-          code: "INSUFFICIENT_SCOPE",
-          message: "SYNTHETIC scope",
-          hint: "SYNTHETIC add crm:email:read",
-        },
-      ]);
+      expect(item.includeErrors).toHaveLength(1);
+      expect(item.includeErrors?.[0]).toMatchObject({
+        include: "emails",
+        code: "INSUFFICIENT_SCOPE",
+        message: "SYNTHETIC scope",
+        hint: "SYNTHETIC add crm:email:read",
+      });
     }
+    // A request id belongs to the request that was made: the records that
+    // were spared the request do not quote it.
+    const withRequestId = result.out.items.filter(
+      (item) => item.includeErrors?.[0]?.requestId !== undefined,
+    );
+    expect(withRequestId.length).toBe(h.ops("email").length);
     // A missing scope is the same for every record: once seen, the include
     // is not asked again, so it does not burn the daily budget 5 times.
     expect(h.ops("email").length).toBeLessThanOrEqual(2);

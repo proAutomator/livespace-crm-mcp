@@ -445,6 +445,15 @@ describe("search", () => {
     expect(page).toMatchObject({ totalCount: 10000, totalCountExact: false });
   });
 
+  test("a search answer without a total is an unknown shape, not a count", async () => {
+    // Under countOnly the row count of a one-row page would read as "1, exact".
+    const { reader } = harness({
+      "POST /deals/searches": () => v2Envelope([rawDeal()], { page: 1, perPage: 1 }),
+    });
+    const error = await failure(() => reader.search("deal", { ...QUERY, perPage: 1 }, opts()));
+    expect(error.code).toBe("UPSTREAM_ERROR");
+  });
+
   test("a filter over the contract limits is refused before any request", async () => {
     const { reader, calls } = harness({ "POST /deals/searches": () => searchPage([]) });
     const budget = new CallBudget(10);

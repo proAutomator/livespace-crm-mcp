@@ -218,22 +218,47 @@ function offsetMinutes(formatter: Intl.DateTimeFormat, utcMs: number): number {
 
 const pad = (value: number, width = 2): string => String(value).padStart(width, "0");
 
-/** `<day>T<time><offset>` for a wall-clock time of the zone. */
+const DAY_MS = 86_400_000;
+
+/**
+ * `<day>T<time><offset>` for a wall-clock time of the zone: the first instant
+ * of a day (`edge: "start"`) or its last second (`edge: "end"`).
+ *
+ * The offset depends on the instant and the instant on the offset, so both
+ * offsets the zone uses around that time are tried and the one that
+ * round-trips wins. Two special cases come from zones that change their
+ * clock at midnight:
+ *
+ * - the wall time exists twice (clocks went back): a day starts with the
+ *   earlier instant and ends with the later one;
+ * - the wall time does not exist (clocks went forward): a day starts at the
+ *   jump, which is the wall time read with the offset before it, and ends
+ *   just before the jump, which is the wall time read with the offset after.
+ *
+ * So consecutive days always meet: the end of one is one second before the
+ * start of the next.
+ */
 function zonedInstant(
   formatter: Intl.DateTimeFormat,
   day: Day,
   hour: number,
   minute: number,
   second: number,
+  edge: "start" | "end",
 ): string {
   const wall = Date.UTC(day.year, day.month - 1, day.day, hour, minute, second);
-  // The offset depends on the instant and the instant on the offset: guess
-  // with the offset at the wall time read as UTC, then correct once. That is
-  // exact everywhere except inside a clock change, which midnight and
-  // 23:59:59 only touch in the few zones that switch at midnight.
-  let offset = offsetMinutes(formatter, wall);
-  const corrected = offsetMinutes(formatter, wall - offset * 60_000);
-  if (corrected !== offset) offset = corrected;
+  const before = offsetMinutes(formatter, wall - DAY_MS);
+  const after = offsetMinutes(formatter, wall + DAY_MS);
+  const fits = [...new Set([before, after])].filter(
+    (candidate) => offsetMinutes(formatter, wall - candidate * 60_000) === candidate,
+  );
+  let offset: number;
+  if (fits.length === 0) {
+    offset = edge === "start" ? before : after;
+  } else {
+    // The earlier instant has the larger offset.
+    offset = edge === "start" ? Math.max(...fits) : Math.min(...fits);
+  }
   const sign = offset < 0 ? "-" : "+";
   const absolute = Math.abs(offset);
   return (
@@ -260,8 +285,8 @@ export function dayRange(
   return {
     ...(fromDay === undefined
       ? {}
-      : { from: zonedInstant(formatter, parseDay(fromDay), 0, 0, 0) }),
-    ...(toDay === undefined ? {} : { to: zonedInstant(formatter, parseDay(toDay), 23, 59, 59) }),
+      : { from: zonedInstant(formatter, parseDay(fromDay), 0, 0, 0, "start") }),
+    ...(toDay === undefined ? {} : { to: zonedInstant(formatter, parseDay(toDay), 23, 59, 59, "end") }),
   };
 }
 

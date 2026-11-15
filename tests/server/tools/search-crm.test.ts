@@ -228,6 +228,43 @@ describe("search_crm arguments", () => {
     }
   });
 
+  test("an id that is not id-shaped is refused before a request", async () => {
+    // Livespace answers 400 for a malformed id, and a 400 still costs the
+    // account's daily budget.
+    const bad = "deal-1";
+    const cases: [SearchCrmArgs["kinds"], NonNullable<SearchCrmArgs["filters"]>, string][] = [
+      [["deals"], { ownerIds: [syntheticId(1), bad] }, "ownerIds"],
+      [["deals"], { processId: bad }, "processId"],
+      [["deals"], { stageIds: [bad] }, "stageIds"],
+      [["deals"], { companyId: bad }, "companyId"],
+      [["deals"], { personId: bad }, "personId"],
+      [["persons"], { groupIds: [bad] }, "groupIds"],
+      [["persons"], { sourceIds: [bad] }, "sourceIds"],
+      [["tasks"], { taskTypeIds: [bad] }, "taskTypeIds"],
+      [["tasks"], { linkedTo: { kind: "deal", id: bad } }, "linkedTo"],
+      [["deals"], { customFields: [{ fieldId: bad, operator: "isEmpty" }] }, "customFields"],
+    ];
+    for (const [kinds, filters, name] of cases) {
+      const h = harness();
+      const result = await run(h, { kinds: kinds!, filters });
+      expect(result.isError).toBe(true);
+      const error = structured(result).errors[0];
+      expect(error?.code).toBe("BAD_PARAMS");
+      expect(error?.hint).toContain(name);
+      // The refusal names the filter, never the value.
+      expect(JSON.stringify(result)).not.toContain(bad);
+      expect(h.searches).toHaveLength(0);
+      expect(h.sections).toHaveLength(0);
+    }
+    // Upper-case hex is the same id shape.
+    const upper = harness();
+    const ok = await run(upper, {
+      kinds: ["deals"],
+      filters: { processId: syntheticId(401).toUpperCase().replace("00000000", "ABCDEF12") },
+    });
+    expect(ok.isError).toBe(false);
+  });
+
   test("page above 1 needs exactly one kind in filter mode", async () => {
     const h = harness();
     const refused = await run(h, { filters: {}, page: 2 });
@@ -568,6 +605,20 @@ describe("search_crm custom field filters", () => {
     }
   });
 
+  test("a checkbox takes eq only: isEmpty and isNotEmpty are refused before a request", async () => {
+    // The contract lists `eq` alone for a boolean custom field; anything else
+    // would be a 400 that still costs the daily budget.
+    for (const operator of ["isEmpty", "isNotEmpty"] as const) {
+      const h = withFields();
+      const result = await run(h, args([{ fieldId: CHECK, operator }]));
+      expect(result.isError).toBe(true);
+      const error = structured(result).errors[0];
+      expect(error?.code).toBe("BAD_PARAMS");
+      expect(error?.hint).toContain("eq");
+      expect(h.searches).toHaveLength(0);
+    }
+  });
+
   test("a refusal never repeats the field name or the value", async () => {
     const h = harness({
       customFields: {
@@ -767,7 +818,8 @@ describe("search_crm phrase mode", () => {
       perPage: 50,
     });
     const out = structured(result);
-    expect(out.phrase).toEqual({ totalCount: 173, page: 2, perPage: 50, hasMore: true });
+    // Three rows on a page of 50: the list ended, whatever the estimate says.
+    expect(out.phrase).toEqual({ totalCount: 173, page: 2, perPage: 50, hasMore: false });
     expect(out.results.persons).toEqual({
       hits: [{ id: syntheticId(101), name: "SYNTHETIC Person", url: null, company: null }],
       returned: 1,
@@ -782,7 +834,45 @@ describe("search_crm phrase mode", () => {
       id: syntheticId(951),
       parent: { kind: "deal", id: syntheticId(301) },
     });
-    expect(result.text).toContain("phrase: 3 of 173 hits (page 2, more)");
+    expect(result.text).toContain("phrase: 3 hits of about 173 (page 2)");
+  });
+
+  test("the phrase total is an estimate: a full page means more, not the total", async () => {
+    const full = harness({
+      phrase: (query) => ({
+        hits: Array.from({ length: query.perPage }, (_, index) => ({
+          kind: "person" as const,
+          id: syntheticId(index + 1),
+          name: "SYNTHETIC Person",
+          url: null,
+        })),
+        // The API calls this number approximate; here it is too low.
+        totalCount: 20,
+        rowCount: query.perPage,
+      }),
+    });
+    const result = await run(full, { phrase: "SYNTHETIC", kinds: ["persons"] });
+    expect(structured(result).phrase).toMatchObject({ totalCount: 20, hasMore: true });
+    expect(result.text).toContain("more");
+
+    // Rows of kinds this server drops still count as a full page.
+    const dropped = harness({ phrase: () => ({ hits: [], totalCount: 500, rowCount: 20 }) });
+    const droppedResult = await run(dropped, { phrase: "SYNTHETIC" });
+    expect(structured(droppedResult).phrase?.hasMore).toBe(true);
+
+    // The last page the API serves has nothing after it.
+    const last = harness({ phrase: () => ({ hits: [], totalCount: 99999, rowCount: 50 }) });
+    const lastResult = await run(last, { phrase: "SYNTHETIC", perPage: 50, page: 200 });
+    expect(structured(lastResult).phrase?.hasMore).toBe(false);
+  });
+
+  test("the phrase is trimmed, and two characters must remain", async () => {
+    const h = harness();
+    await run(h, { phrase: "  SYNTHETIC  " });
+    expect(h.phrases[0]?.query.q).toBe("SYNTHETIC");
+    const short = await run(h, { phrase: "  a " });
+    expect(structured(short).errors[0]?.code).toBe("BAD_PARAMS");
+    expect(h.phrases).toHaveLength(1);
   });
 
   test("the default phrase kinds are persons, companies and deals", async () => {

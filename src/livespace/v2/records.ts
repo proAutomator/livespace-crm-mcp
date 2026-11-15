@@ -273,7 +273,7 @@ export interface PhraseQuery {
 
 export interface PhrasePage {
   hits: PhraseHit[];
-  /** Matches across every asked kind together. */
+  /** The API's estimate of the hits across every asked kind: not exact. */
   totalCount: number;
   /** Rows upstream sent on this page, before unknown hit types were dropped. */
   rowCount: number;
@@ -296,6 +296,17 @@ export interface RecordReader {
   dealLines(id: string, opts: ReadOptions): Promise<{ lines: BudgetLineV2[]; totalCount: number }>;
   /** `null` when the deal is shown at basic access level. */
   dealBudget(id: string, opts: ReadOptions): Promise<BudgetSummaryV2 | null>;
+}
+
+/**
+ * The shape of every public id of API v2: 8-4-4-4-12 hex digits. Livespace
+ * answers 400 for anything else, and a 400 still costs the account's daily
+ * budget, so the tools check the shape before they send an id.
+ */
+const V2_ID_SHAPE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/u;
+
+export function isV2Id(value: string): boolean {
+  return V2_ID_SHAPE.test(value);
 }
 
 /** The largest page a search accepts (the contract's `perPage` maximum). */
@@ -794,9 +805,13 @@ export function createV2RecordReader(client: V2Requester): RecordReader {
         { ...callOptions(opts), write: false },
       );
       const items = asList(response.data).map(MAPPERS[kind]);
+      // No fallback to the row count: under `countOnly` a one-row page would
+      // then read as "1 match, exact".
+      const totalCount = totalOf(response.extra, -1);
+      if (totalCount < 0) throw unexpectedShape();
       return {
         items,
-        totalCount: totalOf(response.extra, items.length),
+        totalCount,
         totalCountExact: response.extra["totalCountExact"] !== false,
       };
     },

@@ -766,7 +766,7 @@ describe("read tool wiring", () => {
           name: "get_records",
           params: {
             name: "get_records",
-            arguments: { kind: "person", ids: ["person-synthetic-1"] },
+            arguments: { kind: "person", ids: ["00000000-0000-4000-8000-000000000101"] },
           },
           id: 11,
         }),
@@ -837,9 +837,11 @@ describe("read tool wiring", () => {
   });
 
   test("an upstream failure in get_records never leaks its text over the wire", async () => {
+    let reached = 0;
     const instance = fullApp({
       recordReader: fakeRecordReader({
         get: (async () => {
+          reached += 1;
           throw new Error("SENSITIVE-synthetic upstream body");
         }) as RecordReader["get"],
       }),
@@ -851,12 +853,13 @@ describe("read tool wiring", () => {
           name: "get_records",
           params: {
             name: "get_records",
-            arguments: { kind: "person", ids: ["person-synthetic-1"] },
+            arguments: { kind: "person", ids: ["00000000-0000-4000-8000-000000000101"] },
           },
           id: 14,
         }),
       )
     ).text();
+    expect(reached).toBe(1);
     expect(raw).not.toContain("SENSITIVE-synthetic");
   });
 
@@ -906,7 +909,7 @@ describe("read tool wiring", () => {
           name: "get_records",
           arguments: {
             kind: "person",
-            ids: ["person-synthetic-1"],
+            ids: ["00000000-0000-4000-8000-000000000101"],
             include: ["notes"],
           },
         },
@@ -931,7 +934,7 @@ describe("read tool wiring", () => {
           name: "get_records",
           params: {
             name: "get_records",
-            arguments: { kind: "person", ids: ["person-synthetic-1"], includeWall: true },
+            arguments: { kind: "person", ids: ["00000000-0000-4000-8000-000000000101"], includeWall: true },
           },
           id: 18,
         }),
@@ -957,14 +960,14 @@ describe("read tool wiring", () => {
           name: "get_records",
           params: {
             name: "get_records",
-            arguments: { kind: "person", ids: ["person-synthetic-1"] },
+            arguments: { kind: "person", ids: ["00000000-0000-4000-8000-000000000101"] },
           },
           id: 17,
         }),
       );
     await request();
     await request();
-    expect(calls).toEqual(["person-synthetic-1", "person-synthetic-1"]);
+    expect(calls).toEqual(["00000000-0000-4000-8000-000000000101", "00000000-0000-4000-8000-000000000101"]);
   });
 
   test("the record and activity modules never reach for the cache", async () => {

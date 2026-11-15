@@ -4,6 +4,7 @@ import { CALL_BUDGETS, CallBudget } from "../../livespace/v2/budget.js";
 import { where } from "../../livespace/v2/filters.js";
 import { MEDIA_JSON, MEDIA_MINIMAL } from "../../livespace/v2/media-types.js";
 import {
+  isV2Id,
   projectRecord,
   V2_KINDS,
   type BudgetLineV2,
@@ -72,6 +73,15 @@ const INCLUDE_ENTRY_LIMIT = 5;
 const RECORD_WORKERS = 2;
 
 const DEFAULT_DETAIL: DetailLevel = "standard";
+
+/** An id Livespace would answer 400 for; it fails its item without a request. */
+const MALFORMED_ID: ToolError = {
+  code: "VALIDATION_ERROR",
+  message: "This is not a Livespace API v2 id.",
+  hint:
+    "An API v2 id is 8-4-4-4-12 hex digits. Take ids from search_crm or crm_metadata; " +
+    "ids of the old API do not work here.",
+};
 
 const NOT_FOUND_HINT =
   "The id is unknown or not visible to the integration user of the API key - " +
@@ -250,7 +260,8 @@ lines) and budget (the stored revenue, cost and margin summary) for deals;
 notes, calls, emails and tasks for persons, companies and deals, each as the
 latest 5 entries plus the total. Tasks take no include. Each record costs one
 request and each include one more per record; the call is refused up front
-when that is over 60, so split large batches. An include that fails for one
+when that is over 60, so split large batches. An id that is not shaped like
+an API v2 id fails its item without a request. An include that fails for one
 record is listed in that item's includeErrors and the record is still
 returned. wall is not available from API v2 and is reported as unavailable.
 detail omits fields outside the selected level; full adds description,
@@ -436,7 +447,9 @@ export async function runGetRecords(
   const ids = dedupe(args.ids);
   const includes = canonicalIncludes(args.include);
 
-  const hint = argumentHint(kind, ids, includes);
+  // Malformed ids are answered locally, so they are not part of the plan.
+  const sendable = ids.filter(isV2Id);
+  const hint = argumentHint(kind, sendable, includes);
   if (hint !== null) return rejected(kind, badParams(hint));
 
   const detail = args.detail ?? DEFAULT_DETAIL;
@@ -503,6 +516,7 @@ export async function runGetRecords(
   // Every id settles in its own try/catch: one unreadable record must not take
   // the whole batch down.
   const items = await mapPool(ids, RECORD_WORKERS, async (id): Promise<RecordItem> => {
+    if (!isV2Id(id)) return { id, status: "error", ...MALFORMED_ID };
     try {
       const record = await deps.records.get(kind, id, { ...read, media });
       if (record === null) return { id, status: "not_found", hint: NOT_FOUND_HINT };
@@ -524,7 +538,12 @@ export async function runGetRecords(
           // The record itself was read, so a failing include degrades the
           // item instead of failing it.
           const toolError = toToolError(error);
-          if (toolError.code === "INSUFFICIENT_SCOPE") scopeDenied.set(name, toolError);
+          if (toolError.code === "INSUFFICIENT_SCOPE") {
+            // The request id belongs to this one request; the records that
+            // are spared theirs must not quote it.
+            const { requestId: _requestId, ...reusable } = toolError;
+            scopeDenied.set(name, reusable);
+          }
           (item.includeErrors ??= []).push({ include: name, ...toolError });
         }
       }

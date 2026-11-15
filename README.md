@@ -141,7 +141,9 @@ counts matches in the cached dictionary before that cap. Check `asOf`,
 `search_crm` has two modes. `phrase` runs the Livespace full-text search over
 persons, companies, deals and, when `kinds` names them, notes. It matches word
 prefixes, ignores accents and also finds e-mail addresses and phone numbers.
-The hits come from one ranked list and are grouped by kind. `filters` lists
+The hits come from one ranked list and are grouped by kind; the total in the
+`phrase` block is Livespace's estimate, so use `hasMore` to decide whether to
+read another page. `filters` lists
 whole records of persons, companies, deals or tasks. Livespace applies the
 filters, the sort and the paging, so `totalCount` is every match (exact up to
 10 000) and `countOnly` answers "how many" without returning records.
@@ -168,7 +170,9 @@ one Livespace request and every include one more per record. A call that
 would send more than 60 is refused before the first request, because the
 daily request budget is shared by the whole account. An include that fails
 for one record, for example for a missing `crm:email:read` scope, is listed
-in that item's `includeErrors` and the record is still returned. The record
+in that item's `includeErrors` and the record is still returned. An id that
+is not shaped like an API v2 id fails its item, or the search, without a
+request. The record
 wall is not part of API v2; `include: ["wall"]` is reported as unavailable.
 
 Record links come from Livespace. Tasks have one too. A phrase hit can have a

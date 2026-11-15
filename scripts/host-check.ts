@@ -10,13 +10,15 @@ import { personV2 } from "../tests/support/v2-records.js";
 
 // Public, synthetic fixture value. Never use it with a real CRM backend.
 export const SYNTHETIC_HOST_TOKEN = "synthetic-host-check-token-0123456789-abcd";
+// Shaped like an API v2 id: get_records refuses anything else unsent.
+export const SYNTHETIC_HOST_PERSON_ID = "00000000-0000-4000-8000-000000000001";
 
 /** The real MCP app, backed only by memory. No Livespace client or env config. */
 export function createHostCheck() {
   const marker = `synthetic-structured-${crypto.randomUUID()}`;
   const rows = new Map([["person-synthetic-001", person({ note: marker })]]);
   // get_records reads API v2: the same synthetic person, in the v2 shape.
-  const markedPerson = personV2({ id: "person-synthetic-001", description: marker });
+  const markedPerson = personV2({ id: SYNTHETIC_HOST_PERSON_ID, description: marker });
   let writes = 0;
   const unsupported = async (): Promise<never> => {
     throw new Error("Operation outside the synthetic host check.");

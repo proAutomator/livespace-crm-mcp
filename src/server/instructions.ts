@@ -128,7 +128,7 @@ Read tools:
 - "search_crm" finds persons, companies, deals, tasks and notes. Use phrase or
   filters, never both. phrase is the CRM's full-text search over persons,
   companies, deals and, when asked, notes: light hits grouped by kind, taken
-  from one ranked list. filters list whole records of persons, companies,
+  from one ranked list whose total is an estimate (read hasMore). filters list whole records of persons, companies,
   deals or tasks. Livespace filters, sorts, pages and counts them, so
   totalCount is every match (exact up to 10 000) and countOnly answers "how
   many" without returning records. mine means owned by the acting user (for

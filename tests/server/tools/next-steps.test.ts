@@ -32,6 +32,34 @@ describe("nextSteps", () => {
     }
   });
 
+  test("no hint points at a tool that still takes ids of the old API", () => {
+    // get_activity and the write tools read the old API until they move; a
+    // hint to them would send the model into a not-found answer.
+    for (const tool of ["search_crm", "get_records"]) {
+      for (const context of contexts()) {
+        const steps = nextSteps(tool, context).join(" ");
+        for (const other of ["get_activity", "analyze", "update_records", "move_deals"]) {
+          expect(steps).not.toContain(other);
+        }
+      }
+    }
+  });
+
+  test("a hint never promises more than the call accepts", () => {
+    const deal = nextSteps("search_crm", {
+      kind: "deal",
+      empty: false,
+      hasMore: true,
+      writesEnabled: false,
+    }).join(" ");
+    // 25 ids with three includes is 100 requests; the limit is 60.
+    expect(deal).not.toMatch(/25 ids[^.]*include/u);
+    expect(deal).toContain("60");
+    // Without a single kind the next page needs one kind per call.
+    const mixed = nextSteps("search_crm", { empty: false, hasMore: true, writesEnabled: false });
+    expect(mixed[0]).toContain("one kind");
+  });
+
   test("a search with more pages points at the next page first", () => {
     const steps = nextSteps("search_crm", {
       kind: "deal",
@@ -52,25 +80,15 @@ describe("nextSteps", () => {
     ).toEqual([]);
   });
 
-  test("a deal read points at the includes and the history", () => {
+  test("a deal read points at the includes until they were asked for", () => {
     const context = { kind: "deal", empty: false, writesEnabled: false } as const;
     const steps = nextSteps("get_records", { ...context, hasMore: true }).join(" ");
     expect(steps).toContain("include");
-    expect(steps).toContain("get_activity");
-    // Includes already asked for: only the history is left to point at.
+    expect(steps).toContain("process");
+    // Includes already asked for: the linked tasks are what is left.
     const asked = nextSteps("get_records", { ...context, hasMore: false }).join(" ");
-    expect(asked).not.toContain("include");
-    expect(asked).toContain("get_activity");
-  });
-
-  test("a task read has no history to point at", () => {
-    const steps = nextSteps("get_records", {
-      kind: "task",
-      empty: false,
-      hasMore: false,
-      writesEnabled: false,
-    }).join(" ");
-    expect(steps).not.toContain("get_activity");
+    expect(asked).not.toContain("include adds");
+    expect(asked).toContain("linkedTo");
   });
 
   test("an unknown tool has no next steps", () => {

@@ -31,24 +31,32 @@ function searchSteps(context: NextStepContext): string[] {
   if (context.empty) return [];
   const steps: string[] = [];
   if (context.hasMore) {
-    steps.push("search_crm with the same arguments and page + 1 reads the next page.");
+    steps.push(
+      context.kind === undefined
+        ? "search_crm with one kind per call and page 2 reads the next page of that kind."
+        : "search_crm with the same arguments and page + 1 reads the next page.",
+    );
   }
   steps.push("get_records with these ids reads the full records, up to 25 ids per call.");
   if (context.kind === "deal") {
     steps.push(
-      'get_records with include ["process", "products", "tasks"] adds a deal\'s steps, budget lines and tasks.',
+      'get_records with include ["process", "products", "tasks"] adds a deal\'s steps, budget lines and tasks; ids times (1 + includes) must stay within 60.',
     );
   } else if (context.kind !== "task") {
-    steps.push('get_records with include ["notes", "tasks"] adds recent notes and tasks.');
+    steps.push(
+      'get_records with include ["notes", "tasks"] adds recent notes and tasks; ids times (1 + includes) must stay within 60.',
+    );
   }
   return steps;
 }
 
+// No hint names get_activity, analyze or a write tool yet: they still read
+// the old API and may not know the ids these tools return.
 function recordSteps(context: NextStepContext): string[] {
   if (context.empty) return [];
-  if (context.kind === "task") {
-    return ['search_crm with kinds ["tasks"] and filters.linkedTo lists the other tasks of a record.'];
-  }
+  const linked =
+    'search_crm with kinds ["tasks"] and filters.linkedTo lists every task of a record.';
+  if (context.kind === "task") return [linked];
   const steps: string[] = [];
   if (context.hasMore) {
     steps.push(
@@ -57,7 +65,7 @@ function recordSteps(context: NextStepContext): string[] {
         : "get_records include adds notes, calls, emails and tasks in the same call.",
     );
   }
-  steps.push('get_activity with source "record" reads a longer history of one record.');
+  steps.push(linked);
   return steps;
 }
 

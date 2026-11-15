@@ -14,6 +14,7 @@ import {
   type CustomFieldInfo,
 } from "../../livespace/v2/metadata.js";
 import {
+  isV2Id,
   PHRASE_MAX_PAGE,
   PHRASE_MAX_PER_PAGE,
   projectRecord,
@@ -277,12 +278,14 @@ export const searchCrmToolConfig = {
 per call. "phrase" runs the CRM's full-text search (word prefixes, accents
 ignored; it also matches e-mail addresses and phone numbers) over persons,
 companies, deals and, when asked, notes, and returns light hits in relevance
-order, grouped by kind; the phrase block carries the total across kinds.
+order, grouped by kind; the phrase block carries Livespace's estimate of the
+total across kinds, which is not exact, so trust hasMore for "is there more".
 "filters" lists whole records of persons, companies, deals or tasks, filtered,
 sorted, paged and counted by Livespace; an empty filters object lists
 everything of that kind. Feed the returned ids into get_records; never guess
 ids. Filters: mine (records owned by, or tasks assigned to, the acting user;
-refused when no acting user is resolved), ownerIds, nameContains (matches
+refused when no acting user is resolved), ownerIds (with mine: the acting
+user or any of these), nameContains (matches
 inside words; for persons the first or the last name), tags, groupIds,
 sourceIds, createdFrom/To, updatedFrom/To, customFields (one kind per call,
 ids from crm_metadata customFields); deals also status (default open; "all"
@@ -375,7 +378,7 @@ the acting user's own permissions are.`,
               operator: z
                 .enum(CUSTOM_FIELD_OPERATORS)
                 .describe(
-                  "Text fields: eq, contains. Checkbox: eq. Choice fields: anyOf, allOf, noneOf. Any filterable field: isEmpty, isNotEmpty.",
+                  "Text fields: eq, contains, isEmpty, isNotEmpty. Checkbox: eq only. Choice fields: anyOf, allOf, noneOf, isEmpty, isNotEmpty.",
                 ),
               value: z
                 .union([
@@ -446,10 +449,12 @@ the acting user's own permissions are.`,
     }),
     phrase: z
       .strictObject({
-        totalCount: z.number().describe("Hits across every requested kind."),
+        totalCount: z
+          .number()
+          .describe("Livespace's estimate of the hits across every requested kind; not exact."),
         page: z.number(),
         perPage: z.number(),
-        hasMore: z.boolean(),
+        hasMore: z.boolean().describe("True when this page came back full."),
         hint: z.string().optional(),
       })
       .optional()
@@ -560,6 +565,41 @@ function dateHint(filters: SearchFilters): string | null {
   return null;
 }
 
+/** The ids each id-typed filter carries. */
+const ID_FILTERS: { [K in keyof SearchFilters]?: (filters: SearchFilters) => string[] } = {
+  ownerIds: (filters) => filters.ownerIds ?? [],
+  processId: (filters) => (filters.processId === undefined ? [] : [filters.processId]),
+  stageIds: (filters) => filters.stageIds ?? [],
+  companyId: (filters) => (filters.companyId === undefined ? [] : [filters.companyId]),
+  personId: (filters) => (filters.personId === undefined ? [] : [filters.personId]),
+  groupIds: (filters) => filters.groupIds ?? [],
+  sourceIds: (filters) => filters.sourceIds ?? [],
+  taskTypeIds: (filters) => filters.taskTypeIds ?? [],
+  linkedTo: (filters) => (filters.linkedTo === undefined ? [] : [filters.linkedTo.id]),
+  customFields: (filters) =>
+    (filters.customFields ?? []).flatMap((filter) => [
+      filter.fieldId,
+      ...(Array.isArray(filter.value) ? filter.value : []),
+    ]),
+};
+
+/**
+ * Livespace answers 400 for an id that is not id-shaped, and a 400 still
+ * costs the daily budget, so such an id stops here. The hint names the
+ * filter, never the value.
+ */
+function idShapeHint(filters: SearchFilters): string | null {
+  for (const [name, read] of Object.entries(ID_FILTERS)) {
+    if (read(filters).some((id) => !isV2Id(id))) {
+      return (
+        `${name} carries a value that is not a Livespace API v2 id (8-4-4-4-12 hex digits). ` +
+        "Take ids from search_crm, get_records or crm_metadata; ids of the old API do not work here."
+      );
+    }
+  }
+  return null;
+}
+
 function usedFilters(filters: SearchFilters): (keyof SearchFilters)[] {
   return (Object.keys(FILTER_KINDS) as (keyof SearchFilters)[]).filter((key) => {
     const value = filters[key];
@@ -585,6 +625,10 @@ function argumentError(args: SearchCrmArgs, kinds: ArgKind[]): KindError | null 
     );
   }
   if (hasPhrase) {
+    // Livespace counts the characters after trimming and answers 400 below 2.
+    if ((args.phrase ?? "").trim().length < 2) {
+      return badParams("phrase needs at least 2 characters besides outer spaces.");
+    }
     if (kinds.includes("tasks")) {
       return badParams(
         'The phrase search does not cover tasks. For tasks use filters, for example nameContains, with kinds: ["tasks"].',
@@ -643,8 +687,8 @@ function argumentError(args: SearchCrmArgs, kinds: ArgKind[]): KindError | null 
       }
     }
   }
-  const dates = dateHint(filters);
-  return dates === null ? null : badParams(dates);
+  const hint = dateHint(filters) ?? idShapeHint(filters);
+  return hint === null ? null : badParams(hint);
 }
 
 function sortField(kind: V2Kind, field: string): string | undefined {
@@ -683,6 +727,14 @@ function customFieldNode(
   }
   const name = `additionalFields.${field.id}`;
   const { operator, value } = filter;
+  if (field.type === "checkbox") {
+    // The contract gives a checkbox `eq` alone; `false` also matches a
+    // record with no stored answer.
+    if (operator !== "eq" || typeof value !== "boolean") {
+      return "A checkbox custom field takes eq with true or false only; eq false also matches records with no answer.";
+    }
+    return where(name, "eq", value);
+  }
   if (operator === "isEmpty" || operator === "isNotEmpty") {
     if (value !== undefined) return "isEmpty and isNotEmpty take no value. Drop the value.";
     return where(name, operator);
@@ -692,12 +744,6 @@ function customFieldNode(
       return "A text custom field takes eq or contains with a text value, or isEmpty and isNotEmpty.";
     }
     return where(name, operator, value);
-  }
-  if (field.type === "checkbox") {
-    if (operator !== "eq" || typeof value !== "boolean") {
-      return "A checkbox custom field takes eq with true or false.";
-    }
-    return where(name, "eq", value);
   }
   if (CHOICE_FIELD_TYPES.has(field.type)) {
     if (
@@ -862,7 +908,7 @@ async function runPhrase(
   try {
     // One request for every kind: the hits are one ranked list.
     found = await deps.records.phrase(
-      { q: args.phrase ?? "", kinds: phraseKinds, page, perPage },
+      { q: (args.phrase ?? "").trim(), kinds: phraseKinds, page, perPage },
       read,
     );
   } catch (error) {
@@ -886,7 +932,10 @@ async function runPhrase(
     totalCount: found.totalCount,
     page,
     perPage,
-    hasMore: page * perPage < found.totalCount,
+    // The API calls its total approximate, so it cannot say whether another
+    // page exists; a full page of rows can. Rows of kinds this server drops
+    // count too: they filled the page.
+    hasMore: found.rowCount >= perPage && page < PHRASE_MAX_PAGE,
     ...(returned === 0 ? { hint: NO_HITS_HINT } : {}),
   };
   // A note hit has no record to read: the ids worth reading are its parent's.
@@ -900,7 +949,8 @@ async function runPhrase(
   });
   const text = [
     `search_crm (${kinds.length}/${kinds.length} kinds ok)`,
-    `phrase: ${returned} of ${found.totalCount} hits (page ${page}${block.hasMore ? ", more" : ""})` +
+    `phrase: ${returned} ${returned === 1 ? "hit" : "hits"} of about ${found.totalCount} ` +
+      `(page ${page}${block.hasMore ? ", more" : ""})` +
       (block.hint === undefined ? "" : `\n${block.hint}`),
     ...kinds.map((kind) => {
       const count = results[kind]?.returned ?? 0;

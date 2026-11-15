@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { createHostCheck, SYNTHETIC_HOST_TOKEN } from "../../scripts/host-check.js";
+import {
+  createHostCheck,
+  SYNTHETIC_HOST_PERSON_ID,
+  SYNTHETIC_HOST_TOKEN,
+} from "../../scripts/host-check.js";
 
 function call(name: string, args: Record<string, unknown>): Request {
   return new Request("http://127.0.0.1:3020/mcp", {
@@ -31,7 +35,7 @@ test("host probe exposes an unpredictable marker only in structured record data"
   const probe = createHostCheck();
   expect(probe.marker).not.toBe(createHostCheck().marker);
   const response = await probe.app.request(call("get_records", {
-    kind: "person", ids: ["person-synthetic-001"], detail: "full",
+    kind: "person", ids: [SYNTHETIC_HOST_PERSON_ID], detail: "full",
   }));
   const body = await response.json() as any;
   expect(body.result.structuredContent.items[0].person.description).toBe(probe.marker);
