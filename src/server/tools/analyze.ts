@@ -17,7 +17,10 @@ import {
 import { cancelledError } from "../../livespace/errors.js";
 import type { ProcessInfo } from "../../livespace/metadata.js";
 import type { DealRecord, RecordFetchers } from "../../livespace/records.js";
-import type { MetadataService, SectionResult } from "./crm-metadata.js";
+import type {
+  V1MetadataService as MetadataService,
+  V1SectionResult as SectionResult,
+} from "../v1-metadata.js";
 import {
   toolErrorSchema,
   toToolError,

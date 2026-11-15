@@ -13,7 +13,7 @@ import {
   type NotificationWrite,
   type WriteFetchers,
 } from "../../src/livespace/writes.js";
-import type { MetadataService } from "../../src/server/tools/crm-metadata.js";
+import type { V1MetadataService as MetadataService } from "../../src/server/v1-metadata.js";
 import {
   notifyUserToolConfig,
   runNotifyUser,

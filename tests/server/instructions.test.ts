@@ -48,8 +48,10 @@ describe("buildInstructions", () => {
 
   test("is a per-tool cheat sheet for the five CRM read tools", () => {
     const text = buildInstructions({ readOnly: false }).replace(/\s+/gu, " ");
-    expect(text).toContain("nine dictionary sections");
-    expect(text).toContain("Custom-field datasets are not available");
+    expect(text).toContain("fifteen dictionary sections");
+    expect(text).toContain("selectable: false");
+    expect(text).toContain("currentUser.actingUser");
+    expect(text).not.toContain("Custom-field datasets are not available");
     expect(text).toContain("Use phrase or filters, never both");
     expect(text).toContain("sortWindowTruncated");
     expect(text).toContain("sortBy and cursor cannot be combined");

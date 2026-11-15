@@ -31,8 +31,8 @@ those lower-level calls into tasks an MCP client can use safely:
 
 | Tool | Mode | Purpose and bound |
 |---|---|---|
-| `health` | Read | Checks the server; `checkLivespace: true` also makes one lightweight Livespace API call. |
-| `crm_metadata` | Read | Returns nine dictionary sections, including processes, users, groups, sources, task dictionaries, products and the current user. Optional `userQuery` filters users by name or email before the 500-row cap. |
+| `health` | Read | Checks the server and names the backend; `checkLivespace: true` also calls Livespace API v2 (one request, plus the user list once per cache period when an acting user is configured) and reports the integration user, the acting user and the daily request budget left. |
+| `crm_metadata` | Read | Returns fifteen dictionary sections from API v2: the full process config with stages and steps, users, teams, groups, sources, positions, deal reasons, tags, currencies, task dictionaries, custom fields with their options, products and the current user. Optional `userQuery` filters users by name or email before the 500-row cap. |
 | `search_crm` | Read | Finds persons, companies or deals, with record links even in lightweight results. Sorted deal searches use one 200-record sort window and report truncation. |
 | `get_records` | Read | Reads one record kind and up to 25 ids; walls for at most 5 persons, companies or deals. |
 | `get_activity` | Read | Reads one record wall, one bounded CRM feed range or bounded task pages per call. |
@@ -225,7 +225,10 @@ writes as the integration. Give the key only what the server needs:
 - a write server adds `write` scopes;
 - never a `delete` scope and never `crm:sales-process:write`.
 
-`docs/security.md` lists the scopes per tool. A server on a non-loopback bind
+`docs/security.md` lists the scopes per tool. `crm_metadata` reads with the
+person, company, deal and task `read` scopes; its `products` section also needs
+`crm:product-catalog:read`, and without it only that section reports an error.
+A server on a non-loopback bind
 hands that visibility to every client, so it refuses to start without
 `LIVESPACE_V2_SHARED_ACCESS=acknowledged`.
 
@@ -356,7 +359,7 @@ bun test                 # complete offline suite
 bun run test:security    # focused security contract from docs/security.md
 bun run typecheck
 bun run smoke            # live test-account check via .env or macOS Keychain
-bun run smoke:v2         # read-only API v2 check via .env (from 0.2.0)
+bun run smoke:v2         # read-only API v2 check: the client, then health and crm_metadata through a local read-only server
 bun run dev
 ```
 

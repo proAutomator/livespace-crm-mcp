@@ -23,7 +23,7 @@ import {
   type CreateRecordsDeps,
   type CreateRecordsResult,
 } from "../../src/server/tools/create-records.js";
-import type { MetadataService } from "../../src/server/tools/crm-metadata.js";
+import type { V1MetadataService as MetadataService } from "../../src/server/v1-metadata.js";
 import type { ToolError, ToolRunResult } from "../../src/server/tools/tool-error.js";
 import {
   PLAN_BUDGET_EXPIRED,

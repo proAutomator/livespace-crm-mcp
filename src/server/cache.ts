@@ -8,6 +8,13 @@ export interface TtlCacheOptions {
   now?: () => number;
   /** 0..1, scales expiry to ttlMs * (0.9 + 0.2 * jitter()). */
   jitter?: () => number;
+  /**
+   * True for a failure that belongs to the caller whose fetch it was (its own
+   * request budget ran out), not to the key. Such a failure is not remembered
+   * for the cooldown, and a caller that had only joined that fetch runs its
+   * own instead of inheriting it.
+   */
+  callerScopedFailure?: (error: unknown) => boolean;
 }
 
 export interface CacheHit<T> {
@@ -62,6 +69,7 @@ export function createTtlCache(opts: TtlCacheOptions): {
 } {
   const now = opts.now ?? (() => Date.now());
   const jitter = opts.jitter ?? Math.random;
+  const callerScoped = opts.callerScopedFailure ?? (() => false);
   const entries = new Map<string, Entry>();
   const failures = new Map<string, Failure>();
   const inFlight = new Map<string, Promise<Entry>>();
@@ -115,7 +123,7 @@ export function createTtlCache(opts: TtlCacheOptions): {
       }
       return entry;
     } catch (error) {
-      if (current()) failures.set(key, { failedAt: now(), error });
+      if (current() && !callerScoped(error)) failures.set(key, { failedAt: now(), error });
       throw error;
     } finally {
       // Only ever clear our own slot: after an invalidate the slot may already
@@ -163,24 +171,43 @@ export function createTtlCache(opts: TtlCacheOptions): {
 
     // The shared fetch never carries a caller signal: one caller walking away
     // must not cancel the work the other callers are waiting for.
+    const start = (): Promise<Entry> => {
+      const started = runFetch(key, fetch);
+      inFlight.set(key, started);
+      return started;
+    };
     let flight = inFlight.get(key);
-    if (!flight) {
-      flight = runFetch(key, fetch);
-      inFlight.set(key, flight);
-    }
+    const joined = flight !== undefined;
+    flight ??= start();
 
+    let flightError: unknown;
     try {
       const fresh = await awaitFlight(flight, signal);
       return { value: fresh.value as T, asOf: fresh.asOf, stale: false };
     } catch (error) {
-      // An aborted caller gets the abort, never a stale fallback.
-      if (signal?.aborted) throw error;
-      const previous = liveEntry(key);
-      if (previous) {
-        return { value: previous.value as T, asOf: previous.asOf, stale: true };
-      }
-      throw error;
+      flightError = error;
     }
+    // An aborted caller gets the abort, never a retry or a stale fallback.
+    if (signal?.aborted) throw flightError;
+
+    // The fetch this caller joined failed for a reason that was its starter's
+    // alone. One more attempt, on this caller's own fetch (or on a newer one
+    // already in flight), then the outcome stands.
+    if (joined && callerScoped(flightError)) {
+      try {
+        const fresh = await awaitFlight(inFlight.get(key) ?? start(), signal);
+        return { value: fresh.value as T, asOf: fresh.asOf, stale: false };
+      } catch (error) {
+        flightError = error;
+        if (signal?.aborted) throw flightError;
+      }
+    }
+
+    const previous = liveEntry(key);
+    if (previous) {
+      return { value: previous.value as T, asOf: previous.asOf, stale: true };
+    }
+    throw flightError;
   }
 
   function invalidate(key: string): void {

@@ -27,7 +27,11 @@ import {
 } from "./tools/crm-metadata.js";
 import { getActivityToolConfig, runGetActivity } from "./tools/get-activity.js";
 import { getRecordsToolConfig, runGetRecords } from "./tools/get-records.js";
-import { healthToolConfig, runHealthCheck } from "./tools/health.js";
+import {
+  healthToolConfig,
+  runHealthCheck,
+  type HealthLivespaceDeps,
+} from "./tools/health.js";
 import { logActivitiesToolConfig, runLogActivities } from "./tools/log-activities.js";
 import {
   moveDealsToStageToolConfig,
@@ -38,6 +42,7 @@ import { searchCrmToolConfig, runSearchCrm } from "./tools/search-crm.js";
 import type { ToolRunResult } from "./tools/tool-error.js";
 import { updateRecordsToolConfig, runUpdateRecords } from "./tools/update-records.js";
 import { buildWriteCodec, type WriteState } from "./tools/write-support.js";
+import type { V1MetadataService } from "./v1-metadata.js";
 
 /**
  * The most elements (array elements plus object members, counted through
@@ -52,12 +57,17 @@ export const MAX_TOOL_INPUT_ELEMENTS = 2_000;
 export interface AppDeps {
   config: ServerConfig;
   version: string;
-  livespacePing?:
-    | ((opts?: {
-        signal?: AbortSignal;
-      }) => Promise<{ name?: string; login?: string }>)
-    | undefined;
+  /** The API v2 half of `health`; absent only where no client is wired. */
+  livespace?: HealthLivespaceDeps | undefined;
+  /** True when the optional v1 key pair is configured. */
+  v1Fallback?: boolean | undefined;
+  /** The API v2 dictionaries behind `crm_metadata`. */
   metadata?: MetadataService | undefined;
+  /**
+   * The v1 dictionaries the tools still on the signed-session API validate
+   * against (`analyze` and the write tools); gone once they move to API v2.
+   */
+  v1Metadata?: V1MetadataService | undefined;
   records?: RecordFetchers | undefined;
   activity?: ActivityFetchers | undefined;
   /** Absent in read-only mode: `index.ts` does not even build them there. */
@@ -79,7 +89,7 @@ export interface AppDeps {
 interface WriteSetup {
   writes: WriteFetchers;
   records: RecordFetchers;
-  metadata: MetadataService;
+  metadata: V1MetadataService;
   activity?: ActivityFetchers;
   dealSteps?: DealStepReader;
   subdomain?: string;
@@ -99,7 +109,7 @@ interface WriteSetup {
  */
 function resolveWriteSetup(deps: AppDeps): WriteSetup | undefined {
   if (deps.config.readOnly) return undefined;
-  const { writes, records, metadata } = deps;
+  const { writes, records, v1Metadata: metadata } = deps;
   if (writes === undefined || records === undefined || metadata === undefined) {
     return undefined;
   }
@@ -168,7 +178,8 @@ export function createServerFactory(deps: AppDeps): () => McpServer {
         {
           version: deps.version,
           readOnly: deps.config.readOnly,
-          ...(deps.livespacePing ? { livespacePing: deps.livespacePing } : {}),
+          v1Fallback: deps.v1Fallback === true,
+          ...(deps.livespace === undefined ? {} : { livespace: deps.livespace }),
         },
         args,
         { signal: requestSignal(ctx) },
@@ -281,9 +292,9 @@ export function createServerFactory(deps: AppDeps): () => McpServer {
 
       // `analyze` sweeps deals, the feed and tasks, and reads the processes
       // dictionary for stage names and order - so it needs all three deps.
-      if (deps.activity && deps.metadata) {
+      if (deps.activity && deps.v1Metadata) {
         const activity = deps.activity;
-        const metadata = deps.metadata;
+        const metadata = deps.v1Metadata;
         register("analyze", analyzeToolConfig, (args, signal) =>
           runAnalyze(records, activity, metadata, args, { signal }),
         );

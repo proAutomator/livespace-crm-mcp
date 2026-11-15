@@ -4,10 +4,13 @@ import { createActivityFetchers } from "./livespace/activity.js";
 import { LivespaceClient } from "./livespace/client.js";
 import { createRecordFetchers } from "./livespace/records.js";
 import { createDealStepReader } from "./livespace/stage-moves.js";
+import { LivespaceV2Client } from "./livespace/v2/client.js";
+import { readIntegrationUser } from "./livespace/v2/metadata.js";
 import { createWriteFetchers } from "./livespace/writes.js";
 import { buildApp } from "./server/app.js";
 import { listen } from "./server/listen.js";
 import { createMetadataService } from "./server/tools/crm-metadata.js";
+import { createV1MetadataService } from "./server/v1-metadata.js";
 import packageJson from "../package.json";
 
 const serverConfig = loadServerConfig(process.env);
@@ -19,9 +22,9 @@ const livespaceConfig = loadLivespaceConfig(process.env);
 function v1Deps(v1: LivespaceV1Config) {
   const client = new LivespaceClient(v1);
   return {
-    // Built once per process: the dictionary cache lives here while the MCP
-    // protocol layer stays stateless (docs/security.md par. 8).
-    metadata: createMetadataService(client),
+    // The v1 dictionaries these tools validate ids against, cached like the
+    // v2 ones below.
+    v1Metadata: createV1MetadataService(client),
     // Record and activity data is never cached (docs/security.md par. 8);
     // these fetchers are stateless and only share the client's throttle and
     // auth.
@@ -34,21 +37,37 @@ function v1Deps(v1: LivespaceV1Config) {
     // kill-switch are resolved before anything can write: in read-only mode
     // the write fetchers are not built at all (docs/security.md par. 5).
     ...(serverConfig.readOnly ? {} : { writes: createWriteFetchers(client) }),
-    livespacePing: (opts?: { signal?: AbortSignal }) =>
-      client.call<{ name?: string; login?: string }>(
-        "Default",
-        "User_getInfo",
-        {},
-        opts ?? {},
-      ),
   };
 }
+
+// The API v2 client is the main backend: one per process, so its throttle and
+// what it last heard about the rate limits are shared by every tool call.
+const v2 = new LivespaceV2Client({
+  subdomain: livespaceConfig.subdomain,
+  apiKey: livespaceConfig.v2ApiKey,
+  dailyReserve: livespaceConfig.dailyReserve,
+});
+
+// Built once per process: the dictionary cache lives here while the MCP
+// protocol layer stays stateless (docs/security.md par. 8).
+const metadata = createMetadataService(v2, {
+  actingUserEmail: livespaceConfig.actingUserEmail,
+});
 
 const app = buildApp({
   config: serverConfig,
   version: packageJson.version,
   // Every notification deep link is built from this.
   subdomain: livespaceConfig.subdomain,
+  v1Fallback: livespaceConfig.v1 !== null,
+  livespace: {
+    // `health` must answer while the daily reserve refuses everything else.
+    v2Ping: (opts) => readIntegrationUser(v2, { ...opts, essential: true }),
+    rateLimit: () => v2.rateLimit(),
+    dailyReserve: livespaceConfig.dailyReserve,
+    actingUser: (opts) => metadata.actingUser(opts),
+  },
+  metadata,
   ...(livespaceConfig.v1 === null ? {} : v1Deps(livespaceConfig.v1)),
 });
 
