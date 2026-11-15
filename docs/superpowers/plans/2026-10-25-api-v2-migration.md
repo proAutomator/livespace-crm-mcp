@@ -17,9 +17,9 @@ only as an optional fallback for data v2 does not publish: the record wall and
 system feed, deal probability and bulk stage reach. Release 0.2.0 requires a
 v2 key.
 
-**Tech Stack:** TypeScript 7 (strict), Bun >=1.3.14, Hono 4.13.7,
-`@modelcontextprotocol/server` 2.0.0, Zod 4.4.3. No new runtime dependency,
-no OpenAPI code generation.
+**Tech Stack:** TypeScript 7 (strict), Bun >=1.3.14, Hono 4.13.11,
+`@modelcontextprotocol/server` 2.3.1, Zod 4.6.6 (the 0.1.3 pins). No new
+runtime dependency, no OpenAPI code generation.
 
 **Spec:** the Livespace public API v2 OpenAPI 3.1.2 draft (`info.version`
 2.0.0, 94 paths, 135 operations). It is a vendor draft kept in the
@@ -32,8 +32,8 @@ those notes are copied into the sections below.
 
 ## Global Constraints
 
-- Runtime dependencies stay exactly `@modelcontextprotocol/server` 2.0.0,
-  `hono` 4.13.7, `zod` 4.4.3. `bun install --frozen-lockfile` and `bun audit`
+- Runtime dependencies stay exactly `@modelcontextprotocol/server` 2.3.1,
+  `hono` 4.13.11, `zod` 4.6.6 (the 0.1.3 pins). `bun install --frozen-lockfile` and `bun audit`
   pass on every PR.
 - English in code, comments, commits and docs. Docs and README use plain
   hyphens, never long dashes; run them through the `no-ai-slop` skill.
@@ -336,20 +336,21 @@ Official MCP benchmark coverage (version 0.3.0 as tested on 2026-10-12 and
 | 5 Write safety | Verification from write responses; idempotency keys; dedupe before non-idempotent creates; tags read-modify-write; attribution (D3); no delete stays (D5) | 6 |
 | 6 Error hygiene | Problem bodies never forwarded; only fixed text, sanitized pointers, validated request id | 1 |
 | 8 Data handling | Outbound traffic still only to `https://<subdomain>.livespace.io` (both APIs) | 1 |
-| 10 Regression tests | New 17-21 below, plus requirement 6 and 8 reworded for `v2Path` and `perPage` | 1, 6 |
+| 10 Regression tests | New 18-22 below, plus requirement 6 and 8 reworded for `v2Path` and `perPage` | 1, 6 |
 
-New required regression tests:
+New required regression tests (numbered 18-22 because 0.1.3 added
+requirement 17, the tool input element cap):
 
-17. The v2 key appears only in the `Authorization` header: never in a URL,
+18. The v2 key appears only in the `Authorization` header: never in a URL,
     error, tool result or log line.
-18. Problem bodies never reach the model: only fixed wording, sanitized
+19. Problem bodies never reach the model: only fixed wording, sanitized
     pointers and a validated request id.
-19. v2 load discipline: explicit `perPage`, bounded pages, per-call request
+20. v2 load discipline: explicit `perPage`, bounded pages, per-call request
     budget and daily reserve refusal.
-20. Non-idempotent writes never retry after dispatch; keyed writes retry
+21. Non-idempotent writes never retry after dispatch; keyed writes retry
     only with the same key.
-21. A non-loopback bind with a v2 key refuses to start without the shared
-    access acknowledgement (D1-A only).
+22. A non-loopback bind refuses to start without the shared access
+    acknowledgement (D1-A only).
 
 ## Stage 0: live verification (before PR1)
 
@@ -403,8 +404,10 @@ contract for reads and a read-only live smoke.
   ```
   `LivespaceClient` (v1) now takes `LivespaceV1Config`.
   `ServerConfig` gains `v2SharedAccessAcknowledged: boolean`.
+  Added in PR1: `export function loadLivespaceV1Config(env): LivespaceV1Config`
+  (subdomain plus the full v1 pair, no v2 key) for `scripts/smoke.ts`.
 
-- [ ] **Step 1: Write the failing tests** in `tests/config/env.test.ts`:
+- [x] **Step 1: Write the failing tests** in `tests/config/env.test.ts`:
   - `requires LIVESPACE_API_V2_KEY` - message names the variable and points
     to `livespace-crm-mcp@0.1` for v1-only use.
   - `rejects a malformed v2 key without echoing it` - with
@@ -422,11 +425,11 @@ contract for reads and a read-only live smoke.
     `LIVESPACE_V2_SHARED_ACCESS` throws; `acknowledged` passes; any other
     value throws.
 
-- [ ] **Step 2: Run them, expect FAIL**
+- [x] **Step 2: Run them, expect FAIL**
   Run: `bun test tests/config`
   Expected: the new cases fail on the missing fields and checks.
 
-- [ ] **Step 3: Implement** in `src/config/env.ts` and
+- [x] **Step 3: Implement** in `src/config/env.ts` and
   `src/config/server-env.ts`. Error messages name variables, never values.
   `src/index.ts` builds the v1 `LivespaceClient` only when `config.v1` is not
   null; every tool that still needs v1 is registered only when that client
@@ -434,10 +437,10 @@ contract for reads and a read-only live smoke.
   `scripts/smoke.ts` passes the v1 pair as before. `.env.example` documents
   the new variables, names only, with D1/D2 wording.
 
-- [ ] **Step 4: Run the tests, expect PASS**
+- [x] **Step 4: Run the tests, expect PASS**
   Run: `bun test tests/config && bun run typecheck`
 
-- [ ] **Step 5: Commit** (when Kuba asks)
+- [x] **Step 5: Commit** (when Kuba asks)
   `git commit -m "feat(config): add the v2 key, optional v1 pair and daily reserve"`
 
 ### Task 2: Problem mapping and error details
@@ -475,6 +478,9 @@ contract for reads and a read-only live smoke.
   // tool-error.ts
   export interface ToolError { code: string; message: string; hint: string; fields?: string[]; requestId?: string }
   ```
+  As built: `LivespaceError` exposes `readonly details: LivespaceErrorDetails`.
+  `parseRetryAfterMs` moved to `src/livespace/http-shared.ts` in this task,
+  because `errorFromProblem` sets `retryAfterMs` on 409, 429 and 503.
 
 Mapping (fixed wording; `transport` true only where marked):
 
@@ -498,7 +504,7 @@ A scope from `WWW-Authenticate` is surfaced only when it matches
 `^/[A-Za-z0-9_.\-/]{0,200}$`. Messages are dropped. `readRequestId` accepts
 only `^[0-9a-f]{32}$`.
 
-- [ ] **Step 1: Write the failing tests** in
+- [x] **Step 1: Write the failing tests** in
   `tests/livespace/v2/problems.test.ts`:
   - one test per mapping row (status, type -> code, transport flag).
   - `violation messages and detail never reach the error` - body with
@@ -514,12 +520,12 @@ only `^[0-9a-f]{32}$`.
   In `tests/server/tools/tool-error.test.ts`:
   `toToolError copies fields and requestId from LivespaceError details`.
 
-- [ ] **Step 2: Run, expect FAIL** - `bun test tests/livespace/v2/problems.test.ts tests/server/tools/tool-error.test.ts`
-- [ ] **Step 3: Implement** the three files and the `ToolError` extension
+- [x] **Step 2: Run, expect FAIL** - `bun test tests/livespace/v2/problems.test.ts tests/server/tools/tool-error.test.ts`
+- [x] **Step 3: Implement** the three files and the `ToolError` extension
   (`toolErrorSchema` gains optional `fields: z.array(z.string()).max(20)` and
   `requestId: z.string().regex(/^[0-9a-f]{32}$/)`).
-- [ ] **Step 4: Run, expect PASS**, plus `bun run typecheck`.
-- [ ] **Step 5: Commit** - `feat(v2): map problem responses to sanitized errors`
+- [x] **Step 4: Run, expect PASS**, plus `bun run typecheck`.
+- [x] **Step 5: Commit** - `feat(v2): map problem responses to sanitized errors`
 
 ### Task 3: Rate-limit tracking, daily reserve and call budget
 
@@ -550,8 +556,11 @@ only `^[0-9a-f]{32}$`.
     readonly used: number; readonly max: number;
   }
   ```
+  As built: `new CallBudget(max)` throws `RangeError` unless `max` is a
+  positive integer; `isDailyBudgetLow(0)` is always false (0 turns the guard
+  off).
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `observes burst and daily headers`.
   - `ignores missing or malformed headers and keeps the last good values`.
   - `waits until reset when the burst is spent` - remaining 0, reset in 3 s
@@ -560,10 +569,10 @@ only `^[0-9a-f]{32}$`.
   - `a call over its request budget stops before the next request`
     (Review Focus 4) - `new CallBudget(2)`: two `spend()` pass, the third
     throws `CALL_BUDGET_EXCEEDED` whose hint says to narrow the request.
-- [ ] **Step 2: Run, expect FAIL** - `bun test tests/livespace/v2/budget.test.ts`
-- [ ] **Step 3: Implement** `budget.ts`.
-- [ ] **Step 4: Run, expect PASS**
-- [ ] **Step 5: Commit** - `feat(v2): track rate limits and budget each call`
+- [x] **Step 2: Run, expect FAIL** - `bun test tests/livespace/v2/budget.test.ts`
+- [x] **Step 3: Implement** `budget.ts`.
+- [x] **Step 4: Run, expect PASS**
+- [x] **Step 5: Commit** - `feat(v2): track rate limits and budget each call`
 
 ### Task 4: The v2 HTTP client
 
@@ -606,10 +615,16 @@ only `^[0-9a-f]{32}$`.
   `tests/support/v2.ts` exports `SYNTHETIC_V2_KEY`, `v2Envelope(data, extra?)`,
   `v2Problem(status, type, extras?)`, `routedV2Fetch(routes, calls)` and
   `syntheticId(n: number)`.
+  As built: the constructor takes `LivespaceV2ClientOptions`
+  (`LivespaceClientOptions` plus `now?: () => number`, the clock for the burst
+  window and the throttle); `LivespaceClientOptions` lives in
+  `src/livespace/http-shared.ts` and the v1 client re-exports it.
+  `tests/support/v2.ts` also exports `SYNTHETIC_REQUEST_ID`, `timeoutError()`
+  and the `V2Call` and `V2Handler` types; an unrouted call answers 418.
 
 The method union has no `DELETE` on purpose (Global Constraints).
 
-- [ ] **Step 1: Write the failing tests** in
+- [x] **Step 1: Write the failing tests** in
   `tests/livespace/v2/client.test.ts`:
   - `sends the key only as a Bearer header` - URL is
     `https://synthetic.livespace.io/api/v2/users/me`, the key appears in no
@@ -642,14 +657,14 @@ The method union has no `DELETE` on purpose (Global Constraints).
     captured `console.error` output for the key.
   - `cancellation before dispatch is CANCELLED, after dispatch of a write is
     unknown`.
-- [ ] **Step 2: Run, expect FAIL** - `bun test tests/livespace/v2/client.test.ts`
-- [ ] **Step 3: Implement** `client.ts`. Reuse the v1 client's
+- [x] **Step 2: Run, expect FAIL** - `bun test tests/livespace/v2/client.test.ts`
+- [x] **Step 3: Implement** `client.ts`. Reuse the v1 client's
   `combineSignals`, `parseRetryAfterMs` and retry-delay logic by moving them
   to `src/livespace/http-shared.ts` (both clients import it; v1 tests stay
   green). Throttle: `createThrottle({maxConcurrent: 2, minIntervalMs: 150})`.
   Default timeout 30 s; large pages pass `timeoutMs`.
-- [ ] **Step 4: Run, expect PASS** - `bun test tests/livespace && bun run typecheck`
-- [ ] **Step 5: Commit** - `feat(v2): add the v2 HTTP client`
+- [x] **Step 4: Run, expect PASS** - `bun test tests/livespace && bun run typecheck`
+- [x] **Step 5: Commit** - `feat(v2): add the v2 HTTP client`
 
 ### Task 5: Security contract and read-only live smoke
 
@@ -657,15 +672,15 @@ The method union has no `DELETE` on purpose (Global Constraints).
 - Modify: `docs/security.md` (rows marked PR1 above), `tests/security-contract.test.ts`, `package.json` (`test:security`), `README.md` (configuration section, D1/D2 wording), `.env.example`
 - Create: `scripts/smoke-v2.ts`
 
-- [ ] **Step 1: Update `tests/security-contract.test.ts` first** - requirement
-  count 21 (or 20 if D1-A is not chosen), the new files
+- [x] **Step 1: Update `tests/security-contract.test.ts` first** - requirement
+  count 22 (0.1.3 added requirement 17, so the new ones are 18-22), the new files
   `tests/livespace/v2/client.test.ts`, `tests/livespace/v2/problems.test.ts`,
   `tests/livespace/v2/budget.test.ts` in `MAP_FILES`.
-- [ ] **Step 2: Run, expect FAIL** - `bun test tests/security-contract.test.ts`
-- [ ] **Step 3: Edit `docs/security.md`, `package.json`, README and
+- [x] **Step 2: Run, expect FAIL** - `bun test tests/security-contract.test.ts`
+- [x] **Step 3: Edit `docs/security.md`, `package.json`, README and
   `.env.example`.** Requirement 6 names `v2Path`; requirement 8 names
   `perPage` and page caps.
-- [ ] **Step 4: Run the full gate** - `bun run test:security && bun test && bun run typecheck && git diff --check`
+- [x] **Step 4: Run the full gate** - `bun run test:security && bun test && bun run typecheck && git diff --check`
 - [ ] **Step 5: Live smoke.** `scripts/smoke-v2.ts` reads
   `LIVESPACE_SUBDOMAIN` and `LIVESPACE_API_V2_KEY` from the environment (Bun
   loads the local `.env`; do not edit it) or from Keychain service
@@ -673,7 +688,10 @@ The method union has no `DELETE` on purpose (Global Constraints).
   `POST /deals/searches` with `perPage: 1` and `MEDIA_MINIMAL`, prints only
   status, `totalCount`, `dailyRemaining` and `requestId` presence, never
   record content. Expected: two 200s.
-- [ ] **Step 6: Commit** - `docs(security): v2 key model, load discipline and error hygiene`
+  As built: environment only, no Keychain lookup (the maintainer's keys now
+  reach processes through a secret manager that injects variables);
+  `bun run smoke:v2` runs it.
+- [x] **Step 6: Commit** - `docs(security): v2 key model, load discipline and error hygiene`
 
 ---
 
@@ -1368,3 +1386,74 @@ in the maintainer notes for cleanup. Q1, Q2, Q8 and Q10 wait for Kuba.
   `/status`. The deal stayed `open`. PR7 updated: the preview computes open
   required steps from the process, and a 422 on `/status` is reported as a
   refused win gate with a fresh process read.
+
+### PR1, 2026-11-08 (branch `feat/api-v2-client` into `feat/api-v2`)
+
+`feat/api-v2` starts at `main` 2117ce5 (0.1.3 plus the Registry job) with
+this plan as its first commit. Dependency pins are the 0.1.3 ones (SDK
+2.3.1, hono 4.13.11, zod 4.6.6); Tech Stack and Global Constraints now say so.
+Q1, Q2, Q8 and Q10 are still open; PR1 does not depend on them and keeps the
+plan's defaults (reserve 5000, v1 fallback keyed by v2 ids still unverified).
+The new security requirements are 18-22, not 17-21: 0.1.3 added
+requirement 17 (tool input element cap).
+
+Deviations and decisions:
+
+- D1-A: `LIVESPACE_V2_SHARED_ACCESS` is required on every non-loopback bind
+  (0.2.0 always has a v2 key) and strict everywhere: any value but
+  `acknowledged` refuses to start, on loopback too.
+- Without the v1 pair, `src/index.ts` registers only `health`, without its
+  Livespace ping, until PR2 moves `health` to v2. `loadLivespaceV1Config` was
+  added so `scripts/smoke.ts` needs no v2 key.
+- The v2 client throttles each HTTP attempt (2 in flight, 150 ms between
+  starts), not the whole retry loop as v1 does.
+- `write` defaults to true for `POST` and `PATCH`. Every `POST .../searches`
+  call site in PR2-PR8 must pass `write: false`, or a timed-out search reports
+  `WRITE_OUTCOME_UNKNOWN` instead of retrying.
+- Every 5xx counts as a transport failure. A `Retry-After` above 10 s is not
+  retried, and a burst window above 10 s refuses with `RATE_LIMITED` before
+  any request.
+- A write answered 2xx with an unreadable body is `WRITE_OUTCOME_UNKNOWN`,
+  not `UPSTREAM_ERROR`.
+- Keyed writes: one resend after an unknown outcome, one more after a 409
+  naming `Retry-After`, plus 429 retries, at most three attempts, always the
+  same key. After an unknown attempt, any later failure or refusal (business
+  error, budget, cancel) reports `WRITE_OUTCOME_UNKNOWN`.
+- Redirects are not followed; a 3xx is `UPSTREAM_ERROR`.
+- `v2Path` also encodes `!'()*` and refuses empty, `.` and `..` ids and text
+  that cannot be encoded. `request()` refuses dot segments (`%2e` spellings
+  included), empty segments and any method but `GET`, `POST` and `PATCH`.
+- A problem `type` counts only under `https://api.livespace.io/problems/`.
+  A missing scope is echoed only for an area the contract defines; the scope
+  names are singular (`crm:deal:read`). `crm:deal:read` already covers the
+  process dictionaries, so the scope table has no `crm:sales-process:read`.
+- A daily count seen before 00:00 UTC counts as unknown after it, so the
+  reserve clears at the reset instead of refusing until a restart.
+- `scripts/smoke-v2.ts` reads the environment only (no Keychain lookup);
+  `bun run smoke:v2` runs it.
+- The CI conformance job starts the server with a synthetic v2 key; the run
+  matches `conformance-baseline.yml`.
+
+For later PRs:
+
+- PR2: `health` calls with `essential: true`; `rateLimit().dailyRemaining`
+  is null after the UTC reset until a counted response arrives.
+- PR3: `get_records` `itemSchema` is strict and does not allow the `fields`
+  and `requestId` keys `toToolError` now adds; extend it before v2 errors
+  reach it. Consider making `budget` required for non-essential calls.
+- PR4: the v1 and v2 clients each own a throttle; share one before the
+  fallback runs both, or up to 4 requests are in flight.
+- Deferred review minors: two requests released by one burst reset can
+  start together (the burst sleep runs inside the throttle slot); a local
+  clock more than 10 s behind the server turns a 429 into local refusals for
+  the skew; `parseRetryAfterMs` accepts `""`, `1e3` and `0x10`;
+  `maxAttempts` is not validated; a body is serialized after the budget unit
+  is spent; no test boots `src/index.ts` with only the v2 key.
+
+Gate: `bun install --frozen-lockfile`, `bun audit` (no vulnerabilities),
+`bun run typecheck`, `bun test` (1332 pass), `bun run test:security` (1098
+pass), `git diff --check`, MCP conformance against the baseline. A fresh
+reviewer checked the branch; its Important findings are fixed with tests.
+
+Live smoke (Task 5 Step 5): pending. The demo v2 key is no longer in a local
+`.env`, and running `bun run smoke:v2` waits for the maintainer to inject it.

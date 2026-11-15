@@ -24,6 +24,7 @@ const CONFIG: ServerConfig = {
   maxQueuedRequests: 32,
   requestIngressTimeoutMs: 10_000,
   requestExecutionTimeoutMs: 90_000,
+  v2SharedAccessAcknowledged: false,
 };
 
 async function jsonFile(path: string): Promise<any> {

@@ -1,4 +1,4 @@
-import { loadLivespaceConfig } from "../src/config/env.js";
+import { loadLivespaceV1Config } from "../src/config/env.js";
 import { LivespaceClient } from "../src/livespace/client.js";
 
 // Reads the same macOS Keychain entries the local `livespace` skill uses
@@ -20,7 +20,7 @@ function keychain(account: string): string | undefined {
   return value === "" ? undefined : value;
 }
 
-const config = loadLivespaceConfig({
+const config = loadLivespaceV1Config({
   LIVESPACE_SUBDOMAIN: process.env["LIVESPACE_SUBDOMAIN"] ?? keychain("subdomain"),
   LIVESPACE_API_KEY: process.env["LIVESPACE_API_KEY"] ?? keychain("api-key"),
   LIVESPACE_API_SECRET: process.env["LIVESPACE_API_SECRET"] ?? keychain("api-secret"),

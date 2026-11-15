@@ -26,6 +26,7 @@ describe("loadServerConfig", () => {
       maxQueuedRequests: 16,
       requestIngressTimeoutMs: 10_000,
       requestExecutionTimeoutMs: 90_000,
+      v2SharedAccessAcknowledged: false,
     });
     expect(config.authToken).toBeUndefined();
   });
@@ -173,8 +174,32 @@ describe("loadServerConfig", () => {
       MCP_AUTH_TOKEN: AUTH_TOKEN,
       MCP_ALLOWED_HOSTS: "mcp.example.com, alt.example.com",
       MCP_REQUEST_STATE_KEY: REQUEST_STATE_KEY,
+      LIVESPACE_V2_SHARED_ACCESS: "acknowledged",
     });
     expect(config.allowedHostnames).toEqual(["mcp.example.com", "alt.example.com"]);
+  });
+
+  test("non-loopback bind with a v2 key needs the shared access acknowledgement", () => {
+    const shared = {
+      MCP_BIND_HOST: "0.0.0.0",
+      MCP_AUTH_TOKEN: AUTH_TOKEN,
+      MCP_ALLOWED_HOSTS: "mcp.example.com",
+    };
+    expect(() => loadServerConfig(shared)).toThrow(/LIVESPACE_V2_SHARED_ACCESS/);
+    expect(
+      loadServerConfig({ ...shared, LIVESPACE_V2_SHARED_ACCESS: "acknowledged" })
+        .v2SharedAccessAcknowledged,
+    ).toBe(true);
+    for (const value of ["true", "yes", "ACKNOWLEDGED-synthetic"]) {
+      expect(() =>
+        loadServerConfig({ ...shared, LIVESPACE_V2_SHARED_ACCESS: value }),
+      ).toThrow(/LIVESPACE_V2_SHARED_ACCESS/);
+    }
+    // A strict value on loopback too: a typo never reads as "not acknowledged".
+    expect(() => loadServerConfig({ LIVESPACE_V2_SHARED_ACCESS: "yes" })).toThrow(
+      /LIVESPACE_V2_SHARED_ACCESS/,
+    );
+    expect(loadServerConfig({}).v2SharedAccessAcknowledged).toBe(false);
   });
 
   test("a request-state key shorter than 32 bytes is refused", () => {

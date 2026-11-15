@@ -174,7 +174,11 @@ the client reports an input validation error.
 | Variable | Purpose |
 |---|---|
 | `LIVESPACE_SUBDOMAIN` | Account subdomain without protocol or `.livespace.io`. |
-| `LIVESPACE_API_KEY` / `LIVESPACE_API_SECRET` | Credentials for one Livespace user. |
+| `LIVESPACE_API_V2_KEY` | From 0.2.0, required: the Livespace API v2 service key (`ls_...`). See "API v2 key" below. |
+| `LIVESPACE_API_KEY` / `LIVESPACE_API_SECRET` | Credentials for one Livespace user. From 0.2.0 optional, both or neither: they serve only what API v2 does not publish yet. |
+| `LIVESPACE_ACTING_USER_EMAIL` | From 0.2.0, optional: the e-mail of the Livespace user you act for. |
+| `LIVESPACE_V2_DAILY_RESERVE` | From 0.2.0: daily API v2 requests kept free for the account's other integrations. Default: 5000; 0 turns the guard off. |
+| `LIVESPACE_V2_SHARED_ACCESS` | From 0.2.0: must be `acknowledged` on a non-loopback bind. |
 | `MCP_PORT` | Server port. Default: `3020`. |
 | `MCP_BIND_HOST` | Bind address. Default: `127.0.0.1`. |
 | `MCP_AUTH_TOKEN` | Random bearer token of at least 32 bytes. Required for writes and on a non-loopback bind; recommended for every server. |
@@ -190,7 +194,8 @@ the client reports an input validation error.
 | `MCP_REQUEST_EXECUTION_TIMEOUT_MS` | Absolute limit for tool execution after upload. Default: 90000; maximum: 180000 (300000 before 0.1.2; a higher value now stops startup). The HTTP idle timeout follows both limits. |
 
 The server refuses a non-loopback bind unless `MCP_AUTH_TOKEN` and
-`MCP_ALLOWED_HOSTS` are set. It also refuses to enable writes without both
+`MCP_ALLOWED_HOSTS` are set, and from 0.2.0 also
+`LIVESPACE_V2_SHARED_ACCESS=acknowledged`. It also refuses to enable writes without both
 `MCP_AUTH_TOKEN` and `MCP_REQUEST_STATE_KEY`. Once `MCP_AUTH_TOKEN` is
 configured, every `/mcp` request needs that Bearer token, including on
 loopback. Host and Origin checks run before the MCP handler.
@@ -203,6 +208,31 @@ front of every network-exposed deployment. The server reads credentials from
 environment variables, commonly through Bun's `.env` loading; protecting
 `.env` at rest is the operator's responsibility. Never commit it. The smoke
 script can also read the sandbox credentials from the macOS Keychain.
+
+### API v2 key (from 0.2.0)
+
+Version 0.2.0, in development on the `feat/api-v2` branch, moves the server
+to the Livespace public API v2 and requires `LIVESPACE_API_V2_KEY`. To keep
+using the v1 API alone, pin `livespace-crm-mcp@0.1`. API v2 is a Livespace
+Labs feature enabled per account, so npm `latest` stays on 0.1.x until every
+account has it. 0.2.0 ships under the `next` dist-tag first.
+
+The v2 key belongs to an integration user, not to a person. The server sees
+every active record that user sees, whatever the Livespace roles say, and
+writes as the integration. Give the key only what the server needs:
+
+- a read-only server gets `read` scopes only;
+- a write server adds `write` scopes;
+- never a `delete` scope and never `crm:sales-process:write`.
+
+`docs/security.md` lists the scopes per tool. A server on a non-loopback bind
+hands that visibility to every client, so it refuses to start without
+`LIVESPACE_V2_SHARED_ACCESS=acknowledged`.
+
+The daily API v2 budget belongs to the whole Livespace account, and every
+integration of that account shares it. The server stops taking new work once
+the remaining budget reaches `LIVESPACE_V2_DAILY_RESERVE`, so it cannot use up
+what your other integrations need.
 
 ## Write safety
 
@@ -269,7 +299,8 @@ If a Livespace key, bearer token or confirmation key may be compromised:
 
 1. Stop the MCP server.
 2. Immediately revoke the Livespace API key and issue a replacement for the
-   dedicated API user.
+   dedicated API user. From 0.2.0, also rotate the API v2 service key in
+   Livespace.
 3. Generate new, independent `MCP_AUTH_TOKEN` and `MCP_REQUEST_STATE_KEY`
    values.
 4. Restart the server and update the MCP client's Bearer header.
@@ -325,10 +356,12 @@ bun test                 # complete offline suite
 bun run test:security    # focused security contract from docs/security.md
 bun run typecheck
 bun run smoke            # live test-account check via .env or macOS Keychain
+bun run smoke:v2         # read-only API v2 check via .env (from 0.2.0)
 bun run dev
 ```
 
-`bun run smoke` and `health` with `checkLivespace: true` make real API calls.
+`bun run smoke`, `bun run smoke:v2` and `health` with `checkLivespace: true`
+make real API calls.
 Use only a test Livespace account, never a production CRM.
 
 The binding threat model and regression map are in

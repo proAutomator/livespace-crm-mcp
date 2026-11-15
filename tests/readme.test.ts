@@ -100,6 +100,23 @@ describe("README v1 contract", () => {
     expect(prose).toContain("API ids differ from the ids shown in the Livespace UI");
   });
 
+  test("states the API v2 key model and the 0.2.0 release line", async () => {
+    const prose = (await readme()).replace(/\s+/gu, " ");
+    for (const variable of [
+      "LIVESPACE_API_V2_KEY",
+      "LIVESPACE_ACTING_USER_EMAIL",
+      "LIVESPACE_V2_DAILY_RESERVE",
+      "LIVESPACE_V2_SHARED_ACCESS=acknowledged",
+    ]) {
+      expect(prose).toContain(variable);
+    }
+    expect(prose).toContain("integration user, not to a person");
+    expect(prose).toContain("never a `delete` scope and never `crm:sales-process:write`");
+    expect(prose).toContain("livespace-crm-mcp@0.1");
+    expect(prose).toContain("`next` dist-tag");
+    expect(prose).toContain("shares it");
+  });
+
   test("uses ASCII hyphens and no false first-call guarantee", async () => {
     const text = await readme();
     expect(text).not.toMatch(/[—–]/u);

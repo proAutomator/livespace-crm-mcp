@@ -20,6 +20,12 @@ export interface ServerConfig {
    * write tools are enabled; normally absent from read-only processes.
    */
   requestStateKey?: string;
+  /**
+   * `LIVESPACE_V2_SHARED_ACCESS=acknowledged`: the operator accepts that every
+   * client of a non-loopback bind sees what the v2 integration user sees
+   * (docs/security.md par. 2, decision D1-A).
+   */
+  v2SharedAccessAcknowledged: boolean;
 }
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -85,6 +91,16 @@ function booleanFlag(
   throw new Error(`${name} must be either true or false.`);
 }
 
+/** Only the exact word counts; anything else set is a typo, never a "no". */
+function sharedAccessFlag(env: Record<string, string | undefined>): boolean {
+  const raw = env["LIVESPACE_V2_SHARED_ACCESS"]?.trim();
+  if (raw === undefined || raw === "") return false;
+  if (raw === "acknowledged") return true;
+  throw new Error(
+    "LIVESPACE_V2_SHARED_ACCESS accepts only the value acknowledged.",
+  );
+}
+
 export function loadServerConfig(
   env: Record<string, string | undefined>,
 ): ServerConfig {
@@ -124,6 +140,8 @@ export function loadServerConfig(
   const extraHosts = splitHostList(env["MCP_ALLOWED_HOSTS"]);
   const extraOrigins = splitHostList(env["MCP_ALLOWED_ORIGIN_HOSTNAMES"]);
 
+  const v2SharedAccessAcknowledged = sharedAccessFlag(env);
+
   const loopback = LOOPBACK_HOSTS.has(bindHost);
   if (!readOnly && authToken === undefined) {
     throw new Error(
@@ -144,6 +162,16 @@ export function loadServerConfig(
       throw new Error(
         "MCP_BIND_HOST is not loopback, so MCP_ALLOWED_HOSTS is required " +
           "(comma-separated hostnames clients will use to reach this server).",
+      );
+    }
+    // The v2 key is an integration user that sees every active record, so a
+    // shared endpoint must be a stated choice, never a side effect of a bind
+    // address (docs/security.md par. 2). 0.2.0 always runs with a v2 key.
+    if (!v2SharedAccessAcknowledged) {
+      throw new Error(
+        "MCP_BIND_HOST is not loopback, so LIVESPACE_V2_SHARED_ACCESS=acknowledged " +
+          "is required: every client of this server sees what the Livespace " +
+          "API v2 integration user sees.",
       );
     }
   }
@@ -212,5 +240,6 @@ export function loadServerConfig(
     requestIngressTimeoutMs,
     requestExecutionTimeoutMs,
     ...(requestStateKey === undefined ? {} : { requestStateKey }),
+    v2SharedAccessAcknowledged,
   };
 }

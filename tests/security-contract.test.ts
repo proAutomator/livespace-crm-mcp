@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const MAP_FILES = [
   "tests/config/server-env.test.ts",
@@ -18,15 +20,18 @@ const MAP_FILES = [
   "tests/server/tools/search-crm.test.ts",
   "tests/server/tools/get-activity.test.ts",
   "tests/server/analyze.test.ts",
+  "tests/config/env.test.ts",
+  "tests/livespace/v2/client.test.ts",
+  "tests/livespace/v2/problems.test.ts",
+  "tests/livespace/v2/budget.test.ts",
+  "tests/server/tools/tool-error.test.ts",
 ] as const;
 
 const SECURITY_GATE_FILES = [
   "tests/security-contract.test.ts",
-  "tests/config/env.test.ts",
   ...MAP_FILES,
   "tests/server/auth.test.ts",
   "tests/server/write-support.test.ts",
-  "tests/server/tools/tool-error.test.ts",
   "tests/server/create-records.test.ts",
   "tests/server/update-records.test.ts",
   "tests/server/log-activities.test.ts",
@@ -39,12 +44,12 @@ async function repoFile(path: string): Promise<string> {
 }
 
 describe("docs/security.md section 10 contract", () => {
-  test("maps all seventeen numbered requirements to their regression proofs", async () => {
+  test("maps all twenty-two numbered requirements to their regression proofs", async () => {
     const security = await repoFile("docs/security.md");
     const rows = [...security.matchAll(/^\|\s*(\d+)\s*\|/gmu)].map(
       (match) => Number(match[1]),
     );
-    expect(rows).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+    expect(rows).toEqual(Array.from({ length: 22 }, (_, index) => index + 1));
     for (const path of MAP_FILES) expect(security).toContain(`\`${path}\``);
     expect(security).toContain("`bun run test:security`");
   });
@@ -64,6 +69,40 @@ describe("docs/security.md section 10 contract", () => {
       "explicit `limit` on every list call (the API defaults",
     );
     expect(agents).not.toContain("always send an explicit `limit`");
+  });
+
+  test("states the API v2 key model, load discipline and error hygiene", async () => {
+    const security = (await repoFile("docs/security.md")).replace(/\s+/gu, " ");
+    // Requirement 6 and 8 name the v2 path builder and page size.
+    expect(security).toMatch(/6\. user-supplied IDs[^|]*`v2Path`/u);
+    expect(security).toMatch(/8\. `analyze` and list-style calls[^|]*`perPage`/u);
+    for (const phrase of [
+      "integration user",
+      "`LIVESPACE_V2_SHARED_ACCESS=acknowledged`",
+      "`LIVESPACE_V2_DAILY_RESERVE`",
+      "`Authorization` header",
+      "`crm:sales-process:write`",
+      "`Idempotency-Key`",
+      // The keyed-write resend rule as the client implements it.
+      "at most once after an unknown outcome, once more after a 409 that names `Retry-After`",
+    ]) {
+      expect(security).toContain(phrase);
+    }
+    // Least privilege: crm:deal:read already grants the process dictionaries.
+    expect(security).toContain("| `analyze` | `crm:deal:read` |");
+    expect(security).not.toContain("`crm:sales-process:read`");
+  });
+
+  test("no source file sends a DELETE request", async () => {
+    const glob = new Bun.Glob("src/**/*.ts");
+    const root = fileURLToPath(new URL("../", import.meta.url));
+    let scanned = 0;
+    for await (const path of glob.scan({ cwd: root })) {
+      scanned += 1;
+      const source = await Bun.file(join(root, path)).text();
+      expect(source, path).not.toMatch(/["']delete["']/iu);
+    }
+    expect(scanned).toBeGreaterThan(20);
   });
 
   test("the focused security command includes every contract file", async () => {
